@@ -1,0 +1,162 @@
+input:
+  # zarr is also supported
+  # the zarr data are under /ec/res4/scratch/syma/era5/o160/zarr/[pl | sfc]
+  format: zarr
+  resolution: o160
+  pl:
+      training:
+        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/pl
+        filename: era5_{resolution}_t_u_v_w_z_pl_training.zarr
+      validation:
+        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/pl
+        filename: era5_{resolution}_t_u_v_w_z_pl_validation.zarr
+      test:
+        basedir: 
+        filename: 
+      prediction:
+        basedir: 
+        filename:
+      names:
+      # not used!
+        - t
+        - u
+        - v
+        - w
+        - z
+      levels:
+      # not used!
+        - 50
+        - 100
+        - 150
+        - 200
+        - 250
+        - 300
+        - 400
+        - 500
+        - 600
+        - 700
+        - 850
+        - 925
+        - 1000
+  sfc:
+      training:
+        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/sfc
+        filename: era5_{resolution}_blh_lsm_msl_z_sfc_training.zarr
+      validation:
+        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/sfc
+        filename: era5_{resolution}_blh_lsm_msl_z_sfc_validation.zarr
+      test:
+        basedir: 
+        filename:
+      prediction:
+        basedir: 
+        filename:
+      names:
+      # not used!
+        - blh
+        - msl
+        - z
+        - lsm
+  transformations:
+    pl:
+      mu: /ec/res4/scratch/syma/era5/{resolution}/zarr/statistics/pl_1979_2016_mu.npy
+      sd: /ec/res4/scratch/syma/era5/{resolution}/zarr/statistics/pl_1979_2016_sd.npy
+    sfc: /ec/res4/scratch/syma/era5/{resolution}/zarr/statistics/sfc_1979_2016.npy
+  # features that are not part of the forecast state
+  # these are presumed to be located at the "end" of the flattened (bs, latlon, nvar) input tensor
+  num-aux-features: 4  # all 2D fields
+
+###################
+#  OUTPUT BLOCK
+###################
+output:
+  basedir: /ec/res4/scratch/syma/GNN/ERA5/{resolution}/
+  logging:
+    log-dir: logs
+    log-interval: 250
+  checkpoints:
+    ckpt-dir: checkpoints
+  model:
+    save-top-k: 5
+    checkpoint-filename: "gnn-era5-{resolution}-ckpt-{epoch:02d}-{val_wmse:.3f}"
+  plots:
+    plot-dir: plots
+
+###################
+#  GRAPH BLOCK
+###################
+graph:
+  data-basedir: /ec/res4/hpcperm/syma/gnn/
+  data-file: graph_mappings_normed_edge_attrs_gauss_grids.pt
+
+###################
+#  MODEL BLOCK
+###################
+model:
+  debug:
+    # this will detect and trace back NaNs / Infs etc. but will slow down training
+    anomaly-detection: False
+  wandb:
+    enabled: False
+  mlflow:
+    enabled: False
+  aim:
+    enabled: False
+  neptune:
+    enabled: True
+  comet:
+    enabled: False
+  dataloader:
+    num-workers:
+      training: 16
+      validation: 16
+      inference: 1
+    batch-size:
+      training: 4
+      validation: 4
+      inference: 1
+
+  # miscellaneous
+  precision: 16
+  fast-dev-run: False
+  # runs only N training batches [N = integer | null]
+  # if null then we run through all the batches
+  limit-batches:
+    training: null
+    validation: null
+    test: 20
+    predict: 20
+
+  # parallel strategy [set to null if you're running on a single node, single device]
+  # see here for the various options:
+  # https://pytorch-lightning.readthedocs.io/en/stable/extensions/strategy.html
+  strategy: ddp_find_unused_parameters_false
+
+  # number of GPUs per node and number of nodes (for DDP)
+  num-gpus: 4
+  num-nodes: 1
+
+  # training settings
+  lead-time: 6
+  max-epochs: 50
+  learn-rate: 3.e-4  # smaller LRs are usually better
+
+  # specific GNN encoder settings
+  encoder:
+    num-layers: 6
+    num-heads: 8
+    activation: gelu
+    num-hidden-channels: 256
+    num-out-channels: 256
+    dropout: 0.
+    # TODO: add support for message passing encoders
+    type : GAT
+
+  # length of the "rollout" window (see Keisler's paper)
+  rollout: 1
+
+  # Keisler's three training rounds were:
+  # Round 1. ~960,000 batches @ ~0.3 seconds per batch (4-step rollout)
+  # Round 2. ~90,000 batches @ ~1.0 seconds per batch (8-step rollout)
+  # Round 3. ~70,000 batches @ ~1.5 seconds per batch (12-step rollout)
+  # Each batch is an N-step rollout, with batch_size=1

@@ -1,0 +1,49 @@
+name: dev-pyg
+
+channels:
+  - pytorch
+  - conda-forge
+  - https://nexus.ecmwf.int/repository/conda-ecmwf
+  - https://nexus.ecmwf.int/repository/conda-forge
+
+# !!! pyg and its dependencies need to be installed manually
+# see https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html
+# CUDA=cu116, TORCH=1.12.1
+# pip install torch-scatter -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
+# pip install torch-sparse -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
+# pip install torch-geometric
+dependencies:
+  - python=3.9.*
+  - black
+  - cartopy
+  - cudatoolkit=11.6.*
+  - dask
+  - distributed
+  - eccodes
+  - einops
+  - geotiff
+  - h3-py
+  - hdf4
+  - hdf5
+  - ipykernel
+  - jupyterlab
+  - mamba
+  - matplotlib
+  - netcdf4
+  - nodejs
+  - numpy
+  - pandas
+  - pip
+  - pytorch=1.12.1=py3.9_cuda11.6_*
+  - rioxarray
+  - scikit-learn
+  - scipy
+  - seaborn
+  - torchvision
+  - tqdm
+  - xarray
+  - xskillscore
+  - wandb
+  - pip:
+    - pytorch-lightning
+    - tensorboard
