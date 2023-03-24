@@ -1,4 +1,4 @@
-from typing import Optional, Any, Dict
+from typing import Any, Dict
 
 import einops
 import numpy as np
@@ -6,13 +6,18 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
 
-from gnn_era5.architecture.layers import TransformerMapper, GATEncoder, MessagePassingEncoder
+from gnn_era5.architecture.layers import (
+    MessagePassingEncoder,
+    MessagePassingMapper,
+    MessagePassingNodeEmbedder,
+    MessagePassingNodeExtractor,
+)
 from gnn_era5.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
 
-class MixedTransformer(nn.Module):
+class GraphMSG(nn.Module):
     def __init__(
         self,
         graph_data: HeteroData,
@@ -21,12 +26,7 @@ class MixedTransformer(nn.Module):
         encoder_num_layers: int,
         encoder_hidden_channels: int,
         encoder_out_channels: int,
-        encoder_num_heads: int = 2,
-        encoder_dropout: float = 0.0,
-        encoder_activation: Optional[str] = "gelu",
-        encoder_jk_mode: Optional[str] = "last",
-        use_dynamic_context: bool = True,
-        encoder_type: Optional[str] = "GAT",
+        encoder_mapper_num_layers: int = 1,
     ) -> None:
         super().__init__()
 
@@ -84,54 +84,49 @@ class MixedTransformer(nn.Module):
             persistent=True,
         )
 
-        # Latent graph (ERA5 -> H)
-        self.forward_mapper = TransformerMapper(
-            in_channels + aux_in_channels + self.pos_channels,
-            out_channels=encoder_out_channels,
-            context_size=self._h_size,
-            trainable_context_channels=1,
-            dynamic_context_channels=4 if use_dynamic_context else 0,
+        # latent nodes:
+        self.node_era_embedder = MessagePassingNodeEmbedder(
+            in_channels=in_channels + aux_in_channels + self.pos_channels, latent_dim=encoder_out_channels
         )
 
-        # H -> H
-        if encoder_type == "GAT":
-            self.h_encoder = GATEncoder(
-                num_layers=encoder_num_layers,
-                in_channels=encoder_out_channels,
-                hidden_channels=encoder_hidden_channels,
-                out_channels=encoder_out_channels,
-                num_heads=encoder_num_heads,
-                dropout=encoder_dropout,
-                activation=encoder_activation,
-                jk_mode=encoder_jk_mode,
-            )
-        else:
-            self.h_encoder = MessagePassingEncoder(
-                in_channels=encoder_out_channels,
-                out_channels=encoder_out_channels,
-                hidden_dim=encoder_hidden_channels,
-                edge_dim=3,
-                proc_layers=encoder_num_layers,
-            )
+        self.node_h_embedder = MessagePassingNodeEmbedder(in_channels=4, latent_dim=encoder_out_channels)  # position channels only
+
+        # Latent graph (ERA5 -> H)
+        self.forward_mapper = MessagePassingMapper(
+            in_channels=(encoder_out_channels, encoder_out_channels),
+            hidden_dim=encoder_out_channels,
+            out_channels=encoder_out_channels,
+            ans_layers=encoder_mapper_num_layers,
+            edge_dim=3,
+        )
+
+        self.h_encoder = MessagePassingEncoder(
+            in_channels=encoder_out_channels,
+            hidden_dim=encoder_hidden_channels,
+            out_channels=encoder_out_channels,
+            ans_layers=encoder_num_layers,
+            edge_dim=3,
+        )
 
         # H -> ERA5
-        self.backward_mapper = TransformerMapper(
-            in_channels=encoder_out_channels + self.pos_channels,
-            out_channels=in_channels,  # leave out the auxiliary and positional info
-            context_size=self._era_size,
-            trainable_context_channels=1,
-            dynamic_context_channels=4 if use_dynamic_context else 0,
+        self.backward_mapper = MessagePassingMapper(
+            in_channels=(encoder_out_channels, encoder_out_channels),
+            hidden_dim=encoder_out_channels,
+            out_channels=encoder_out_channels,
+            ans_layers=encoder_mapper_num_layers,
+            edge_dim=3,
         )
 
-        # trainable positional embedding
-        self.era_pos_embed = nn.Parameter(torch.zeros(self._era_size, 1))
+        # extract features:
+        self.node_era_extractor = MessagePassingNodeExtractor(
+            latent_dim=encoder_out_channels,
+            out_channels=in_channels,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         bs = x.shape[0]
 
         x_in = einops.rearrange(x, "b n f -> (b n) f")
-
-        # x_in = x_in + self.era_pos_embed[None, ...]
 
         # add ERA positional info (lat/lon)
         x_in = torch.cat(
@@ -142,9 +137,12 @@ class MixedTransformer(nn.Module):
             dim=-1,  # feature dimension
         )
 
+        x_era_latent = self.node_era_embedder(x_in)
+        x_h_latent = self.node_h_embedder(einops.repeat(self.h_latlons, "e f -> (repeat e) f", repeat=bs))
+
         # encoder: processes era5 data
         x_latent = self.forward_mapper(
-            x_in,
+            (x_era_latent, x_h_latent),
             # expand edge index correct number of times while adding the proper number to the edge index
             edge_index=torch.cat(
                 [self.e2h_edge_index + i * self._e2h_edge_inc for i in range(bs)],
@@ -156,7 +154,7 @@ class MixedTransformer(nn.Module):
             batch_size=bs,
         )
 
-        x_latent_proc = self.h_encoder(
+        x_latent_proc = self.h_encoder(  # has skipped connections
             x=x_latent,
             edge_index=torch.cat(
                 [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bs)],
@@ -166,49 +164,20 @@ class MixedTransformer(nn.Module):
         )
 
         # added skip connection (H -> H)
-        x_latent_proc = x_latent_proc + x_latent
+        x_latent_proc = x_latent_proc + x_latent  # do we need this one? everything else has skipped connections already
 
-        # add positional info (lat/lon) for the hidden grid
-        x_latent_proc = torch.cat(
-            [
-                x_latent_proc,
-                einops.repeat(self.h_latlons, "e f -> (repeat e) f", repeat=bs),
-            ],
-            dim=-1,  # feature dimension
-        )
-
-        x_out = self.backward_mapper(
-            x=x_latent_proc,
+        x_out = self.backward_mapper(  # this one has a skipped connection, hence x_era_latent should now has skipped connection?
+            x=(x_latent_proc, x_era_latent),
             edge_index=torch.cat(
                 [self.h2e_edge_index + i * self._h2e_edge_inc for i in range(bs)],
                 dim=1,
             ),
             edge_attr=einops.repeat(self.h2e_edge_attr, "e f -> (repeat e) f", repeat=bs),
-            dynamic_context=self.era_latlons,
-            batch_size=bs,
         )
+
+        x_out = self.node_era_extractor(x_out)
 
         x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=bs)
 
-        # residual connection (just for the predicted variables)
+        # residual connection (just for the physical variables)
         return x_out + x[..., : self.in_channels]
-
-
-# if __name__ == "__main__":
-#     from gnn_era5.utils.constants import _ERA_O160_LATLON
-
-#     tgnn = MixedTransformer(
-#         in_channels=2,
-#         aux_in_channels=0,
-#         encoder_num_layers=2,
-#         encoder_hidden_channels=32,
-#         encoder_out_channels=32,
-#         encoder_num_heads=2,
-#     )
-
-#     x = torch.randn(1, _ERA_O160_LATLON, 2)  # input tensor
-#     LOGGER.debug(x.norm())
-#     y_pred = tgnn(x)
-#     LOGGER.debug(x.norm())
-#     LOGGER.debug(y_pred.shape)
-#     y_pred.sum().backward()
