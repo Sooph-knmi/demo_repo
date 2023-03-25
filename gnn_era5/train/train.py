@@ -23,6 +23,7 @@ def train(config: YAMLConfig) -> None:
         config: job configuration
     """
     timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
+    torch.set_float32_matmul_precision("high")
 
     # create data module (data loaders and data sets)
     dmod = ERA5DataModule(config)
@@ -55,6 +56,7 @@ def train(config: YAMLConfig) -> None:
         encoder_out_channels=config["model:encoder:num-out-channels"],
         # encoder_dropout=config["model:encoder:dropout"],
         encoder_num_layers=config["model:encoder:num-layers"],
+        encoder_mapper_num_layers=config["model:encoder:mapper-num-layers"],
         # encoder_num_heads=config["model:encoder:num-heads"],
         # encoder_activation=config["model:encoder:activation"],
         # use_dynamic_context=True,
@@ -101,9 +103,11 @@ def train(config: YAMLConfig) -> None:
         # run a fixed no of batches per epoch (helpful when debugging)
         limit_train_batches=config["model:limit-batches:training"],
         limit_val_batches=config["model:limit-batches:validation"],
-        # we have our own DDP-compliant sampler logic baked into the dataset
-        replace_sampler_ddp=False,
         num_sanity_val_steps=0,
+        # we have our own DDP-compliant sampler logic baked into the dataset
+        # I'm running with lightning 2.0, if you use an older version comment out the following line
+        # and use `replace_sampler_ddp=False` instead
+        use_distributed_sampler=False,
     )
 
     trainer.fit(model, datamodule=dmod)

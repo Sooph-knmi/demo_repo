@@ -28,6 +28,7 @@ class GraphForecaster(pl.LightningModule):
         fc_dim: int,
         aux_dim: int,
         encoder_num_layers: int = 4,
+        encoder_mapper_num_layers: int = 1,
         encoder_hidden_channels: int = 128,
         encoder_out_channels: int = 128,
         lr: float = 1e-4,
@@ -45,10 +46,10 @@ class GraphForecaster(pl.LightningModule):
             encoder_num_layers=encoder_num_layers,
             encoder_hidden_channels=encoder_hidden_channels,
             encoder_out_channels=encoder_out_channels,
-            encoder_mapper_num_layers=1,
+            encoder_mapper_num_layers=encoder_mapper_num_layers,
         )
 
-        self.era_latlons = graph_data[("o160", "to", "o160")].coords_rad
+        self.era_latlons = graph_data[("era", "to", "era")].ecoords_rad
         self.loss = WeightedMSELoss(latpts=self.era_latlons[:, 0])
         self.feature_dim = fc_dim
         self.lr = lr

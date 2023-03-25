@@ -87,7 +87,7 @@ output:
 ###################
 graph:
   data-basedir: /ec/res4/hpcperm/syma/gnn/
-  data-file: graph_mappings_normed_edge_attrs_gauss_grids.pt
+  data-file: graph_mappings_normed_edge_attrs_o160_h3.pt
 
 ###################
 #  MODEL BLOCK
@@ -98,14 +98,8 @@ model:
     anomaly-detection: False
   wandb:
     enabled: False
-  mlflow:
-    enabled: False
-  aim:
-    enabled: False
   neptune:
     enabled: True
-  comet:
-    enabled: False
   dataloader:
     num-workers:
       training: 16
@@ -117,7 +111,7 @@ model:
       inference: 1
 
   # miscellaneous
-  precision: 16
+  precision: 16-mixed  # "16" with Lightning < 2.0
   fast-dev-run: False
   # runs only N training batches [N = integer | null]
   # if null then we run through all the batches
@@ -127,10 +121,9 @@ model:
     test: 20
     predict: 20
 
-  # parallel strategy [set to null if you're running on a single node, single device]
-  # see here for the various options:
-  # https://pytorch-lightning.readthedocs.io/en/stable/extensions/strategy.html
-  strategy: ddp_find_unused_parameters_false
+  # parallel strategy
+  # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
+  strategy: auto  # ddp_find_unused_parameters_false
 
   # number of GPUs per node and number of nodes (for DDP)
   num-gpus: 4
@@ -139,18 +132,18 @@ model:
   # training settings
   lead-time: 6
   max-epochs: 50
-  learn-rate: 3.e-4  # smaller LRs are usually better
+  learn-rate: 1.25e-4
 
   # specific GNN encoder settings
   encoder:
     num-layers: 6
+    mapper-num-layers: 1
     num-heads: 8
     activation: gelu
     num-hidden-channels: 256
     num-out-channels: 256
     dropout: 0.
-    # TODO: add support for message passing encoders
-    type : GAT
+    # type : MSG
 
   # length of the "rollout" window (see Keisler's paper)
   rollout: 1

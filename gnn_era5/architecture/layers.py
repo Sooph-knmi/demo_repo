@@ -51,7 +51,7 @@ class TransformerMapper(MessagePassing):
                     hidden_dim=out_channels,
                     out_channels=out_channels,
                     edge_dim=3,
-                    ans_layers=2,  # 1 # these layers are expensive because they are on the era grid
+                    hidden_layers=2,  # 1 # these layers are expensive because they are on the era grid
                 )
 
         else:
@@ -180,20 +180,20 @@ class MessagePassingNodeExtractor(nn.Module):
 
 
 class MessagePassingMapper(nn.Module):  # should we remove self loops to be able to use same graph as Encoder?
-    def __init__(self, in_channels, out_channels, hidden_dim, edge_dim, ans_layers):
+    def __init__(self, in_channels, out_channels, hidden_dim, edge_dim, hidden_layers):
         # TODO: if in_channels and out_channels are not used, can we get rid of them?
         super().__init__()
 
-        self.ans_layers = ans_layers
+        self.hidden_layers = hidden_layers
         self.edge_enc = gen_mlp(in_features=edge_dim, hidden_dim=hidden_dim, out_features=hidden_dim, layer_norm=True)
-        self.proc = nn.ModuleList([MessagePassingBlock(hidden_dim, hidden_dim) for _ in range(self.ans_layers)])
+        self.proc = nn.ModuleList([MessagePassingBlock(hidden_dim, hidden_dim) for _ in range(self.hidden_layers)])
 
     def forward(
         self, x: Tuple[torch.Tensor, torch.Tensor], edge_index: torch.Tensor, edge_attr: torch.Tensor
     ) -> torch.Tensor:  # these are probably wrong ..
         x_src, x_dst = x  # this should be Union[Tensor, PairTensor] or something from typing ... Union
         edge_attr = self.edge_enc(edge_attr)
-        for i in range(self.ans_layers):
+        for i in range(self.hidden_layers):
             # here only x_dst is updated for the next layer, x_src always stays the same, is this what we want? I assume yes
             x_dst, edge_attr = self.proc[i]((x_src, x_dst), edge_index, edge_attr, size=(x_src.shape[0], x_dst.shape[0]))
 
@@ -201,18 +201,18 @@ class MessagePassingMapper(nn.Module):  # should we remove self loops to be able
 
 
 class MessagePassingEncoder(nn.Module):  # should we remove self loops to be able to use same graph as Encoder?
-    def __init__(self, in_channels, out_channels, hidden_dim, edge_dim, ans_layers):
+    def __init__(self, in_channels, out_channels, hidden_dim, edge_dim, hidden_layers):
         super(MessagePassingEncoder, self).__init__()
 
-        self.ans_layers = ans_layers
+        self.hidden_layers = hidden_layers
 
         self.edge_enc = gen_mlp(in_features=edge_dim, hidden_dim=hidden_dim, out_features=hidden_dim, layer_norm=True)
 
-        self.proc = nn.ModuleList([MessagePassingBlock(hidden_dim, hidden_dim) for _ in range(self.ans_layers)])
+        self.proc = nn.ModuleList([MessagePassingBlock(hidden_dim, hidden_dim) for _ in range(self.hidden_layers)])
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor):
         edge_attr = self.edge_enc(edge_attr)
-        for i in range(self.ans_layers):
+        for i in range(self.hidden_layers):
             x, edge_attr = self.proc[i](x, edge_index, edge_attr, size=None)
 
         return x

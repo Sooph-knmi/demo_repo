@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any
 
 import einops
 import numpy as np
@@ -37,17 +37,17 @@ class GraphMSG(nn.Module):
         self.in_channels = in_channels
         self.pos_channels = 4
 
-        self.register_buffer("e2e_edge_index", self._graph_data[("o160", "to", "o160")].edge_index, persistent=False)
-        self.register_buffer("h2e_edge_index", self._graph_data[("h", "to", "o160")].edge_index, persistent=False)
-        self.register_buffer("e2h_edge_index", self._graph_data[("o160", "to", "h")].edge_index, persistent=False)
+        self.register_buffer("e2e_edge_index", self._graph_data[("era", "to", "era")].edge_index, persistent=False)
+        self.register_buffer("h2e_edge_index", self._graph_data[("h", "to", "era")].edge_index, persistent=False)
+        self.register_buffer("e2h_edge_index", self._graph_data[("era", "to", "h")].edge_index, persistent=False)
         self.register_buffer("h2h_edge_index", self._graph_data[("h", "to", "h")].edge_index, persistent=False)
 
-        self.register_buffer("e2e_edge_attr", self._graph_data[("o160", "to", "o160")].edge_attr, persistent=False)
-        self.register_buffer("h2e_edge_attr", self._graph_data[("h", "to", "o160")].edge_attr, persistent=False)
-        self.register_buffer("e2h_edge_attr", self._graph_data[("o160", "to", "h")].edge_attr, persistent=False)
+        self.register_buffer("e2e_edge_attr", self._graph_data[("era", "to", "era")].edge_attr, persistent=False)
+        self.register_buffer("h2e_edge_attr", self._graph_data[("h", "to", "era")].edge_attr, persistent=False)
+        self.register_buffer("e2h_edge_attr", self._graph_data[("era", "to", "h")].edge_attr, persistent=False)
         self.register_buffer("h2h_edge_attr", self._graph_data[("h", "to", "h")].edge_attr, persistent=False)
 
-        self._era_size = self._graph_data[("o160", "to", "o160")].ecoords_rad.shape[0]
+        self._era_size = self._graph_data[("era", "to", "era")].ecoords_rad.shape[0]
         self._h_size = self._graph_data[("h", "to", "h")].hcoords_rad.shape[0]
 
         self.register_buffer(
@@ -64,8 +64,8 @@ class GraphMSG(nn.Module):
             "era_latlons",
             torch.cat(
                 [
-                    torch.as_tensor(np.sin(self._graph_data[("o160", "to", "o160")].ecoords_rad)),
-                    torch.as_tensor(np.cos(self._graph_data[("o160", "to", "o160")].ecoords_rad)),
+                    torch.as_tensor(np.sin(self._graph_data[("era", "to", "era")].ecoords_rad)),
+                    torch.as_tensor(np.cos(self._graph_data[("era", "to", "era")].ecoords_rad)),
                 ],
                 dim=-1,
             ),
@@ -96,7 +96,7 @@ class GraphMSG(nn.Module):
             in_channels=(encoder_out_channels, encoder_out_channels),
             hidden_dim=encoder_out_channels,
             out_channels=encoder_out_channels,
-            ans_layers=encoder_mapper_num_layers,
+            hidden_layers=encoder_mapper_num_layers,
             edge_dim=3,
         )
 
@@ -104,7 +104,7 @@ class GraphMSG(nn.Module):
             in_channels=encoder_out_channels,
             hidden_dim=encoder_hidden_channels,
             out_channels=encoder_out_channels,
-            ans_layers=encoder_num_layers,
+            hidden_layers=encoder_num_layers,
             edge_dim=3,
         )
 
@@ -113,7 +113,7 @@ class GraphMSG(nn.Module):
             in_channels=(encoder_out_channels, encoder_out_channels),
             hidden_dim=encoder_out_channels,
             out_channels=encoder_out_channels,
-            ans_layers=encoder_mapper_num_layers,
+            hidden_layers=encoder_mapper_num_layers,
             edge_dim=3,
         )
 
@@ -150,8 +150,6 @@ class GraphMSG(nn.Module):
             ),
             # copy edge attributes bs times
             edge_attr=einops.repeat(self.e2h_edge_attr, "e f -> (repeat e) f", repeat=bs),
-            dynamic_context=self.h_latlons,
-            batch_size=bs,
         )
 
         x_latent_proc = self.h_encoder(  # has skipped connections
