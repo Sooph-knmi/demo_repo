@@ -11,7 +11,7 @@ LOGGER = get_logger(__name__)
 class WeightedMSELoss(nn.Module):
     """Latitude-weighted MSE loss"""
 
-    def __init__(self, latpts: np.ndarray, data_variances: Optional[np.ndarray] = None) -> None:
+    def __init__(self, weights: np.ndarray, data_variances: Optional[np.ndarray] = None) -> None:
         """
         Latitude- and (inverse-)variance-weighted MSE Loss.
         Args:
@@ -21,7 +21,7 @@ class WeightedMSELoss(nn.Module):
         """
         super().__init__()
 
-        weights = np.cos(latpts) + 1.0e-4  # get rid of some small negative weight values
+        # weights = np.cos(latpts) + 1.0e-4  # get rid of some small negative weight values
         LOGGER.debug(f"min/max cos(lat) weights: {weights.min():.3e}, {weights.max():.3e}")
         self.register_buffer("weights", torch.as_tensor(weights), persistent=True)
         if data_variances is not None:
@@ -41,3 +41,4 @@ class WeightedMSELoss(nn.Module):
         out = out * self.weights.expand_as(out)
         out /= torch.sum(self.weights.expand_as(out))
         return out.sum()
+

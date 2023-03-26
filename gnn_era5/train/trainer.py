@@ -50,7 +50,8 @@ class GraphForecaster(pl.LightningModule):
         )
 
         self.era_latlons = graph_data[("era", "to", "era")].ecoords_rad
-        self.loss = WeightedMSELoss(latpts=self.era_latlons[:, 0])
+        self.era_weights = graph_data[("era", "to", "era")].area_weights
+        self.loss = WeightedMSELoss(weights=self.era_weights)
         self.feature_dim = fc_dim
         self.lr = lr
         self.rollout = rollout
