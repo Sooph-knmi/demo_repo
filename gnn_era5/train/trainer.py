@@ -56,6 +56,7 @@ class GraphForecaster(pl.LightningModule):
         self.lr = lr
         self.rollout = rollout
         LOGGER.debug("Rollout window length: %d", self.rollout)
+
         self.log_to_wandb = log_to_wandb
         self.log_to_neptune = log_to_neptune
         self.save_basedir = save_basedir

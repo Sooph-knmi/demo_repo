@@ -1,6 +1,5 @@
 from typing import Optional
 
-import numpy as np
 import torch
 from torch import nn
 
@@ -12,7 +11,7 @@ LOGGER = get_logger(__name__)
 class WeightedMSELoss(nn.Module):
     """Latitude-weighted MSE loss"""
 
-    def __init__(self, area_weights: np.ndarray, data_variances: Optional[np.ndarray] = None) -> None:
+    def __init__(self, area_weights: torch.Tensor, data_variances: Optional[torch.Tensor] = None) -> None:
         """
         Latitude- and (inverse-)variance-weighted MSE Loss.
         Args:
@@ -22,9 +21,9 @@ class WeightedMSELoss(nn.Module):
         """
         super().__init__()
 
-        self.register_buffer("weights", torch.as_tensor(area_weights), persistent=True)
+        self.register_buffer("weights", area_weights, persistent=True)
         if data_variances is not None:
-            self.register_buffer("ivar", torch.as_tensor(data_variances**-1), persistent=True)
+            self.register_buffer("ivar", torch.inverse(data_variances), persistent=True)
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
