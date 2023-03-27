@@ -1,4 +1,4 @@
-from typing import Tuple, List, Optional, Any
+from typing import Tuple, List, Optional
 
 import os
 import matplotlib.pyplot as plt
@@ -51,7 +51,7 @@ class GraphForecaster(pl.LightningModule):
 
         self.era_latlons = graph_data[("era", "to", "era")].ecoords_rad
         self.era_weights = graph_data[("era", "to", "era")].area_weights
-        self.loss = WeightedMSELoss(weights=self.era_weights)
+        self.loss = WeightedMSELoss(area_weights=self.era_weights)
         self.feature_dim = fc_dim
         self.lr = lr
         self.rollout = rollout
