@@ -73,7 +73,7 @@ def train(config: YAMLConfig) -> None:
 
     if config["model:compile"]:
         # TODO: is it better if we compile smaller chunks of the model - like the msg passing MLPs?
-        LOGGER.debug("torch.compiling the Lightning model (mode == reduce-overhead)...")
+        LOGGER.debug("torch.compiling the Lightning model ...")
         model = torch.compile(model, mode="default", backend="inductor", fullgraph=False)
 
     trainer = pl.Trainer(
