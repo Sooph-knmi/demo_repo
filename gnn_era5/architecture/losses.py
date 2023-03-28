@@ -1,8 +1,8 @@
 from typing import Optional
-import numpy as np
 
 import torch
 from torch import nn
+
 from gnn_era5.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -11,21 +11,19 @@ LOGGER = get_logger(__name__)
 class WeightedMSELoss(nn.Module):
     """Latitude-weighted MSE loss"""
 
-    def __init__(self, latpts: np.ndarray, data_variances: Optional[np.ndarray] = None) -> None:
+    def __init__(self, area_weights: torch.Tensor, data_variances: Optional[torch.Tensor] = None) -> None:
         """
         Latitude- and (inverse-)variance-weighted MSE Loss.
         Args:
-            latpts: array of grid node latitudes, shape (lat * lons, 1)
+            area_weights: area weights
             data_variances: precomputed, per-variable stepwise variance estimate
-                            V_{i,t} = E_{i,t} [ x^{t+1} - x^{t} ] (i = lat/lon index, t = time index, x = physical variable)
+                            V_{i,t} = E_{i,t} [ x^{t+1} - x^{t} ] (i = lat/lon index, t = time index, x = predicted variable)
         """
         super().__init__()
 
-        weights = np.cos(latpts) + 1.0e-4  # get rid of some small negative weight values
-        LOGGER.debug(f"min/max cos(lat) weights: {weights.min():.3e}, {weights.max():.3e}")
-        self.register_buffer("weights", torch.as_tensor(weights), persistent=True)
+        self.register_buffer("weights", area_weights, persistent=True)
         if data_variances is not None:
-            self.register_buffer("ivar", torch.as_tensor(data_variances**-1), persistent=True)
+            self.register_buffer("ivar", torch.inverse(data_variances), persistent=True)
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """

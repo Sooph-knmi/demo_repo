@@ -1,7 +1,8 @@
 #!/bin/bash
 
 #SBATCH --qos=ng
-#SBATCH --ntasks=4
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=4
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256G
@@ -21,9 +22,9 @@
 # export WANDB_NOTES="o160 ddp test run"
 
 # generic settings
-CONDA_ENV=gnn-pyg-2.1
-GITDIR=/home/syma/dask/codes/gnn-era5
-WORKDIR=/home/syma/dask/codes/gnn-era5
+CONDA_ENV=gnn-pyg-2.3
+GITDIR=/home/syma/GNN/gnn-era5.git
+WORKDIR=/home/syma/GNN/gnn-era5.git
 
 cd $WORKDIR
 module load conda

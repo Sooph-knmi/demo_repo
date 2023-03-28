@@ -23,6 +23,7 @@ def train(config: YAMLConfig) -> None:
         config: job configuration
     """
     timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
+    torch.set_float32_matmul_precision("high")
 
     # create data module (data loaders and data sets)
     dmod = ERA5DataModule(config)
@@ -53,11 +54,12 @@ def train(config: YAMLConfig) -> None:
         aux_dim=num_aux_features,
         encoder_hidden_channels=config["model:encoder:num-hidden-channels"],
         encoder_out_channels=config["model:encoder:num-out-channels"],
-        encoder_dropout=config["model:encoder:dropout"],
+        # encoder_dropout=config["model:encoder:dropout"],
         encoder_num_layers=config["model:encoder:num-layers"],
-        encoder_num_heads=config["model:encoder:num-heads"],
-        encoder_activation=config["model:encoder:activation"],
-        use_dynamic_context=True,
+        encoder_mapper_num_layers=config["model:encoder:mapper-num-layers"],
+        # encoder_num_heads=config["model:encoder:num-heads"],
+        # encoder_activation=config["model:encoder:activation"],
+        # use_dynamic_context=True,
         lr=total_gpu_count * config["model:learn-rate"],
         rollout=config["model:rollout"],
         save_basedir=os.path.join(
@@ -68,6 +70,11 @@ def train(config: YAMLConfig) -> None:
         log_to_wandb=config["model:wandb:enabled"],
         log_to_neptune=config["model:neptune:enabled"],
     )
+
+    if config["model:compile"]:
+        # TODO: is it better if we compile smaller chunks of the model - like the msg passing MLPs?
+        LOGGER.debug("torch.compiling the Lightning model ...")
+        model = torch.compile(model, mode="default", backend="inductor", fullgraph=False)
 
     trainer = pl.Trainer(
         accelerator="gpu" if config["model:num-gpus"] > 0 else "cpu",
@@ -101,9 +108,11 @@ def train(config: YAMLConfig) -> None:
         # run a fixed no of batches per epoch (helpful when debugging)
         limit_train_batches=config["model:limit-batches:training"],
         limit_val_batches=config["model:limit-batches:validation"],
-        # we have our own DDP-compliant sampler logic baked into the dataset
-        replace_sampler_ddp=False,
         num_sanity_val_steps=0,
+        # we have our own DDP-compliant sampler logic baked into the dataset
+        # I'm running with lightning 2.0, if you use an older version comment out the following line
+        # and use `replace_sampler_ddp=False` instead
+        use_distributed_sampler=False,
     )
 
     trainer.fit(model, datamodule=dmod)

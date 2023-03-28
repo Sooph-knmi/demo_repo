@@ -13,7 +13,7 @@ LOGGER = get_logger(__name__)
 GRID_NAMES = ["o160", "o80", "o48", "o32"]
 
 
-class UNetGraphTransformer(nn.Module):
+class GraphUNet(nn.Module):
     def __init__(
         self,
         multigraph_data: HeteroData,
@@ -369,7 +369,7 @@ class UNetGraphTransformer(nn.Module):
 
         x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=bs)
 
-        # final residual connection (just for the physical variables)
+        # final residual connection (just for the predicted variables)
         return x_out + x[..., : self.in_channels]
 
 
@@ -389,7 +389,7 @@ if __name__ == "__main__":
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     LOGGER.debug("Running on device: %s ...", device)
 
-    gnn = UNetGraphTransformer(
+    gnn = GraphUNet(
         multigraph_data=graph_mappings,
         in_channels=num_inputs,
         aux_in_channels=num_aux_inputs,

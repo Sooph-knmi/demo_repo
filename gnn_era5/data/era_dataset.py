@@ -51,6 +51,8 @@ class ERA5NativeGridDataset(IterableDataset):
         assert self.lead_time > 0 and self.lead_time % 6 == 0, "Lead time must be multiple of 6 hours"
         self.lead_step = lead_time // 6
 
+        LOGGER.debug("Dataset lead_time = %d, lead_step = %d ...", self.lead_time, self.lead_step)
+
         self.rollout = rollout
 
         self.nlev = _ERA_PLEV
@@ -70,6 +72,10 @@ class ERA5NativeGridDataset(IterableDataset):
         self.rank = rank
         self.world_size = world_size
 
+        # additional state vars (lazy init)
+        self.n_samples_per_worker = 0
+        self.chunk_index_range: Optional[np.ndarray] = None
+
     def per_worker_init(self, n_workers: int, worker_id: int) -> None:
         """Called by worker_init_func on each copy of WeatherBenchDataset after the worker process has been spawned."""
         if self.ds_2d is None:
@@ -81,22 +87,22 @@ class ERA5NativeGridDataset(IterableDataset):
         assert self.ds_2d.shape[0] == self.ds_3d.shape[0], "The 2d and 3d ERA datasets do not have the same no of time points!"
 
         shard_size = int(np.floor(self.ds_2d.shape[0] / self.world_size))
-        self.shard_start, self.shard_end = self.rank * shard_size, min((self.rank + 1) * shard_size, self.ds_2d.shape[0])
+        shard_start, shard_end = self.rank * shard_size, min((self.rank + 1) * shard_size, self.ds_2d.shape[0])
 
-        self.ds_len = self.shard_end - self.shard_start - self.rollout
-        self.n_samples_per_worker = self.ds_len // n_workers
+        ds_len = shard_end - shard_start - self.rollout
+        self.n_samples_per_worker = ds_len // n_workers
 
-        low = self.shard_start + worker_id * self.n_samples_per_worker
-        high = min(self.shard_start + (worker_id + 1) * self.n_samples_per_worker, self.shard_end)
+        low = shard_start + worker_id * self.n_samples_per_worker
+        high = min(shard_start + (worker_id + 1) * self.n_samples_per_worker, shard_end)
 
         self.chunk_index_range = np.arange(low, high, dtype=np.uint32)
 
         LOGGER.debug(
             "Worker PID %d has access to shard (%i to %i), with ds_len = %i, n_chunks_per_worker = %i ",
             os.getpid(),
-            self.shard_start,
-            self.shard_end,
-            self.ds_len,
+            shard_start,
+            shard_end,
+            ds_len,
             self.n_samples_per_worker,
         )
 

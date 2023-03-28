@@ -1,4 +1,4 @@
-from typing import Tuple, List, Optional, Any
+from typing import Tuple, List, Optional
 
 import os
 import matplotlib.pyplot as plt
@@ -8,7 +8,8 @@ import pytorch_lightning as pl
 import wandb
 from torch_geometric.data import HeteroData
 
-from gnn_era5.architecture.unet_graph_transformer import UNetGraphTransformer
+# from gnn_era5.architecture.unet import UNetGraphTransformer
+from gnn_era5.architecture.msg import GraphMSG
 from gnn_era5.architecture.losses import WeightedMSELoss
 from gnn_era5.data.era_datamodule import ERA5DataBatch
 from gnn_era5.utils.logger import get_logger
@@ -27,13 +28,9 @@ class GraphForecaster(pl.LightningModule):
         fc_dim: int,
         aux_dim: int,
         encoder_num_layers: int = 4,
+        encoder_mapper_num_layers: int = 1,
         encoder_hidden_channels: int = 128,
         encoder_out_channels: int = 128,
-        encoder_num_heads: int = 4,
-        encoder_dropout: float = 0.0,
-        encoder_activation: Optional[str] = "gelu",
-        encoder_jk_mode: Optional[str] = "last",
-        use_dynamic_context: bool = True,
         lr: float = 1e-4,
         rollout: int = 1,
         save_basedir: Optional[str] = None,
@@ -42,26 +39,24 @@ class GraphForecaster(pl.LightningModule):
     ) -> None:
         super().__init__()
 
-        self.gnn = UNetGraphTransformer(
-            multigraph_data=graph_data,
+        self.gnn = GraphMSG(
+            graph_data=graph_data,
             in_channels=fc_dim,
             aux_in_channels=aux_dim,
             encoder_num_layers=encoder_num_layers,
             encoder_hidden_channels=encoder_hidden_channels,
             encoder_out_channels=encoder_out_channels,
-            encoder_num_heads=encoder_num_heads,
-            encoder_dropout=encoder_dropout,
-            encoder_activation=encoder_activation,
-            encoder_jk_mode=encoder_jk_mode,
-            use_dynamic_context=use_dynamic_context,
+            encoder_mapper_num_layers=encoder_mapper_num_layers,
         )
 
-        self.era_latlons = graph_data[("o160", "to", "o160")].coords_rad
-        self.loss = WeightedMSELoss(latpts=self.era_latlons[:, 0])
+        self.era_latlons = graph_data[("era", "to", "era")].ecoords_rad
+        self.era_weights = graph_data[("era", "to", "era")].area_weights
+        self.loss = WeightedMSELoss(area_weights=self.era_weights)
         self.feature_dim = fc_dim
         self.lr = lr
         self.rollout = rollout
         LOGGER.debug("Rollout window length: %d", self.rollout)
+
         self.log_to_wandb = log_to_wandb
         self.log_to_neptune = log_to_neptune
         self.save_basedir = save_basedir
