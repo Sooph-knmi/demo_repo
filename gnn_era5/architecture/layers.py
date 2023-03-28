@@ -23,37 +23,20 @@ class TransformerMapper(MessagePassing):
         num_heads: int = 1,
         dropout: float = 0.0,
         edge_dim: int = 3,
-        is_decoder: bool = False,  # only used in MessagePassingMapper
-        encoder_type: Optional[str] = "GAT",
     ) -> None:
         super().__init__()
         self.dynamic_context_channels = dynamic_context_channels
-        self.encoder_type = encoder_type
         context_channels = trainable_context_channels + self.dynamic_context_channels
 
-        if encoder_type == "MSG":
-            assert context_channels > 0, "MSG Encoders not supported for context_channels == 0"
-
         if context_channels > 0:
-            if encoder_type == "GAT":
-                self.conv = tgnn.GATConv(
-                    in_channels=(in_channels, context_channels),
-                    out_channels=out_channels,
-                    heads=num_heads,
-                    dropout=dropout,
-                    edge_dim=edge_dim,
-                    add_self_loops=False,
-                )
-
-            else:
-                self.msg = MessagePassingMapper(
-                    in_channels=(in_channels, context_channels),
-                    hidden_dim=out_channels,
-                    out_channels=out_channels,
-                    edge_dim=3,
-                    hidden_layers=2,  # 1 # these layers are expensive because they are on the era grid
-                )
-
+            self.conv = tgnn.GATConv(
+                in_channels=(in_channels, context_channels),
+                out_channels=out_channels,
+                heads=num_heads,
+                dropout=dropout,
+                edge_dim=edge_dim,
+                add_self_loops=False,
+            )
         else:
             self.conv = tgnn.GATConv(
                 in_channels=in_channels,
@@ -93,10 +76,7 @@ class TransformerMapper(MessagePassing):
             if batch_size > 1:
                 context = einops.repeat(context, "n f -> (repeat n) f", repeat=batch_size)
             assert edge_index[0].max() < x.size(0) and edge_index[1].max() < context.size(0), "Your edge index tensor is invalid."
-            if self.encoder_type == "GAT":
-                out = self.conv(x=(x, context), edge_index=edge_index, edge_attr=edge_attr, size=(x.shape[0], context.shape[0]))
-            else:
-                out = self.msg(x=(x, context), edge_index=edge_index, edge_attr=edge_attr)  # , size=(x.shape[0], context.shape[0]))
+            out = self.conv(x=(x, context), edge_index=edge_index, edge_attr=edge_attr, size=(x.shape[0], context.shape[0]))
         else:
             out = self.conv(x=x, edge_index=edge_index, edge_attr=edge_attr)
 

@@ -71,6 +71,11 @@ def train(config: YAMLConfig) -> None:
         log_to_neptune=config["model:neptune:enabled"],
     )
 
+    if config["model:compile"]:
+        # TODO: is it better if we compile smaller chunks of the model - like the msg passing MLPs?
+        LOGGER.debug("torch.compiling the Lightning model (mode == reduce-overhead)...")
+        model = torch.compile(model, mode="default", backend="inductor", fullgraph=False)
+
     trainer = pl.Trainer(
         accelerator="gpu" if config["model:num-gpus"] > 0 else "cpu",
         callbacks=[

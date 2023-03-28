@@ -86,20 +86,21 @@ output:
 #  GRAPH BLOCK
 ###################
 graph:
-  data-basedir: /ec/res4/hpcperm/syma/gnn/
-  data-file: graph_mappings_normed_edge_attrs_o160_h3.pt
+  data-basedir: /ec/res4/hpcperm/pamc/gnn/
+  data-file: graph_mappings_normed_edge_attrs_o160_h3_2.pt
 
 ###################
 #  MODEL BLOCK
 ###################
 model:
+  compile: False
   debug:
     # this will detect and trace back NaNs / Infs etc. but will slow down training
     anomaly-detection: False
   wandb:
-    enabled: False
-  neptune:
     enabled: True
+  neptune:
+    enabled: False
   dataloader:
     num-workers:
       training: 16
@@ -123,7 +124,7 @@ model:
 
   # parallel strategy
   # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
-  strategy: auto  # ddp_find_unused_parameters_false
+  strategy: auto
 
   # number of GPUs per node and number of nodes (for DDP)
   num-gpus: 4
@@ -131,7 +132,7 @@ model:
 
   # training settings
   lead-time: 6
-  max-epochs: 50
+  max-epochs: 5
   learn-rate: 1.25e-4
 
   # specific GNN encoder settings
@@ -143,7 +144,6 @@ model:
     num-hidden-channels: 256
     num-out-channels: 256
     dropout: 0.
-    # type : MSG
 
   # length of the "rollout" window (see Keisler's paper)
   rollout: 1

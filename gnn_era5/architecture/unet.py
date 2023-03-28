@@ -369,7 +369,7 @@ class GraphUNet(nn.Module):
 
         x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=bs)
 
-        # final residual connection (just for the physical variables)
+        # final residual connection (just for the predicted variables)
         return x_out + x[..., : self.in_channels]
 
 

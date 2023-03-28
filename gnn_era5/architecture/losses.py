@@ -17,7 +17,7 @@ class WeightedMSELoss(nn.Module):
         Args:
             area_weights: area weights
             data_variances: precomputed, per-variable stepwise variance estimate
-                            V_{i,t} = E_{i,t} [ x^{t+1} - x^{t} ] (i = lat/lon index, t = time index, x = physical variable)
+                            V_{i,t} = E_{i,t} [ x^{t+1} - x^{t} ] (i = lat/lon index, t = time index, x = predicted variable)
         """
         super().__init__()
 
