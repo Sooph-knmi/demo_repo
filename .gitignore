@@ -139,3 +139,6 @@ job_out.*
 
 # neptune
 .neptune/
+
+# emacs
+*~

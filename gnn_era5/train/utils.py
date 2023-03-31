@@ -12,14 +12,16 @@ def setup_exp_logger(config: YAMLConfig):
     if config["model:wandb:enabled"]:
         from pytorch_lightning.loggers.wandb import WandbLogger
 
-        return WandbLogger(
-            project="gnn-era5",
-            entity="mishooax",
+        logger = WandbLogger(
+            project="GNN",
+            entity="ecmwf-s2s",
             save_dir=os.path.join(
                 config["output:basedir"].format(resolution=config["input:resolution"]),
                 config["output:logging:log-dir"],
             ),
         )
+        logger.log_hyperparams(config._cfg)
+        return logger
     if config["model:neptune:enabled"]:
         from pytorch_lightning.loggers.neptune import NeptuneLogger
 
