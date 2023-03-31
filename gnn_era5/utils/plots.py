@@ -42,7 +42,6 @@ def plot_2d_sample(
     pred: np.ndarray,
     idx: int,
 ) -> None:
-
     cmap = cm.bwr
     cmap.set_bad(color="gray")
 

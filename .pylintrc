@@ -97,7 +97,8 @@ disable=raw-checker-failed,
         C0016, # missing-function-docstring
         C0103,
         R0913, # too-many-arguments
-        R0914  # too-many-locals
+        R0914, # too-many-locals
+        C0415  # imports not at top level
 
 # Enable the message, report, category or checker with the given id(s). You can
 # either give multiple identifier separated by comma (,) or put this option

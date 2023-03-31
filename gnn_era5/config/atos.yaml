@@ -87,7 +87,7 @@ output:
 ###################
 graph:
   data-basedir: /ec/res4/hpcperm/pamc/gnn/
-  data-file: graph_mappings_normed_edge_attrs_o160_h3_2.pt
+  data-file: graph_mappings_normed_edge_attrs_o160_h3_3.pt
 
 ###################
 #  MODEL BLOCK
@@ -107,8 +107,8 @@ model:
       validation: 16
       inference: 1
     batch-size:
-      training: 4
-      validation: 4
+      training: 2
+      validation: 2
       inference: 1
 
   # miscellaneous
@@ -132,12 +132,22 @@ model:
 
   # training settings
   lead-time: 6
-  max-epochs: 5
+  max-epochs: 50
   learn-rate: 1.25e-4
+
+  # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
+  # the effective batch size becomes num-devices * batch-size * k
+  accum-grad-batches: 2
+
+  # stochastic weight averaging
+  # https://pytorch.org/blog/stochastic-weight-averaging-in-pytorch/
+  swa:
+    enabled: True
+    lr: 1.e-2
 
   # specific GNN encoder settings
   encoder:
-    num-layers: 6
+    num-layers: 5
     mapper-num-layers: 1
     num-heads: 8
     activation: gelu

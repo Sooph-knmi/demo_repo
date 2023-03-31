@@ -1,25 +1,23 @@
-from typing import Tuple, List, Optional
-
 import os
+from typing import List, Optional, Tuple
+
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 import pytorch_lightning as pl
-import wandb
+import torch
 from torch_geometric.data import HeteroData
 
-# from gnn_era5.architecture.unet import UNetGraphTransformer
-from gnn_era5.architecture.msg import GraphMSG
+import wandb
 from gnn_era5.architecture.losses import WeightedMSELoss
+from gnn_era5.architecture.msg import GraphMSG
 from gnn_era5.data.era_datamodule import ERA5DataBatch
 from gnn_era5.utils.logger import get_logger
-from gnn_era5.utils.plots import plot_predicted_multilevel_flat_sample, init_plot_settings
+from gnn_era5.utils.plots import init_plot_settings, plot_predicted_multilevel_flat_sample
 
 LOGGER = get_logger(__name__)
 
 
 class GraphForecaster(pl.LightningModule):
-
     _VAL_PLOT_FREQ = 750
 
     def __init__(
@@ -36,6 +34,7 @@ class GraphForecaster(pl.LightningModule):
         save_basedir: Optional[str] = None,
         log_to_wandb: bool = False,
         log_to_neptune: bool = False,
+        log_persistence: bool = False,
     ) -> None:
         super().__init__()
 
@@ -60,6 +59,8 @@ class GraphForecaster(pl.LightningModule):
         self.log_to_wandb = log_to_wandb
         self.log_to_neptune = log_to_neptune
         self.save_basedir = save_basedir
+
+        self.log_persistence = log_persistence
 
         self.save_hyperparameters()
         init_plot_settings()
@@ -95,16 +96,17 @@ class GraphForecaster(pl.LightningModule):
             batch_size=batch.X.shape[0],
             sync_dist=True,
         )
-        self.log(
-            "train_persist_wmse",
-            persist_loss,
-            on_epoch=True,
-            on_step=True,
-            prog_bar=False,
-            logger=True,
-            batch_size=batch.X.shape[0],
-            sync_dist=True,
-        )
+        if self.log_persistence:
+            self.log(
+                "train_persist_wmse",
+                persist_loss,
+                on_epoch=True,
+                on_step=True,
+                prog_bar=False,
+                logger=True,
+                batch_size=batch.X.shape[0],
+                sync_dist=True,
+            )
 
         return train_loss
 
@@ -120,16 +122,17 @@ class GraphForecaster(pl.LightningModule):
             batch_size=batch.X.shape[0],
             sync_dist=True,
         )
-        self.log(
-            "val_persist_wmse",
-            persist_loss,
-            on_epoch=True,
-            on_step=True,
-            prog_bar=True,
-            logger=True,
-            batch_size=batch.X.shape[0],
-            sync_dist=True,
-        )
+        if self.log_persistence:
+            self.log(
+                "val_persist_wmse",
+                persist_loss,
+                on_epoch=True,
+                on_step=True,
+                prog_bar=True,
+                logger=True,
+                batch_size=batch.X.shape[0],
+                sync_dist=True,
+            )
         return val_loss
 
     def test_step(self, batch: ERA5DataBatch, batch_idx: int) -> torch.Tensor:
@@ -145,16 +148,17 @@ class GraphForecaster(pl.LightningModule):
             sync_dist=True,
         )
 
-        self.log(
-            "test_persist_wmse",
-            persist_loss,
-            on_epoch=True,
-            on_step=True,
-            prog_bar=True,
-            logger=True,
-            batch_size=batch.X.shape[0],
-            sync_dist=True,
-        )
+        if self.log_persistence:
+            self.log(
+                "test_persist_wmse",
+                persist_loss,
+                on_epoch=True,
+                on_step=True,
+                prog_bar=True,
+                logger=True,
+                batch_size=batch.X.shape[0],
+                sync_dist=True,
+            )
         return test_loss
 
     def predict_step(self, batch: ERA5DataBatch, batch_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -181,7 +185,7 @@ class GraphForecaster(pl.LightningModule):
                 y = batch.X[:, rstep + 1, ...]
                 loss += self.loss(y_hat, y[..., : self.feature_dim])
                 persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
-                if plot_sample:
+                if plot_sample and self.global_rank == 0:
                     self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)
                 x[..., : self.feature_dim] = y_hat
             loss *= 1.0 / self.rollout
@@ -189,7 +193,6 @@ class GraphForecaster(pl.LightningModule):
         return loss, persist_loss
 
     def _plot_sample(self, batch_idx: int, rollout_step: int, x: torch.Tensor, y_true: torch.Tensor, y_pred: torch.Tensor) -> None:
-
         sample_idx = 0
         fig = plot_predicted_multilevel_flat_sample(
             np.rad2deg(self.era_latlons.numpy()),
@@ -200,7 +203,7 @@ class GraphForecaster(pl.LightningModule):
         fig.tight_layout()
         self._output_figure(
             fig,
-            tag=f"gnn_pred_val_sample_rstep{rollout_step:02d}_batch{batch_idx:04d}_rank{self.local_rank:01d}",
+            tag=f"gnn_pred_val_sample_rstep{rollout_step:02d}_batch{batch_idx:04d}_rank0000",
             exp_log_tag=f"val_pred_sample_rstep{rollout_step:02d}_rank{self.local_rank:01d}",
         )
 
@@ -217,7 +220,7 @@ class GraphForecaster(pl.LightningModule):
         plt.close(fig)  # cleanup
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), betas=(0.9, 0.95), lr=self.lr)
+        optimizer = torch.optim.Adam(self.parameters(), betas=(0.9, 0.95), lr=self.lr, foreach=True, fused=True)
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=5.0e-6)
         return {
             "optimizer": optimizer,

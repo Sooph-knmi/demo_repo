@@ -60,7 +60,6 @@ class TransformerMapper(MessagePassing):
         dynamic_context: Optional[torch.Tensor] = None,
         batch_size: int = 1,
     ) -> torch.Tensor:
-
         context = self.trainable_context
 
         if dynamic_context is not None:
@@ -267,7 +266,6 @@ class EdgePoolEncoder(nn.Module):
         edge_attr: torch.Tensor,
         batch_size: int,
     ) -> torch.Tensor:
-
         del edge_attr  # not used
 
         # x is on ERA grid

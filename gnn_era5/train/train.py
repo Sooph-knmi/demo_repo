@@ -6,6 +6,7 @@ import pytorch_lightning as pl
 
 # from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
+from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAveraging
 
 from gnn_era5.utils.config import YAMLConfig
 from gnn_era5.data.era_datamodule import ERA5DataModule
@@ -54,12 +55,8 @@ def train(config: YAMLConfig) -> None:
         aux_dim=num_aux_features,
         encoder_hidden_channels=config["model:encoder:num-hidden-channels"],
         encoder_out_channels=config["model:encoder:num-out-channels"],
-        # encoder_dropout=config["model:encoder:dropout"],
         encoder_num_layers=config["model:encoder:num-layers"],
         encoder_mapper_num_layers=config["model:encoder:mapper-num-layers"],
-        # encoder_num_heads=config["model:encoder:num-heads"],
-        # encoder_activation=config["model:encoder:activation"],
-        # use_dynamic_context=True,
         lr=total_gpu_count * config["model:learn-rate"],
         rollout=config["model:rollout"],
         save_basedir=os.path.join(
@@ -72,31 +69,46 @@ def train(config: YAMLConfig) -> None:
     )
 
     if config["model:compile"]:
-        # TODO: is it better if we compile smaller chunks of the model - like the msg passing MLPs?
+        # disabling CUDA graphs with Triton
+        torch._inductor.config.triton.cudagraphs = False
         LOGGER.debug("torch.compiling the Lightning model ...")
         model = torch.compile(model, mode="default", backend="inductor", fullgraph=False)
 
+    trainer_callbacks = [
+        # EarlyStopping(monitor="val_wmse", min_delta=0.0, patience=7, verbose=False, mode="min"),
+        ModelCheckpoint(
+            dirpath=os.path.join(
+                config["output:basedir"].format(resolution=config["input:resolution"]),
+                config["output:checkpoints:ckpt-dir"],
+                timestamp,
+            ),
+            filename=config["output:model:checkpoint-filename"],
+            monitor="val_wmse",
+            verbose=False,
+            save_top_k=config["output:model:save-top-k"],
+            save_weights_only=True,
+            mode="min",
+            auto_insert_metric_name=True,
+            save_on_train_epoch_end=True,
+            every_n_epochs=1,
+        ),
+    ]
+
+    if config["model:swa:enabled"]:
+        trainer_callbacks.append(
+            StochasticWeightAveraging(
+                swa_lrs=config["model:swa:lr"],
+                swa_epoch_start=min(int(0.75 * config["model:max-epochs"]), config["model:max-epochs"] - 1),
+                annealing_epochs=max(int(0.25 * config["model:max-epochs"]), 1),
+                annealing_strategy="cos",
+                # TODO: do we want the averaging to happen on the CPU, to save memory?
+                device=None,
+            )
+        )
+
     trainer = pl.Trainer(
         accelerator="gpu" if config["model:num-gpus"] > 0 else "cpu",
-        callbacks=[
-            # EarlyStopping(monitor="val_wmse", min_delta=0.0, patience=7, verbose=False, mode="min"),
-            ModelCheckpoint(
-                dirpath=os.path.join(
-                    config["output:basedir"].format(resolution=config["input:resolution"]),
-                    config["output:checkpoints:ckpt-dir"],
-                    timestamp,
-                ),
-                filename=config["output:model:checkpoint-filename"],
-                monitor="val_wmse",
-                verbose=False,
-                save_top_k=config["output:model:save-top-k"],
-                save_weights_only=True,
-                mode="min",
-                auto_insert_metric_name=True,
-                save_on_train_epoch_end=True,
-                every_n_epochs=1,
-            ),
-        ],
+        callbacks=trainer_callbacks,
         detect_anomaly=config["model:debug:anomaly-detection"],
         strategy=config["model:strategy"],
         devices=config["model:num-gpus"] if config["model:num-gpus"] > 0 else None,
@@ -109,6 +121,7 @@ def train(config: YAMLConfig) -> None:
         limit_train_batches=config["model:limit-batches:training"],
         limit_val_batches=config["model:limit-batches:validation"],
         num_sanity_val_steps=0,
+        accumulate_grad_batches=config["model:accum-grad-batches"],
         # we have our own DDP-compliant sampler logic baked into the dataset
         # I'm running with lightning 2.0, if you use an older version comment out the following line
         # and use `replace_sampler_ddp=False` instead
