@@ -33,6 +33,15 @@ def train(config: YAMLConfig) -> None:
     num_aux_features = config["input:num-aux-features"]
     num_fc_features = num_features - num_aux_features
 
+    loss_scaling = []
+    for scl in config["input:loss-scaling-pl"]:
+        loss_scaling.extend([scl]*len(config["input:pl:levels"]))
+    for scl in config["input:loss-scaling-sfc"]:
+        loss_scaling.append(scl)
+    assert len(loss_scaling) == num_fc_features
+    print(loss_scaling)
+    loss_scaling = torch.Tensor(loss_scaling)
+
     LOGGER.debug("Total number of prognostic variables: %d", num_fc_features)
     LOGGER.debug("Total number of auxiliary variables: %d", num_aux_features)
 
@@ -63,12 +72,11 @@ def train(config: YAMLConfig) -> None:
         lr=total_gpu_count * config["model:learn-rate"],
         rollout=config["model:rollout"],
         save_basedir=os.path.join(
-            config["output:basedir"].format(resolution=config["input:resolution"]),
-            config["output:plots:plot-dir"],
-            timestamp,
+            config["output:basedir"].format(resolution=config["input:resolution"]), config["output:plots:plot-dir"], timestamp
         ),
         log_to_wandb=config["model:wandb:enabled"],
         log_to_neptune=config["model:neptune:enabled"],
+        loss_scaling=loss_scaling,
     )
 
     if config["model:compile"]:
@@ -95,7 +103,7 @@ def train(config: YAMLConfig) -> None:
                 auto_insert_metric_name=True,
                 save_on_train_epoch_end=True,
                 every_n_epochs=1,
-            ),
+            )
         ],
         detect_anomaly=config["model:debug:anomaly-detection"],
         strategy=config["model:strategy"],
@@ -113,6 +121,7 @@ def train(config: YAMLConfig) -> None:
         # I'm running with lightning 2.0, if you use an older version comment out the following line
         # and use `replace_sampler_ddp=False` instead
         use_distributed_sampler=False,
+        # replace_sampler_ddp=False,
     )
 
     trainer.fit(model, datamodule=dmod)
