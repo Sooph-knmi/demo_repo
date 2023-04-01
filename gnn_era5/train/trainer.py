@@ -183,21 +183,21 @@ class GraphForecaster(pl.LightningModule):
                 loss += self.loss(y_hat, y[..., : self.feature_dim])
                 persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
                 if plot_sample:
-                    self._plot_loss(y_hat, y[..., : self.feature_dim])
+                    self._plot_loss(y_hat, y[..., : self.feature_dim,rstep])
                     self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)
                 x[..., : self.feature_dim] = y_hat
             loss *= 1.0 / self.rollout
             persist_loss *= 1.0 / self.rollout
         return loss, persist_loss
 
-    def _plot_loss(self, y_true: torch.Tensor, y_pred: torch.Tensor) -> None:
+    def _plot_loss(self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int) -> None:
         loss = self.loss(y_true,y_pred,squash=False).cpu().numpy()
         fig = plot_loss(loss)
         fig.tight_layout()
         self._output_figure(
             fig,
-            tag=f"loss_rstep_rank{self.local_rank:01d}",
-            exp_log_tag=f"loss_sample_rank{self.local_rank:01d}",
+            tag=f"loss_rstep_rstep{rollout_step:02d}_rank{self.local_rank:01d}",
+            exp_log_tag=f"loss_sample_rstep{rollout_step:02d}_rank{self.local_rank:01d}",
         )
 
     def _plot_sample(self, batch_idx: int, rollout_step: int, x: torch.Tensor, y_true: torch.Tensor, y_pred: torch.Tensor) -> None:
