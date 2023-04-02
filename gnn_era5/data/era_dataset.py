@@ -115,7 +115,6 @@ class ERA5NativeGridDataset(IterableDataset):
         shuffled_chunk_indices = self.rng.choice(self.chunk_index_range, size=self.n_samples_per_worker, replace=False)
 
         for i in shuffled_chunk_indices:
-
             start, end = i, i + (self.rollout + 1) * self.lead_step
             LOGGER.debug(
                 "Worker PID %d selected start-end range [%i, %i] with stride lead_step = %i",

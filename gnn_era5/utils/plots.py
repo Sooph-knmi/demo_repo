@@ -42,7 +42,6 @@ def plot_2d_sample(
     pred: np.ndarray,
     idx: int,
 ) -> None:
-
     cmap = cm.bwr
     cmap.set_bad(color="gray")
 
@@ -85,7 +84,6 @@ def plot_2d(
     pred: np.ndarray,
     idx: int,
 ) -> None:
-
     cmap = cm.bwr
     cmap.set_bad(color="gray")
 
@@ -121,6 +119,7 @@ def plot_predicted_multilevel_sample(
             plot_2d_sample(fig, ax, xt, yt, yp, idx)
     return fig
 
+
 def plot_loss(
     x: np.ndarray,
 ) -> Figure:
@@ -131,14 +130,13 @@ def plot_loss(
         The figure object handle.
     """
 
-    fig, ax = plt.subplots(1, 1, figsize=(4,3))
+    fig, ax = plt.subplots(1, 1, figsize=(4, 3))
     colors = []
-    for c in 'krbgy':
-        colors.extend([c]*13)
-    colors.extend(['c']*2)
-    ax.bar(np.arange(x.size),x,color=colors,log=1)
+    for c in "krbgy":
+        colors.extend([c] * 13)
+    colors.extend(["c"] * 2)
+    ax.bar(np.arange(x.size), x, color=colors, log=1)
 
-    
     return fig
 
 

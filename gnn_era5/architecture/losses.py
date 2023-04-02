@@ -25,7 +25,7 @@ class WeightedMSELoss(nn.Module):
         if data_variances is not None:
             self.register_buffer("ivar", data_variances, persistent=True)
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor, squash = True) -> torch.Tensor:
+    def forward(self, pred: torch.Tensor, target: torch.Tensor, squash=True) -> torch.Tensor:
         """
         Calculates the lat-weighted MSE loss.
         Args:
@@ -36,7 +36,7 @@ class WeightedMSELoss(nn.Module):
             if squash:
                 out = (torch.square(pred - target) * self.ivar).mean(dim=-1)
             else:
-                out = (torch.square(pred - target) * self.ivar)
+                out = torch.square(pred - target) * self.ivar
         else:
             if squash:
                 out = torch.square(pred - target).mean(dim=-1)
@@ -48,7 +48,6 @@ class WeightedMSELoss(nn.Module):
             out /= torch.sum(self.weights.expand_as(out))
             return out.sum()
         else:
-            out = out * self.weights[...,None].expand_as(out)
-            out /= torch.sum(self.weights[...,None].expand_as(out))
-            return out.sum(axis=(0,1))
-            
+            out = out * self.weights[..., None].expand_as(out)
+            out /= torch.sum(self.weights[..., None].expand_as(out))
+            return out.sum(axis=(0, 1))
