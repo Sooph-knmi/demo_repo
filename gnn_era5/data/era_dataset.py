@@ -1,14 +1,14 @@
-from typing import Optional, Callable
 import os
+from typing import Callable, Optional
 
-from einops import rearrange
 import numpy as np
 import torch
+from einops import rearrange
 from torch.utils.data import IterableDataset, get_worker_info
 from zarr.core import Array
 
-from gnn_era5.utils.logger import get_logger
 from gnn_era5.utils.constants import _DL_PREFETCH_FACTOR, _ERA_PLEV
+from gnn_era5.utils.logger import get_logger
 
 LOGGER = get_logger(__name__, debug=False)
 
@@ -159,19 +159,19 @@ def worker_init_func(worker_id: int) -> None:
 
 
 if __name__ == "__main__":
-    import os
     from torch.utils.data import DataLoader
+
+    from gnn_era5.data.era_datamodule import era_batch_collator, read_2d_era_data, read_3d_era_data
     from gnn_era5.utils.config import YAMLConfig
-    from gnn_era5.data.era_datamodule import read_2d_era_data, read_3d_era_data, era_batch_collator
 
     _ROLLOUT = 2
     config = YAMLConfig("/home/syma/dask/codes/gnn-era5/gnn_era5/config/atos.yaml")
 
-    def get_data_filename(type: str, config: YAMLConfig) -> str:
+    def get_data_filename(type_: str, cfg_: YAMLConfig) -> str:
         # type == [pl | sfc]
         return os.path.join(
-            config[f"input:{type}:validation:basedir"].format(resolution=config["input:resolution"]),
-            config[f"input:{type}:validation:filename"].format(resolution=config["input:resolution"]),
+            cfg_[f"input:{type_}:validation:basedir"].format(resolution=cfg_["input:resolution"]),
+            cfg_[f"input:{type_}:validation:filename"].format(resolution=cfg_["input:resolution"]),
         )
 
     # dummy normalizers

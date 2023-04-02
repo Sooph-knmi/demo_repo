@@ -32,6 +32,7 @@ class GraphForecaster(pl.LightningModule):
         lr: float = 1e-4,
         rollout: int = 1,
         save_basedir: Optional[str] = None,
+        act_checkpoints: bool = True,
         log_to_wandb: bool = False,
         log_to_neptune: bool = False,
         log_persistence: bool = False,
@@ -46,6 +47,7 @@ class GraphForecaster(pl.LightningModule):
             encoder_hidden_channels=encoder_hidden_channels,
             encoder_out_channels=encoder_out_channels,
             encoder_mapper_num_layers=encoder_mapper_num_layers,
+            act_checkpoints=act_checkpoints,
         )
 
         self.era_latlons = graph_data[("era", "to", "era")].ecoords_rad
@@ -220,7 +222,9 @@ class GraphForecaster(pl.LightningModule):
         plt.close(fig)  # cleanup
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), betas=(0.9, 0.95), lr=self.lr, foreach=True, fused=True)
+        # TODO: revisit the choice of optimizer (switch to something fancier, like FusedAdam/LAMB?)
+        # TODO: Using a momentum-free optimizer (SGD) may reduce memory usage (but degrade convergence?) - to test
+        optimizer = torch.optim.Adam(self.parameters(), betas=(0.9, 0.95), lr=self.lr, fused=True)
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=5.0e-6)
         return {
             "optimizer": optimizer,

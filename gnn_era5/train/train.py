@@ -1,18 +1,19 @@
 import datetime as dt
 import os
+from typing import Optional
 
-import torch
 import pytorch_lightning as pl
+import torch
 
 # from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAveraging
 
-from gnn_era5.utils.config import YAMLConfig
 from gnn_era5.data.era_datamodule import ERA5DataModule
-from gnn_era5.utils.logger import get_logger
 from gnn_era5.train.trainer import GraphForecaster
-from gnn_era5.train.utils import setup_exp_logger, get_args
+from gnn_era5.train.utils import get_args, setup_exp_logger
+from gnn_era5.utils.config import YAMLConfig
+from gnn_era5.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
@@ -64,15 +65,26 @@ def train(config: YAMLConfig) -> None:
             config["output:plots:plot-dir"],
             timestamp,
         ),
+        act_checkpoints=config["model:act-checkpoints"],
         log_to_wandb=config["model:wandb:enabled"],
         log_to_neptune=config["model:neptune:enabled"],
+        log_persistence=False,
     )
 
     if config["model:compile"]:
-        # disabling CUDA graphs with Triton
-        torch._inductor.config.triton.cudagraphs = False
+        # this doesn't work ATM (April 2), don't bother enabling it ...
         LOGGER.debug("torch.compiling the Lightning model ...")
         model = torch.compile(model, mode="default", backend="inductor", fullgraph=False)
+
+    # warm restart?
+    ckpt_path: Optional[str] = None
+    if config["model:warm-restart:enabled"]:
+        ckpt_path = os.path.join(
+            config["output:basedir"],
+            config["output:checkpoints:ckpt-dir"],
+            config["model:warm-restart:ckpt-path"],
+        )
+        LOGGER.debug("Training will resume from %s ...", ckpt_path)
 
     trainer_callbacks = [
         # EarlyStopping(monitor="val_wmse", min_delta=0.0, patience=7, verbose=False, mode="min"),
@@ -86,10 +98,13 @@ def train(config: YAMLConfig) -> None:
             monitor="val_wmse",
             verbose=False,
             save_top_k=config["output:model:save-top-k"],
-            save_weights_only=True,
+            # save weights, optimizer states, LR-schedule states, hyperparameters etc.
+            # https://pytorch-lightning.readthedocs.io/en/stable/common/checkpointing_basic.html#contents-of-a-checkpoint
+            save_weights_only=False,
             mode="min",
             auto_insert_metric_name=True,
-            save_on_train_epoch_end=True,
+            # save after every validation epoch, if we've improved
+            save_on_train_epoch_end=False,
             every_n_epochs=1,
         ),
     ]
@@ -128,7 +143,7 @@ def train(config: YAMLConfig) -> None:
         use_distributed_sampler=False,
     )
 
-    trainer.fit(model, datamodule=dmod)
+    trainer.fit(model, datamodule=dmod, ckpt_path=ckpt_path)
 
     LOGGER.debug("---- DONE. ----")
 
