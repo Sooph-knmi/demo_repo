@@ -79,7 +79,7 @@ output:
     ckpt-dir: checkpoints
   model:
     save-top-k: 5
-    checkpoint-filename: "gnn-era5-{resolution}-ckpt-{epoch:02d}-{val_wmse:.3f}"
+    checkpoint-filename: gnn-era5-{resolution}-ckpt-{epoch:02d}-{val_wmse:.3f}
   plots:
     plot-dir: plots
 
@@ -115,9 +115,9 @@ model:
 
   # resume training from a checkpoint
   warm-restart:
-    enabled: False
+    enabled: True
     # path should be relative to the output:checkpoints:chkpt-dir, as defined above
-    ckpt-path: TBD
+    ckpt-path: 20230402_1127/gnn-era5-resolution=0-ckpt-epoch=00-val_wmse=0.300.ckpt
   
   # enable checkpointing of GNN activations? T/F
   # saves GPU memory at the expense of additional compute
@@ -148,7 +148,7 @@ model:
   # training settings
   lead-time: 6
   max-epochs: 5
-  learn-rate: 2.e-4
+  learn-rate: 1.25e-4
 
   # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
   # the effective batch size becomes num-devices * batch-size * k
@@ -157,8 +157,8 @@ model:
   # stochastic weight averaging
   # https://pytorch.org/blog/stochastic-weight-averaging-in-pytorch/
   swa:
-    enabled: True
-    lr: 1.e-2
+    enabled: False
+    lr: 1.e-4
 
   # specific GNN encoder settings
   encoder:
