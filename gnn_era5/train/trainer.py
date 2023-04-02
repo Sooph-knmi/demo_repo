@@ -13,13 +13,12 @@ from gnn_era5.architecture.msg import GraphMSG
 from gnn_era5.architecture.losses import WeightedMSELoss
 from gnn_era5.data.era_datamodule import ERA5DataBatch
 from gnn_era5.utils.logger import get_logger
-from gnn_era5.utils.plots import plot_predicted_multilevel_flat_sample, init_plot_settings
+from gnn_era5.utils.plots import plot_predicted_multilevel_flat_sample, init_plot_settings, plot_loss
 
 LOGGER = get_logger(__name__)
 
 
 class GraphForecaster(pl.LightningModule):
-
     _VAL_PLOT_FREQ = 750
 
     def __init__(
@@ -36,6 +35,7 @@ class GraphForecaster(pl.LightningModule):
         save_basedir: Optional[str] = None,
         log_to_wandb: bool = False,
         log_to_neptune: bool = False,
+        loss_scaling: torch.Tensor = torch.Tensor([1.0]),
     ) -> None:
         super().__init__()
 
@@ -51,7 +51,7 @@ class GraphForecaster(pl.LightningModule):
 
         self.era_latlons = graph_data[("era", "to", "era")].ecoords_rad
         self.era_weights = graph_data[("era", "to", "era")].area_weights
-        self.loss = WeightedMSELoss(area_weights=self.era_weights)
+        self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
         self.feature_dim = fc_dim
         self.lr = lr
         self.rollout = rollout
@@ -182,14 +182,24 @@ class GraphForecaster(pl.LightningModule):
                 loss += self.loss(y_hat, y[..., : self.feature_dim])
                 persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
                 if plot_sample:
+                    self._plot_loss(y_hat, y[..., : self.feature_dim, rstep])
                     self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)
                 x[..., : self.feature_dim] = y_hat
             loss *= 1.0 / self.rollout
             persist_loss *= 1.0 / self.rollout
         return loss, persist_loss
 
-    def _plot_sample(self, batch_idx: int, rollout_step: int, x: torch.Tensor, y_true: torch.Tensor, y_pred: torch.Tensor) -> None:
+    def _plot_loss(self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int) -> None:
+        loss = self.loss(y_true, y_pred, squash=False).cpu().numpy()
+        fig = plot_loss(loss)
+        fig.tight_layout()
+        self._output_figure(
+            fig,
+            tag=f"loss_rstep_rstep{rollout_step:02d}_rank{self.local_rank:01d}",
+            exp_log_tag=f"loss_sample_rstep{rollout_step:02d}_rank{self.local_rank:01d}",
+        )
 
+    def _plot_sample(self, batch_idx: int, rollout_step: int, x: torch.Tensor, y_true: torch.Tensor, y_pred: torch.Tensor) -> None:
         sample_idx = 0
         fig = plot_predicted_multilevel_flat_sample(
             np.rad2deg(self.era_latlons.numpy()),
