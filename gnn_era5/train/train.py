@@ -80,7 +80,7 @@ def train(config: YAMLConfig) -> None:
     ckpt_path: Optional[str] = None
     if config["model:warm-restart:enabled"]:
         ckpt_path = os.path.join(
-            config["output:basedir"],
+            config["output:basedir"].format(resolution=config["input:resolution"]),
             config["output:checkpoints:ckpt-dir"],
             config["model:warm-restart:ckpt-path"],
         )
