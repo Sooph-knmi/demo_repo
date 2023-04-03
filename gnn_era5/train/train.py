@@ -2,6 +2,7 @@ import datetime as dt
 import os
 from typing import Optional
 
+import numpy as np
 import pytorch_lightning as pl
 import torch
 
@@ -41,8 +42,8 @@ def train(config: YAMLConfig) -> None:
     for scl in config["input:loss-scaling-sfc"]:
         loss_scaling.append(scl)
     assert len(loss_scaling) == num_fc_features
-    print(loss_scaling)
-    loss_scaling = torch.Tensor(loss_scaling)
+    LOGGER.debug("Loss scaling: %s", loss_scaling)
+    loss_scaling = torch.from_numpy(np.array(loss_scaling, dtype=np.float32))
 
     LOGGER.debug("Total number of prognostic variables: %d", num_fc_features)
     LOGGER.debug("Total number of auxiliary variables: %d", num_aux_features)

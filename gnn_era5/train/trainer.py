@@ -194,7 +194,7 @@ class GraphForecaster(pl.LightningModule):
                 loss += self.loss(y_hat, y[..., : self.feature_dim])
                 persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
                 if plot_sample and self.global_rank == 0:
-                    self._plot_loss(y_hat, y[..., : self.feature_dim, rstep])
+                    # self._plot_loss(y_hat, y[..., : self.feature_dim], rollout_step=rstep)
                     self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)
                 x[..., : self.feature_dim] = y_hat
             loss *= 1.0 / self.rollout
