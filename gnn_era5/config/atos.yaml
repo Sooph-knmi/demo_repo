@@ -11,11 +11,13 @@ input:
         basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/pl
         filename: era5_{resolution}_t_u_v_w_z_pl_validation.zarr
       test:
-        basedir: 
-        filename: 
+        # use validation dataset (for now)
+        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/pl
+        filename: era5_{resolution}_t_u_v_w_z_pl_validation.zarr
       prediction:
-        basedir: 
-        filename:
+        # use validation dataset (for now)
+        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/pl
+        filename: era5_{resolution}_t_u_v_w_z_pl_validation.zarr
       names:
       # not used!
         - t
@@ -46,11 +48,13 @@ input:
         basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/sfc
         filename: era5_{resolution}_blh_lsm_msl_z_sfc_validation.zarr
       test:
-        basedir: 
-        filename:
-      prediction:
-        basedir: 
-        filename:
+        # use validation dataset (for now)
+        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/sfc
+        filename: era5_{resolution}_blh_lsm_msl_z_sfc_validation.zarr
+      predict:
+        # use validation dataset (for now)
+        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/sfc
+        filename: era5_{resolution}_blh_lsm_msl_z_sfc_validation.zarr
       names:
       # not used!
         - blh
@@ -107,15 +111,15 @@ model:
     num-workers:
       training: 16
       validation: 16
-      inference: 1
+      inference: 8
     batch-size:
       training: 2
       validation: 2
-      inference: 1
+      inference: 4
 
   # resume training from a checkpoint
   warm-restart:
-    enabled: True
+    enabled: False
     # path should be relative to the output:checkpoints:chkpt-dir, as defined above
     ckpt-path: 20230402_1127/gnn-era5-resolution=0-ckpt-epoch=00-val_wmse=0.300.ckpt
   
@@ -132,27 +136,27 @@ model:
   # runs only N training batches [N = integer | null]
   # if null then we run through all the batches
   limit-batches:
-    training: 1000 # null
-    validation: 500 # null
-    test: 20
-    predict: 20
+    training: 2500 # null
+    validation: 50 # null
+    test: 200
+    predict: 200
 
   # parallel strategy
   # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
   strategy: auto
 
   # number of GPUs per node and number of nodes (for DDP)
-  num-gpus: 4
+  num-gpus: 1
   num-nodes: 1
 
   # training settings
   lead-time: 6
-  max-epochs: 5
+  max-epochs: 2
   learn-rate: 1.25e-4
 
   # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
   # the effective batch size becomes num-devices * batch-size * k
-  accum-grad-batches: 1
+  accum-grad-batches: 2
 
   # stochastic weight averaging
   # https://pytorch.org/blog/stochastic-weight-averaging-in-pytorch/
