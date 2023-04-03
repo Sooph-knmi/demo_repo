@@ -76,6 +76,23 @@ def plot_2d_sample(
     fig.colorbar(pcm, ax=ax[5])
 
 
+def plot_2d(
+    fig,
+    ax,
+    array: np.ndarray,
+    truth: np.ndarray,
+    pred: np.ndarray,
+    idx: int,
+) -> None:
+    cmap = cm.bwr
+    cmap.set_bad(color="gray")
+
+    pcm = ax[0].pcolormesh(truth, cmap=cmap, norm=colors.TwoSlopeNorm(vcenter=0.0))
+    ax[0].set_title(f"Loss idx={idx}")
+    _hide_axes_ticks(ax[0])
+    fig.colorbar(pcm, ax=ax[0])
+
+
 def plot_predicted_multilevel_sample(
     x: np.ndarray,
     y_true: np.ndarray,
@@ -100,6 +117,26 @@ def plot_predicted_multilevel_sample(
             plot_2d_sample(fig, ax[idx, :], xt, yt, yp, idx)
         else:
             plot_2d_sample(fig, ax, xt, yt, yp, idx)
+    return fig
+
+
+def plot_loss(
+    x: np.ndarray,
+) -> Figure:
+    """Plots data for one multilevel sample.
+    Args:
+        x arrays of shape (npred,)
+    Returns:
+        The figure object handle.
+    """
+
+    fig, ax = plt.subplots(1, 1, figsize=(4, 3))
+    colors = []
+    for c in "krbgy":
+        colors.extend([c] * 13)
+    colors.extend(["c"] * 2)
+    ax.bar(np.arange(x.size), x, color=colors, log=1)
+
     return fig
 
 

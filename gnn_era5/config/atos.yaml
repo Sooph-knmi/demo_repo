@@ -68,13 +68,22 @@ input:
     sfc: /ec/res4/scratch/syma/era5/{resolution}/zarr/statistics/sfc_1979_2016.npy
   # features that are not part of the forecast state
   # these are presumed to be located at the "end" of the flattened (bs, latlon, nvar) input tensor
-  num-aux-features: 4  # all 2D fields
+  num-aux-features: 2  # all 2D fields
+  loss-scaling-pl:
+    - 1
+    - 0.5
+    - 0.33
+    - 0.05
+    - 1
+  loss-scaling-sfc:
+    - 1
+    - 1
 
 ###################
 #  OUTPUT BLOCK
 ###################
 output:
-  basedir: /ec/res4/scratch/syma/GNN/ERA5/{resolution}/
+  basedir: /ec/res4/scratch/pamc/GNN/ERA5/{resolution}/
   logging:
     log-dir: logs
     log-interval: 250
@@ -92,7 +101,7 @@ output:
 ###################
 graph:
   data-basedir: /ec/res4/hpcperm/pamc/gnn/
-  data-file: graph_mappings_normed_edge_attrs_o160_h3_3.pt
+  data-file: graph_mappings_normed_edge_attrs_o160_h3_3.pt 
 
 ###################
 #  MODEL BLOCK
@@ -143,7 +152,7 @@ model:
 
   # parallel strategy
   # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
-  strategy: auto
+  strategy: ddp_find_unused_parameters_false # ddp # auto  # ddp_find_unused_parameters_false
 
   # number of GPUs per node and number of nodes (for DDP)
   num-gpus: 1
@@ -151,7 +160,7 @@ model:
 
   # training settings
   lead-time: 6
-  max-epochs: 2
+  max-epochs: 50
   learn-rate: 1.25e-4
 
   # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
