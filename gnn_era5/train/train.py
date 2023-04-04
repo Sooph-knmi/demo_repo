@@ -29,13 +29,13 @@ def train(config: YAMLConfig) -> None:
     dmod = ERA5DataModule(config)
 
     # number of variables (features)
-    num_features = len(config["input:pl:names"]) * len(config["input:pl:levels"]) + len(config["input:sfc:names"])
+    num_features = config["input:num-features"]
     num_aux_features = config["input:num-aux-features"]
     num_fc_features = num_features - num_aux_features
 
     loss_scaling = []
     for scl in config["input:loss-scaling-pl"]:
-        loss_scaling.extend([scl]*len(config["input:pl:levels"]))
+        loss_scaling.extend([scl]*config["input:pl:levels"])
     for scl in config["input:loss-scaling-sfc"]:
         loss_scaling.append(scl)
     assert len(loss_scaling) == num_fc_features

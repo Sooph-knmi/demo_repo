@@ -20,12 +20,9 @@ class ERA5NativeGridDataset(IterableDataset):
 
     def __init__(
         self,
-        fname_2d: str,
-        fname_3d: str,
-        era_2d_data_reader: Callable,
-        era_3d_data_reader: Callable,
-        era_2d_data_normalizer: Callable,
-        era_3d_data_normalizer: Callable,
+        fname: str,
+        era_data_reader: Callable,
+        era_data_normalizer: Callable,
         lead_time: int = 6,
         rollout: int = 4,
         rank: int = 0,
@@ -34,18 +31,18 @@ class ERA5NativeGridDataset(IterableDataset):
         """
         Initialize (part of) the dataset state.
         Args:
-            fname_2d / 3d: zarr file name with 2D / 3D data
+            fname / 3d: zarr file name with 2D / 3D data
             era_[2d|3d]_data_reader: user function that opens and returns the zarr array data
             lead_time: lead time (multiple of 6 hours!)
             rollout: length of rollout window (Keisler, 2021)
             rank: process rank in the torch.distributed context (important when running on multiple GPUs)
             world_size: total number of processes (nodes * GPUs_per_node) in the torch.distributed context
         """
-        self.fname_2d = fname_2d
-        self.fname_3d = fname_3d
+        self.fname = fname
+        #self.fname_3d = fname_3d
 
-        self.ds_3d: Optional[Array] = None
-        self.ds_2d: Optional[Array] = None
+        #self.ds_3d: Optional[Array] = None
+        self.ds: Optional[Array] = None
 
         self.lead_time = lead_time
         assert self.lead_time > 0 and self.lead_time % 6 == 0, "Lead time must be multiple of 6 hours"
@@ -57,11 +54,11 @@ class ERA5NativeGridDataset(IterableDataset):
 
         self.nlev = _ERA_PLEV
 
-        self._read_2d_era = era_2d_data_reader
-        self._read_3d_era = era_3d_data_reader
+        self._read_era = era_data_reader
+        #self._read_3d_era = era_3d_data_reader
 
-        self._normalize_2d_era = era_2d_data_normalizer
-        self._normalize_3d_era = era_3d_data_normalizer
+        self._normalize_era = era_data_normalizer
+        #self._normalize_3d_era = era_3d_data_normalizer
 
         # lazy init
         self.n_samples_per_epoch_total: int = 0
@@ -78,16 +75,16 @@ class ERA5NativeGridDataset(IterableDataset):
 
     def per_worker_init(self, n_workers: int, worker_id: int) -> None:
         """Called by worker_init_func on each copy of WeatherBenchDataset after the worker process has been spawned."""
-        if self.ds_2d is None:
-            self.ds_2d = self._read_2d_era(self.fname_2d)
-        if self.ds_3d is None:
-            self.ds_3d = self._read_3d_era(self.fname_3d)
+        if self.ds is None:
+            self.ds = self._read_era(self.fname)
+        #if self.ds_3d is None:
+        #    self.ds_3d = self._read_3d_era(self.fname_3d)
 
         # sanity check
-        assert self.ds_2d.shape[0] == self.ds_3d.shape[0], "The 2d and 3d ERA datasets do not have the same no of time points!"
+        #assert self.ds_2d.shape[0] == self.ds_3d.shape[0], "The 2d and 3d ERA datasets do not have the same no of time points!"
 
-        shard_size = int(np.floor(self.ds_2d.shape[0] / self.world_size))
-        shard_start, shard_end = self.rank * shard_size, min((self.rank + 1) * shard_size, self.ds_2d.shape[0])
+        shard_size = int(np.floor(self.ds.shape[0] / self.world_size))
+        shard_start, shard_end = self.rank * shard_size, min((self.rank + 1) * shard_size, self.ds.shape[0])
 
         ds_len = shard_end - shard_start - self.rollout
         self.n_samples_per_worker = ds_len // n_workers
@@ -125,13 +122,11 @@ class ERA5NativeGridDataset(IterableDataset):
                 self.lead_step,
             )
 
-            X2d = self._normalize_2d_era(self.ds_2d[start : end : self.lead_step])
-            X2d = rearrange(X2d, "r var latlon -> r latlon var")
-            X3d = self._normalize_3d_era(self.ds_3d[start : end : self.lead_step])
-            X3d = rearrange(X3d, "r var lev latlon -> r latlon (var lev)")
-            LOGGER.debug("Worker PID %d has arrays X2d, X3d with shapes = %s, %s", os.getpid(), X2d.shape, X3d.shape)
-
-            X = np.concatenate([X3d, X2d], axis=-1)
+            X2d = self._normalize_era(self.ds[start : end : self.lead_step])
+            X = rearrange(X2d, "r var latlon -> r latlon var")
+            #X3d = self._normalize_3d_era(self.ds_3d[start : end : self.lead_step])
+            #X3d = rearrange(X3d, "r var lev latlon -> r latlon (var lev)")
+            #X = np.concatenate([X3d, X2d], axis=-1)
             LOGGER.debug("Worker PID %d produced a sample of size %s", os.getpid(), X.shape)
 
             yield (torch.from_numpy(X), start)
@@ -139,8 +134,7 @@ class ERA5NativeGridDataset(IterableDataset):
     def __repr__(self) -> str:
         return f"""
             {super().__repr__()}
-            Filename-2D: {str(self.fname_2d)}
-            Filename-3D: {str(self.fname_3d)}
+            Filename: {str(self.fname)}
             Lead time: {self.lead_time}
             Rollout: {self.rollout}
         """
@@ -152,6 +146,7 @@ def worker_init_func(worker_id: int) -> None:
     if worker_info is None:
         LOGGER.error("worker_info is None! Set num_workers > 0 in your dataloader!")
         raise RuntimeError
+    LOGGER.debug(f"Working initialising: {worker_id} of {worker_info.num_workers}")
     dataset_obj = worker_info.dataset  # the copy of the dataset held by this worker process.
     dataset_obj.per_worker_init(
         n_workers=worker_info.num_workers,
@@ -163,10 +158,10 @@ if __name__ == "__main__":
     import os
     from torch.utils.data import DataLoader
     from gnn_era5.utils.config import YAMLConfig
-    from gnn_era5.data.era_datamodule import read_2d_era_data, read_3d_era_data, era_batch_collator
+    from gnn_era5.data.era_datamodule import read_era_data, era_batch_collator #read_3d_era_data, 
 
     _ROLLOUT = 2
-    config = YAMLConfig("/home/syma/dask/codes/gnn-era5/gnn_era5/config/atos.yaml")
+    config = YAMLConfig("/perm/pamc/software/gnn-era5/gnn_era5/config/atos96.yaml")
 
     def get_data_filename(type: str, config: YAMLConfig) -> str:
         # type == [pl | sfc]
@@ -176,19 +171,19 @@ if __name__ == "__main__":
         )
 
     # dummy normalizers
-    def normalize_2d_era_data(data: np.ndarray) -> np.ndarray:
+    def normalize_era_data(data: np.ndarray) -> np.ndarray:
         return data
 
-    def normalize_3d_era_data(data: np.ndarray) -> np.ndarray:
-        return data
+    #def normalize_3d_era_data(data: np.ndarray) -> np.ndarray:
+    #    return data
 
     era5_ds = ERA5NativeGridDataset(
-        fname_2d=get_data_filename("sfc", config),
-        fname_3d=get_data_filename("pl", config),
-        era_2d_data_reader=read_2d_era_data,
-        era_3d_data_reader=read_3d_era_data,
-        era_2d_data_normalizer=normalize_2d_era_data,
-        era_3d_data_normalizer=normalize_3d_era_data,
+        fname=get_data_filename("sfc", config),
+        #fname_3d=get_data_filename("pl", config),
+        era_data_reader=read_era_data,
+        #era_3d_data_reader=read_3d_era_data,
+        era_data_normalizer=normalize_era_data,
+        #era_3d_data_normalizer=normalize_3d_era_data,
         lead_time=config["model:lead-time"],
         rollout=_ROLLOUT,
         rank=int(os.environ.get("LOCAL_RANK", "0")),

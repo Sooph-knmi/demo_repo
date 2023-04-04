@@ -38,12 +38,12 @@ def normalize_2d_era_data_wrapper(norm_methods: List[str], stats_2d: np.ndarray)
     return _normalize_2d_era_data
 
 
-def normalize_3d_era_data_wrapper(mu: np.ndarray, sd: np.ndarray) -> Callable:
-    def _normalize_3d_era_data(data: np.ndarray) -> np.ndarray:
+def normalize_era_data_wrapper(mu: np.ndarray, sd: np.ndarray) -> Callable:
+    def _normalize_era_data(data: np.ndarray) -> np.ndarray:
         LOGGER.debug("Worker %d produced 3D var data.shape: %s", os.getpid(), data.shape)
         # always standardize to N(0, 1)
         # 3D data.shape = (rollout, nvar, nlev, latlon)
         # assumes mu.shape and sd.shape align with the data dims
         return (data - mu) / sd
 
-    return _normalize_3d_era_data
+    return _normalize_era_data

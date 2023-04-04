@@ -2,76 +2,43 @@ input:
   # zarr is also supported
   # the zarr data are under /ec/res4/scratch/syma/era5/o160/zarr/[pl | sfc]
   format: zarr
-  resolution: o160
+  resolution: o96
+  training:
+    basedir: /ec/res4/scratch/pamc/GNN/ERA5/
+    filename: panguweather-{resolution}-1979-2015.zarr
+  validation:
+    basedir: /ec/res4/scratch/pamc/GNN/ERA5/
+    filename: panguweather-{resolution}-2016-2018.zarr
+  test:
+    basedir: 
+    filename:
+  prediction:
+    basedir: 
+    filename:
   pl:
-      training:
-        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/pl
-        filename: era5_{resolution}_t_u_v_w_z_pl_training.zarr
-      validation:
-        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/pl
-        filename: era5_{resolution}_t_u_v_w_z_pl_validation.zarr
-      test:
-        basedir: 
-        filename: 
-      prediction:
-        basedir: 
-        filename:
-      names:
-      # not used!
-        - t
-        - u
-        - v
-        - w
-        - z
-      levels:
-      # not used!
-        - 50
-        - 100
-        - 150
-        - 200
-        - 250
-        - 300
-        - 400
-        - 500
-        - 600
-        - 700
-        - 850
-        - 925
-        - 1000
-  sfc:
-      training:
-        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/sfc
-        filename: era5_{resolution}_blh_lsm_msl_z_sfc_training.zarr
-      validation:
-        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/sfc
-        filename: era5_{resolution}_blh_lsm_msl_z_sfc_validation.zarr
-      test:
-        basedir: 
-        filename:
-      prediction:
-        basedir: 
-        filename:
-      names:
-      # not used!
-        - blh
-        - msl
-        - z
-        - lsm
-  transformations:
-    pl:
-      mu: /ec/res4/scratch/syma/era5/{resolution}/zarr/statistics/pl_1979_2016_mu.npy
-      sd: /ec/res4/scratch/syma/era5/{resolution}/zarr/statistics/pl_1979_2016_sd.npy
-    sfc: /ec/res4/scratch/syma/era5/{resolution}/zarr/statistics/sfc_1979_2016.npy
+    levels: 13
   # features that are not part of the forecast state
   # these are presumed to be located at the "end" of the flattened (bs, latlon, nvar) input tensor
-  num-aux-features: 2  # all 2D fields
+  num-features: 90
+  num-aux-features: 0  # all 2D fields
   loss-scaling-pl:
+    - 1
     - 1
     - 0.5
     - 0.33
-    - 0.05
+    - 0.025
     - 1
   loss-scaling-sfc:
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
+    - 1
     - 1
     - 1
 
@@ -96,7 +63,7 @@ output:
 ###################
 graph:
   data-basedir: /ec/res4/hpcperm/pamc/gnn/
-  data-file: graph_mappings_normed_edge_attrs_o160_h3_3.pt 
+  data-file: graph_mappings_normed_edge_attrs_o96_h3_3.pt 
 
 ###################
 #  MODEL BLOCK
@@ -126,17 +93,17 @@ model:
   # runs only N training batches [N = integer | null]
   # if null then we run through all the batches
   limit-batches:
-    training: null
-    validation: null
+    training: 20 #null
+    validation: 20 #null
     test: 20
     predict: 20
 
   # parallel strategy
   # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
-  strategy: ddp_find_unused_parameters_false # ddp # auto  # ddp_find_unused_parameters_false
+  strategy: auto # ddp_find_unused_parameters_false # ddp # auto  # ddp_find_unused_parameters_false
 
   # number of GPUs per node and number of nodes (for DDP)
-  num-gpus: 4
+  num-gpus: 1
   num-nodes: 1
 
   # training settings

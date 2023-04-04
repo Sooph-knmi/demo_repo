@@ -133,9 +133,9 @@ def plot_loss(
 
     fig, ax = plt.subplots(1, 1, figsize=(4,3))
     colors = []
-    for c in 'krbgy':
+    for c in 'krbgym':
         colors.extend([c]*13)
-    colors.extend(['c']*2)
+    colors.extend(['c']*12)
     ax.bar(np.arange(x.size),x,color=colors,log=1)
 
     
