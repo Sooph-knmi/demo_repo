@@ -226,7 +226,7 @@ class MessagePassingBlock(MessagePassing):
 
         return edges_new
 
-    def aggregate(self, edges_new, edge_index, dim_size: Optional[int] = None) -> torch.Tensor:
+    def aggregate(self, edges_new, edge_index, dim_size: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         # out = scatter(edges_new, edge_index[0, :], dim=0, reduce = 'sum')
         out = scatter(edges_new, edge_index[1, :], dim=0, reduce="sum")
 
