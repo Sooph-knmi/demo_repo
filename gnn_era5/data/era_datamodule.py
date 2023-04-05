@@ -31,14 +31,21 @@ class ERA5DataModule(pl.LightningDataModule):
         self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
         # load data used to transform input
-        zar = zarr.open(os.path.join(
-            self.config[f"input:training:basedir"].format(resolution=self.config["input:resolution"]),
-            self.config[f"input:training:filename"].format(resolution=self.config["input:resolution"]),
-            ),mode='r')
-        self._mu: np.ndarray = np.array(zar.attrs['climetlab']['statistics_by_index']['mean'],dtype='float32')[np.newaxis,:,np.newaxis]
-        self._sd: np.ndarray = np.array(zar.attrs['climetlab']['statistics_by_index']['stdev'],dtype='float32')[np.newaxis,:,np.newaxis]
+        zar = zarr.open(
+            os.path.join(
+                self.config[f"input:training:basedir"].format(resolution=self.config["input:resolution"]),
+                self.config[f"input:training:filename"].format(resolution=self.config["input:resolution"]),
+            ),
+            mode="r",
+        )
+        self._mu: np.ndarray = np.array(zar.attrs["climetlab"]["statistics_by_index"]["mean"], dtype="float32")[
+            np.newaxis, :, np.newaxis
+        ]
+        self._sd: np.ndarray = np.array(zar.attrs["climetlab"]["statistics_by_index"]["stdev"], dtype="float32")[
+            np.newaxis, :, np.newaxis
+        ]
         zar = None
-        
+
         self.ds_train = self._get_dataset("training")
         self.ds_valid = self._get_dataset("validation")
 

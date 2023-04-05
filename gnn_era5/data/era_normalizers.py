@@ -7,6 +7,7 @@ from gnn_era5.utils.logger import get_logger
 
 LOGGER = get_logger(__name__, debug=False)
 
+
 # ---------------------------------------------------------------------------------
 # Normalizer logic
 # - surface (2D) vars: min-max or (mu, sd) normalization

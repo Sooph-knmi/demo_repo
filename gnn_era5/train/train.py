@@ -35,7 +35,7 @@ def train(config: YAMLConfig) -> None:
 
     loss_scaling = []
     for scl in config["input:loss-scaling-pl"]:
-        loss_scaling.extend([scl]*config["input:pl:levels"])
+        loss_scaling.extend([scl] * config["input:pl:levels"])
     for scl in config["input:loss-scaling-sfc"]:
         loss_scaling.append(scl)
     assert len(loss_scaling) == num_fc_features

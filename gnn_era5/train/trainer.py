@@ -19,7 +19,6 @@ LOGGER = get_logger(__name__)
 
 
 class GraphForecaster(pl.LightningModule):
-
     _VAL_PLOT_FREQ = 750
 
     def __init__(
@@ -52,7 +51,7 @@ class GraphForecaster(pl.LightningModule):
 
         self.era_latlons = graph_data[("era", "to", "era")].ecoords_rad
         self.era_weights = graph_data[("era", "to", "era")].area_weights
-        self.loss = WeightedMSELoss(area_weights=self.era_weights,data_variances=loss_scaling)
+        self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
         self.feature_dim = fc_dim
         self.lr = lr
         self.rollout = rollout
@@ -183,7 +182,7 @@ class GraphForecaster(pl.LightningModule):
                 loss += self.loss(y_hat, y[..., : self.feature_dim])
                 persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
                 if plot_sample:
-                    self._plot_loss(y_hat, y[..., : self.feature_dim],rstep)
+                    self._plot_loss(y_hat, y[..., : self.feature_dim], rstep)
                     self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)
                 x[..., : self.feature_dim] = y_hat
             loss *= 1.0 / self.rollout
@@ -191,7 +190,7 @@ class GraphForecaster(pl.LightningModule):
         return loss, persist_loss
 
     def _plot_loss(self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int) -> None:
-        loss = self.loss(y_true,y_pred,squash=False).cpu().numpy()
+        loss = self.loss(y_true, y_pred, squash=False).cpu().numpy()
         fig = plot_loss(loss)
         fig.tight_layout()
         self._output_figure(
@@ -201,7 +200,6 @@ class GraphForecaster(pl.LightningModule):
         )
 
     def _plot_sample(self, batch_idx: int, rollout_step: int, x: torch.Tensor, y_true: torch.Tensor, y_pred: torch.Tensor) -> None:
-
         sample_idx = 0
         fig = plot_predicted_multilevel_flat_sample(
             np.rad2deg(self.era_latlons.numpy()),
