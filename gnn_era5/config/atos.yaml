@@ -11,11 +11,13 @@ input:
         basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/pl
         filename: era5_{resolution}_t_u_v_w_z_pl_validation.zarr
       test:
-        basedir: 
-        filename: 
-      prediction:
-        basedir: 
-        filename:
+        # use validation dataset (for now)
+        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/pl
+        filename: era5_{resolution}_t_u_v_w_z_pl_test.zarr
+      predict:
+        # use validation dataset (for now)
+        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/pl
+        filename: era5_{resolution}_t_u_v_w_z_pl_predict.zarr
       names:
       # not used!
         - t
@@ -46,11 +48,13 @@ input:
         basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/sfc
         filename: era5_{resolution}_blh_lsm_msl_z_sfc_validation.zarr
       test:
-        basedir: 
-        filename:
-      prediction:
-        basedir: 
-        filename:
+        # use validation dataset (for now)
+        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/sfc
+        filename: era5_{resolution}_blh_lsm_msl_z_sfc_test.zarr
+      predict:
+        # use validation dataset (for now)
+        basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/sfc
+        filename: era5_{resolution}_blh_lsm_msl_z_sfc_predict.zarr
       names:
       # not used!
         - blh
@@ -79,15 +83,16 @@ input:
 #  OUTPUT BLOCK
 ###################
 output:
-  basedir: /ec/res4/scratch/pamc/GNN/ERA5/{resolution}/
+  basedir: /ec/res4/scratch/syma/GNN/ERA5/{resolution}/
   logging:
     log-dir: logs
     log-interval: 250
   checkpoints:
+    # model checkpoints: used to resume training or do inference
     ckpt-dir: checkpoints
   model:
     save-top-k: 5
-    checkpoint-filename: "gnn-era5-{resolution}-ckpt-{epoch:02d}-{val_wmse:.3f}"
+    checkpoint-filename: gnn-era5-ckpt-{epoch:02d}-{val_wmse:.4f}
   plots:
     plot-dir: plots
 
@@ -102,47 +107,73 @@ graph:
 #  MODEL BLOCK
 ###################
 model:
+  # torch.compile is not working (yet), set this option to False 
   compile: False
   debug:
     # this will detect and trace back NaNs / Infs etc. but will slow down training
     anomaly-detection: False
   wandb:
-    enabled: True
+    enabled: False
   neptune:
     enabled: False
   dataloader:
     num-workers:
-      training: 8
-      validation: 8
-      inference: 1
+      training: 16
+      validation: 16
+      test: 8
+      predict: 8
     batch-size:
       training: 2
       validation: 2
-      inference: 1
+      test: 4
+      predict: 4
+
+  # resume training from a checkpoint
+  warm-restart:
+    enabled: False
+    # path should be relative to the output:checkpoints:chkpt-dir, as defined above
+    ckpt-path: 20230403_1256/gnn-era5-ckpt-epoch=01-val_wmse=0.0672.ckpt
+  
+  # enable checkpointing of GNN activations? T/F
+  # saves GPU memory at the expense of additional compute
+  act-checkpoints: True
 
   # miscellaneous
   precision: 16-mixed  # "16" with Lightning < 2.0
+
+  # use this for rapid debugging runs (push through a single batch)
   fast-dev-run: False
+
   # runs only N training batches [N = integer | null]
   # if null then we run through all the batches
   limit-batches:
-    training: null
-    validation: null
-    test: 20
-    predict: 20
+    training: 250 # null
+    validation: 50 # null
+    test: 200
+    predict: 200
 
   # parallel strategy
   # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
   strategy: ddp_find_unused_parameters_false # ddp # auto  # ddp_find_unused_parameters_false
 
   # number of GPUs per node and number of nodes (for DDP)
-  num-gpus: 4
+  num-gpus: 2
   num-nodes: 1
 
   # training settings
   lead-time: 6
-  max-epochs: 50
+  max-epochs: 2
   learn-rate: 1.25e-4
+
+  # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
+  # the effective batch size becomes num-devices * batch-size * k
+  accum-grad-batches: 2
+
+  # stochastic weight averaging
+  # https://pytorch.org/blog/stochastic-weight-averaging-in-pytorch/
+  swa:
+    enabled: False
+    lr: 1.e-4
 
   # specific GNN encoder settings
   encoder:

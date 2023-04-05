@@ -4,6 +4,7 @@ import einops
 import torch
 import torch.nn as nn
 import torch_geometric.nn as tgnn
+from torch.utils.checkpoint import checkpoint
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import scatter
 
@@ -126,7 +127,7 @@ class GATEncoder(nn.Module):
 
 
 # for MSG, where should this go?
-def gen_mlp(in_features, hidden_dim, out_features, layer_norm=True):
+def gen_mlp(in_features: int, hidden_dim: int, out_features: int, layer_norm: bool = True, checkpoints: bool = True) -> nn.Module:
     mlp1 = nn.Sequential(
         nn.Linear(in_features, hidden_dim),
         nn.SiLU(),
@@ -137,39 +138,42 @@ def gen_mlp(in_features, hidden_dim, out_features, layer_norm=True):
     if layer_norm:
         mlp1.append(nn.LayerNorm(out_features))
 
-    return mlp1
+    return CheckpointWrapper(mlp1) if checkpoints else mlp1
 
 
 class MessagePassingNodeEmbedder(nn.Module):
-    def __init__(self, in_channels, latent_dim):
-        super(MessagePassingNodeEmbedder, self).__init__()
-        self.node_emb = gen_mlp(in_features=in_channels, hidden_dim=latent_dim, out_features=latent_dim, layer_norm=True)
+    def __init__(self, in_channels: int, latent_dim: int, checkpoints: bool = True) -> None:
+        super().__init__()
+        self.node_emb = gen_mlp(
+            in_features=in_channels, hidden_dim=latent_dim, out_features=latent_dim, layer_norm=True, checkpoints=checkpoints
+        )
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.node_emb(x)
 
 
 class MessagePassingNodeExtractor(nn.Module):
-    def __init__(self, latent_dim, out_channels):
-        super(MessagePassingNodeExtractor, self).__init__()
-        self.node_ext = gen_mlp(in_features=latent_dim, hidden_dim=latent_dim, out_features=out_channels, layer_norm=False)
+    def __init__(self, latent_dim: int, out_channels: int, checkpoints: bool = False) -> None:
+        super().__init__()
+        self.node_ext = gen_mlp(
+            in_features=latent_dim, hidden_dim=latent_dim, out_features=out_channels, layer_norm=False, checkpoints=checkpoints
+        )
 
     def forward(self, x: torch.Tensor):
         return self.node_ext(x)
 
 
 class MessagePassingMapper(nn.Module):  # should we remove self loops to be able to use same graph as Encoder?
-    def __init__(self, in_channels, out_channels, hidden_dim, edge_dim, hidden_layers):
-        # TODO: if in_channels and out_channels are not used, can we get rid of them?
+    def __init__(self, hidden_dim: int, edge_dim: int, hidden_layers: int, checkpoints: bool = True) -> None:
         super().__init__()
 
         self.hidden_layers = hidden_layers
-        self.edge_enc = gen_mlp(in_features=edge_dim, hidden_dim=hidden_dim, out_features=hidden_dim, layer_norm=True)
+        self.edge_enc = gen_mlp(
+            in_features=edge_dim, hidden_dim=hidden_dim, out_features=hidden_dim, layer_norm=True, checkpoints=checkpoints
+        )
         self.proc = nn.ModuleList([MessagePassingBlock(hidden_dim, hidden_dim) for _ in range(self.hidden_layers)])
 
-    def forward(
-        self, x: Tuple[torch.Tensor, torch.Tensor], edge_index: torch.Tensor, edge_attr: torch.Tensor
-    ) -> torch.Tensor:  # these are probably wrong ..
+    def forward(self, x: Tuple[torch.Tensor, torch.Tensor], edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
         x_src, x_dst = x  # this should be Union[Tensor, PairTensor] or something from typing ... Union
         edge_attr = self.edge_enc(edge_attr)
         for i in range(self.hidden_layers):
@@ -180,16 +184,16 @@ class MessagePassingMapper(nn.Module):  # should we remove self loops to be able
 
 
 class MessagePassingEncoder(nn.Module):  # should we remove self loops to be able to use same graph as Encoder?
-    def __init__(self, in_channels, out_channels, hidden_dim, edge_dim, hidden_layers):
-        super(MessagePassingEncoder, self).__init__()
+    def __init__(self, hidden_dim: int, edge_dim: int, hidden_layers: int, checkpoints: bool = True) -> None:
+        super().__init__()
 
         self.hidden_layers = hidden_layers
-
-        self.edge_enc = gen_mlp(in_features=edge_dim, hidden_dim=hidden_dim, out_features=hidden_dim, layer_norm=True)
-
+        self.edge_enc = gen_mlp(
+            in_features=edge_dim, hidden_dim=hidden_dim, out_features=hidden_dim, layer_norm=True, checkpoints=checkpoints
+        )
         self.proc = nn.ModuleList([MessagePassingBlock(hidden_dim, hidden_dim) for _ in range(self.hidden_layers)])
 
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor):
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
         edge_attr = self.edge_enc(edge_attr)
         for i in range(self.hidden_layers):
             x, edge_attr = self.proc[i](x, edge_index, edge_attr, size=None)
@@ -198,14 +202,13 @@ class MessagePassingEncoder(nn.Module):  # should we remove self loops to be abl
 
 
 class MessagePassingBlock(MessagePassing):
-    def __init__(self, in_channels, out_channels, **kwargs):
-        super(MessagePassingBlock, self).__init__(**kwargs)
-        # these should also be generated via gen_mlp, todo
-        self.node_mlp = gen_mlp(2 * in_channels, out_channels, out_channels)
+    def __init__(self, in_channels: int, out_channels: int, checkpoints: bool = True, **kwargs) -> None:
+        super().__init__(**kwargs)
 
-        self.edge_mlp = gen_mlp(3 * in_channels, out_channels, out_channels)
+        self.node_mlp = gen_mlp(2 * in_channels, out_channels, out_channels, checkpoints=checkpoints)
+        self.edge_mlp = gen_mlp(3 * in_channels, out_channels, out_channels, checkpoints=checkpoints)
 
-    def forward(self, x, edge_index, edge_attr, size=None):
+    def forward(self, x, edge_index, edge_attr, size=None) -> Tuple[torch.Tensor, torch.Tensor]:
         out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size)
 
         if isinstance(x, torch.Tensor):
@@ -217,110 +220,138 @@ class MessagePassingBlock(MessagePassing):
 
         return nodes_new, edges_new
 
-    def message(self, x_i, x_j, edge_attr):
+    def message(self, x_i, x_j, edge_attr) -> torch.Tensor:
         edges_new = torch.cat([x_i, x_j, edge_attr], dim=1)
         edges_new = self.edge_mlp(edges_new) + edge_attr
 
         return edges_new
 
-    def aggregate(self, edges_new, edge_index, dim_size=None):
+    def aggregate(self, edges_new, edge_index, dim_size: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         # out = scatter(edges_new, edge_index[0, :], dim=0, reduce = 'sum')
         out = scatter(edges_new, edge_index[1, :], dim=0, reduce="sum")
 
         return out, edges_new
 
 
-class EdgePoolEncoder(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int = 16,
-        num_layers: int = 2,
-        hidden_channels: int = 16,
-        num_heads: int = 2,
-        dropout: float = 0.0,
-        activation: Optional[str] = "gelu",
-        jk_mode: Optional[str] = "last",
-    ) -> None:
+class CheckpointWrapper(nn.Module):
+    def __init__(self, module: nn.Module) -> None:
         super().__init__()
+        self.module = module
 
-        # we need to pool otherwise memory consumption will be large
-        # OK to use dropout? the EdgePooling paper reports good results with dropout = 0.2
-        self.pool = tgnn.EdgePooling(in_channels=in_channels, edge_score_method=tgnn.EdgePooling.compute_edge_score_softmax)
-
-        self.encoder = GATEncoder(
-            num_layers=num_layers,
-            in_channels=in_channels,
-            hidden_channels=hidden_channels,
-            out_channels=out_channels,
-            num_heads=num_heads,
-            dropout=dropout,
-            activation=activation,
-            jk_mode=jk_mode,
-        )
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        edge_index: torch.Tensor,
-        edge_attr: torch.Tensor,
-        batch_size: int,
-    ) -> torch.Tensor:
-        del edge_attr  # not used
-
-        # x is on ERA grid
-        batch_nodes = torch.cat(
-            [torch.ones(x.shape[0] // batch_size, dtype=torch.int64, device=x.device) * b for b in range(batch_size)]
-        )
-
-        # pool first
-        x_pool, edge_pool, _, unpool_info = self.pool(x=x, edge_index=edge_index, batch=batch_nodes)
-
-        # transform
-        x_trans = self.encoder(x_pool, edge_pool)
-
-        # unpool
-        x_res, _, _ = self.pool.unpool(x_trans, unpool_info)
-
-        return x_res
+    def forward(self, *args):
+        return checkpoint(self.module, *args, use_reentrant=False)
 
 
-class ProcessorLayer(MessagePassing):
-    def __init__(self, in_channels, out_channels, **kwargs):
-        super().__init__(**kwargs)
+# class EdgePoolEncoder(nn.Module):
+#     def __init__(
+#         self,
+#         in_channels: int,
+#         out_channels: int = 16,
+#         num_layers: int = 2,
+#         hidden_channels: int = 16,
+#         num_heads: int = 2,
+#         dropout: float = 0.0,
+#         activation: Optional[str] = "gelu",
+#         jk_mode: Optional[str] = "last",
+#     ) -> None:
+#         super().__init__()
 
-        self.edge_mlp = nn.Sequential(
-            nn.Linear(3 * in_channels, out_channels),
-            nn.SiLU(),
-            nn.Linear(out_channels, out_channels),
-            nn.SiLU(),
-            nn.Linear(out_channels, out_channels),
-            nn.LayerNorm(out_channels),
-        )
-        self.node_mlp = nn.Sequential(
-            nn.Linear(2 * in_channels, out_channels),
-            nn.SiLU(),
-            nn.Linear(out_channels, out_channels),
-            nn.SiLU(),
-            nn.Linear(out_channels, out_channels),
-            nn.LayerNorm(out_channels),
-        )
+#         # we need to pool otherwise memory consumption will be large
+#         # OK to use dropout? the EdgePooling paper reports good results with dropout = 0.2
+#         self.pool = tgnn.EdgePooling(in_channels=in_channels, edge_score_method=tgnn.EdgePooling.compute_edge_score_softmax)
 
-    def forward(self, x, edge_index, edge_attr, size=None):
-        out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size)
-        nodes_new = torch.cat([x, out], dim=1)
-        nodes_new = x + self.node_mlp(nodes_new)
+#         self.encoder = GATEncoder(
+#             num_layers=num_layers,
+#             in_channels=in_channels,
+#             hidden_channels=hidden_channels,
+#             out_channels=out_channels,
+#             num_heads=num_heads,
+#             dropout=dropout,
+#             activation=activation,
+#             jk_mode=jk_mode,
+#         )
 
-        return nodes_new, edges_new
+#     def forward(
+#         self,
+#         x: torch.Tensor,
+#         edge_index: torch.Tensor,
+#         edge_attr: torch.Tensor,
+#         batch_size: int,
+#     ) -> torch.Tensor:
+#         del edge_attr  # not used
 
-    def message(self, x_i, x_j, edge_attr):
-        edges_new = torch.cat([x_i, x_j, edge_attr], dim=1)
-        edges_new = self.edge_mlp(edges_new) + edge_attr
+#         # x is on ERA grid
+#         batch_nodes = torch.cat(
+#             [torch.ones(x.shape[0] // batch_size, dtype=torch.int64, device=x.device) * b for b in range(batch_size)]
+#         )
 
-        return edges_new
+#         # pool first
+#         x_pool, edge_pool, _, unpool_info = self.pool(x=x, edge_index=edge_index, batch=batch_nodes)
 
-    def aggregate(self, edges_new, edge_index, dim_size=None):
-        del dim_size  # not used
-        out = scatter(edges_new, edge_index[0, :], dim=0, reduce="sum")
+#         # transform
+#         x_trans = self.encoder(x_pool, edge_pool)
 
-        return out, edges_new
+#         # unpool
+#         x_res, _, _ = self.pool.unpool(x_trans, unpool_info)
+
+#         return x_res
+
+
+# class ProcessorLayer(MessagePassing):
+#     def __init__(self, in_channels, out_channels, **kwargs):
+#         super().__init__(**kwargs)
+
+#         self.edge_mlp = nn.Sequential(
+#             nn.Linear(3 * in_channels, out_channels),
+#             nn.SiLU(),
+#             nn.Linear(out_channels, out_channels),
+#             nn.SiLU(),
+#             nn.Linear(out_channels, out_channels),
+#             nn.LayerNorm(out_channels),
+#         )
+#         self.node_mlp = nn.Sequential(
+#             nn.Linear(2 * in_channels, out_channels),
+#             nn.SiLU(),
+#             nn.Linear(out_channels, out_channels),
+#             nn.SiLU(),
+#             nn.Linear(out_channels, out_channels),
+#             nn.LayerNorm(out_channels),
+#         )
+
+#     def forward(self, x, edge_index, edge_attr, size=None):
+#         out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size)
+#         nodes_new = torch.cat([x, out], dim=1)
+#         nodes_new = x + self.node_mlp(nodes_new)
+
+#         return nodes_new, edges_new
+
+#     def message(self, x_i, x_j, edge_attr):
+#         edges_new = torch.cat([x_i, x_j, edge_attr], dim=1)
+#         edges_new = self.edge_mlp(edges_new) + edge_attr
+
+#         return edges_new
+
+#     def aggregate(self, edges_new, edge_index, dim_size=None):
+#         del dim_size  # not used
+#         out = scatter(edges_new, edge_index[0, :], dim=0, reduce="sum")
+
+#         return out, edges_new
+
+
+if __name__ == "__main__":
+    bs, nlatlon, nfeat = 8, 1024, 64
+    hdim, ofeat = 128, 36
+    x_in = torch.randn((bs, nlatlon, nfeat), dtype=torch.float32, requires_grad=True)
+    mlp_1 = gen_mlp(nfeat, hdim, hdim, layer_norm=True, checkpoints=True)
+    mlp_2 = gen_mlp(hdim, hdim, hdim, layer_norm=True, checkpoints=False)
+    mlp_3 = gen_mlp(hdim, hdim, ofeat, layer_norm=True, checkpoints=True)
+    y = mlp_1(x_in)
+    LOGGER.debug("mlp_1(x).shape = %s", y.shape)
+    y = mlp_2(y)
+    LOGGER.debug("mlp_2(mlp_1(x)).shape = %s", y.shape)
+    y = mlp_3(y)
+    LOGGER.debug("mlp_3(mlp_2(mlp_1(x))).shape = %s", y.shape)
+    loss = y.sum()
+    LOGGER.debug("running backward on the dummy loss ...")
+    loss.backward()
+    LOGGER.debug("done.")

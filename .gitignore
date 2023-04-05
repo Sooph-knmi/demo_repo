@@ -142,3 +142,8 @@ job_out.*
 
 # emacs
 *~
+
+# job out files and nfs temps
+*.out.*
+*.log.*
+.nfs*

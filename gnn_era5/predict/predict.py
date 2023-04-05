@@ -1,22 +1,17 @@
-# from typing import List
-# import argparse
-# import os
+import datetime as dt
+import os
 
-# from einops import rearrange
-# import numpy as np
-# import torch
-# import pytorch_lightning as pl
-# import xarray as xr
+import numpy as np
+import pytorch_lightning as pl
+import torch
 
-# from gnn_era5.utils.config import YAMLConfig
-# from gnn_era5.data.era_datamodule import WeatherBenchTestDataModule
-# from gnn_era5.utils.logger import get_logger
-# from gnn_era5.train.trainer import GraphForecaster
-# from gnn_era5.train.utils import setup_exp_logger, get_args
-# from gnn_era5.utils.constants import _ERA_PLEV, _WB_LAT, _WB_LON
+from gnn_era5.data.era_datamodule import ERA5TestDataModule
+from gnn_era5.train.trainer import GraphForecaster
+from gnn_era5.train.utils import get_args, setup_exp_logger
+from gnn_era5.utils.config import YAMLConfig
+from gnn_era5.utils.logger import get_logger
 
-
-# LOGGER = get_logger(__name__)
+LOGGER = get_logger(__name__)
 
 
 # def _reshape_predictions(predictions: torch.Tensor, config: YAMLConfig) -> torch.Tensor:
@@ -116,99 +111,124 @@
 #     return predictions
 
 
-# def predict(config: YAMLConfig, checkpoint_relpath: str) -> None:
-#     """
-#     Predict entry point.
-#     Args:
-#         config: job configuration
-#         checkpoint_relpath: path to the model checkpoint that you want to restore
-#                             should be relative to your config["output:basedir"]/config["output:checkpoints:ckpt-dir"]
-#     """
-#     # create data module (data loaders and data sets)
-#     dmod = WeatherBenchTestDataModule(config)
+def predict(config: YAMLConfig) -> None:
+    """
+    Predict entry point.
+    Args:
+        config: job configuration
+        checkpoint_relpath: path to the model checkpoint that you want to restore
+                            should be relative to your config["output:basedir"]/config["output:checkpoints:ckpt-dir"]
+    """
+    timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
+    torch.set_float32_matmul_precision("high")
 
-#     # number of variables (features)
-#     num_features = dmod.ds_test.nlev * dmod.ds_test.nvar
-#     LOGGER.debug("Number of variables: %d", num_features)
-#     LOGGER.debug("Number of auxiliary (time-independent) variables: %d", dmod.const_data.nconst)
+    # create data module (data loaders and data sets)
+    dmod = ERA5TestDataModule(config)
 
-#     # learning rate multiplier when running single-node, multi-GPU and/or multi-node
-#     total_gpu_count = config["model:num-nodes"] * config["model:num-gpus"]
-#     LOGGER.debug("Total GPU count: %d - NB: the learning rate will be scaled by this factor!")
-#     LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * config["model:learn-rate"])
+    # number of variables (features)
+    num_features = len(config["input:pl:names"]) * len(config["input:pl:levels"]) + len(config["input:sfc:names"])
+    num_aux_features = config["input:num-aux-features"]
+    num_fc_features = num_features - num_aux_features
 
-#     model = GraphForecaster(
-#         era5_lat_lons=dmod.const_data.era5_latlons,
-#         h3_lat_lons=dmod.const_data.h3_latlons,
-#         fc_dim=num_features,
-#         aux_dim=dmod.const_data.nconst,
-#         encoder_num_layers=config["model:encoder:num-layers"],
-#         encoder_num_heads=config["model:encoder:num-heads"],
-#         encoder_activation=config["model:encoder:activation"],
-#         use_dynamic_context=True,
-#         lr=total_gpu_count * config["model:learn-rate"],
-#         rollout=config["model:rollout"],
-#     )
+    loss_scaling = []
+    for scl in config["input:loss-scaling-pl"]:
+        loss_scaling.extend([scl] * len(config["input:pl:levels"]))
+    for scl in config["input:loss-scaling-sfc"]:
+        loss_scaling.append(scl)
+    assert len(loss_scaling) == num_fc_features
+    LOGGER.debug("Loss scaling: %s", loss_scaling)
+    loss_scaling = torch.from_numpy(np.array(loss_scaling, dtype=np.float32))
 
-#     # TODO: restore model from checkpoint
-#     checkpoint_filepath = os.path.join(config["output:basedir"], config["output:checkpoints:ckpt-dir"], checkpoint_relpath)
-#     model = GraphForecaster.load_from_checkpoint(checkpoint_filepath)
+    LOGGER.debug("Total number of prognostic variables: %d", num_fc_features)
+    LOGGER.debug("Total number of auxiliary variables: %d", num_aux_features)
 
-#     trainer = pl.Trainer(
-#         accelerator="gpu" if config["model:num-gpus"] > 0 else "cpu",
-#         detect_anomaly=config["model:debug:anomaly-detection"],
-#         strategy=config["model:strategy"],
-#         devices=config["model:num-gpus"] if config["model:num-gpus"] > 0 else None,
-#         num_nodes=config["model:num-nodes"],
-#         precision=config["model:precision"],
-#         max_epochs=config["model:max-epochs"],
-#         logger=setup_exp_logger(config),
-#         log_every_n_steps=config["output:logging:log-interval"],
-#         limit_test_batches=config["model:limit-batches:test"],
-#         limit_predict_batches=config["model:limit-batches:predict"],
-#         # we have our own DDP-compliant sampler logic baked into the dataset
-#         replace_sampler_ddp=False,
-#     )
+    graph_data = torch.load(os.path.join(config["graph:data-basedir"], config["graph:data-file"]))
 
-#     # run a test loop (calculates test_wmse, returns nothing)
-#     trainer.test(model, datamodule=dmod)
+    model = GraphForecaster(
+        graph_data=graph_data,
+        fc_dim=num_fc_features,
+        aux_dim=num_aux_features,
+        encoder_hidden_channels=config["model:encoder:num-hidden-channels"],
+        encoder_out_channels=config["model:encoder:num-out-channels"],
+        encoder_num_layers=config["model:encoder:num-layers"],
+        encoder_mapper_num_layers=config["model:encoder:mapper-num-layers"],
+        rollout=config["model:rollout"],
+        save_basedir=os.path.join(
+            config["output:basedir"].format(resolution=config["input:resolution"]),
+            config["output:plots:plot-dir"],
+            timestamp,
+        ),
+        act_checkpoints=config["model:act-checkpoints"],
+        log_to_wandb=config["model:wandb:enabled"],
+        log_to_neptune=config["model:neptune:enabled"],
+        log_persistence=False,
+        loss_scaling=loss_scaling,
+    )
 
-#     # run a predict loop on a different dataset - this doesn't calculate the WMSE but returns the predictions and sample indices
-#     predict_output = trainer.predict(model, datamodule=dmod, return_predictions=True)
+    ckpt_path = os.path.join(
+        config["output:basedir"].format(resolution=config["input:resolution"]),
+        config["output:checkpoints:ckpt-dir"],
+        config["model:warm-restart:ckpt-path"],
+    )
+    LOGGER.debug("Loading checkpoint from %s ...", ckpt_path)
 
-#     predictions_, sample_idx_ = zip(*predict_output)
-#     LOGGER.debug("len(predictions_) = %d, predictions_[0].shape = %s", len(predictions_), predictions_[0].shape)
-#     LOGGER.debug("len(sample_idx_) = %d, sample_idx_[0].shape = %s", len(sample_idx_), sample_idx_[0].shape)
+    trainer = pl.Trainer(
+        accelerator="gpu" if config["model:num-gpus"] > 0 else "cpu",
+        detect_anomaly=config["model:debug:anomaly-detection"],
+        strategy=config["model:strategy"],
+        devices=config["model:num-gpus"] if config["model:num-gpus"] > 0 else None,
+        num_nodes=config["model:num-nodes"],
+        precision=config["model:precision"],
+        max_epochs=config["model:max-epochs"],
+        logger=setup_exp_logger(config),
+        log_every_n_steps=config["output:logging:log-interval"],
+        limit_predict_batches=config["model:limit-batches:predict"],
+        limit_test_batches=config["model:limit-batches:test"],
+        use_distributed_sampler=False,
+    )
 
-#     predictions: torch.Tensor = torch.cat(predictions_, dim=0).float()
-#     sample_idx = np.concatenate(sample_idx_, axis=-1)  # shape == (rollout + 1, num_pred_samples)
-#     LOGGER.debug("predictions.shape = %s", predictions.shape)
-#     LOGGER.debug("sample_idx.shape = %s", sample_idx.shape)
+    # run a test loop (calculates & logs test loss and metrics, returns nothing)
+    trainer.test(model, datamodule=dmod, ckpt_path=ckpt_path, verbose=True)
 
-#     LOGGER.debug("Backtransforming predictions to the original data space ...")
-#     predictions = backtransform_predictions(predictions, dmod.ds_test.mean, dmod.ds_test.sd, config)
-#     LOGGER.debug("predictions.shape = %s", predictions.shape)
+    # run a predict loop on a "predict" dataset (can be the same as "test" or different)
+    # this returns the predictions and sample indices
+    predict_output = trainer.predict(model, datamodule=dmod, return_predictions=True, ckpt_path=ckpt_path)
 
-#     # save data along with observations
-#     LOGGER.debug("Storing model predictions to netCDF ...")
-#     store_predictions(predictions, sample_idx, config)
+    predictions_, sample_idx_ = zip(*predict_output)
 
-#     LOGGER.debug("---- DONE. ----")
+    # len(predictions_) = num-predict-batches, predictions_[0].shape = (batch-size, latlon, nvar, rollout)
+    # len(sample_idx_) = num-predict-batches, sample_idx_[0].shape = (batch_size, )
+    LOGGER.debug("len(predictions_) = %d, predictions_[0].shape = %s", len(predictions_), predictions_[0].shape)
+    LOGGER.debug("len(sample_idx_) = %d, sample_idx_[0].shape = %s", len(sample_idx_), sample_idx_[0].shape)
+
+    # predictions.shape = (batch_size * num-predict-batches, latlon, nvar, rollout)
+    # sample_idx.shape = (batch_size * num-predict-batches, )
+    predictions: torch.Tensor = torch.cat(predictions_, dim=0).float()
+    sample_idx = np.concatenate(sample_idx_, axis=-1)
+
+    LOGGER.debug("predictions.shape = %s", predictions.shape)
+    LOGGER.debug("sample_idx.shape = %s", sample_idx.shape)
+
+    # *****************
+    # TODO:
+    # *****************
+    # backtransform the predictions to the original data space
+    # write the output to disk (zarr / netcdf / ... ?)
+    #  - need to keep around the sample_idx info (so we can match the predictions against the ground truth)
+
+    # LOGGER.debug("Backtransforming predictions to the original data space ...")
+    # predictions = backtransform_predictions(predictions, dmod.ds_test.mean, dmod.ds_test.sd, config)
+    # LOGGER.debug("predictions.shape = %s", predictions.shape)
+
+    # # save data along with observations
+    # LOGGER.debug("Storing model predictions to netCDF ...")
+    # store_predictions(predictions, sample_idx, config)
+
+    LOGGER.debug("---- DONE. ----")
 
 
-# def get_args() -> argparse.Namespace:
-#     """Returns a namespace containing the command line arguments"""
-#     parser = argparse.ArgumentParser()
-#     required_args = parser.add_argument_group("required arguments")
-#     required_args.add_argument("--config", required=True, help="Model configuration file (YAML)")
-#     required_args.add_argument(
-#         "--checkpoint", required=True, help="Path to the model checkpoint file (located under output-basedir/chkpt-dir)."
-#     )
-#     return parser.parse_args()
-
-
-# def main() -> None:
-#     """Entry point for inference."""
-#     args = get_args()
-#     config = YAMLConfig(args.config)
-#     predict(config, args.checkpoint)
+def main() -> None:
+    """Entry point for inference."""
+    args = get_args()
+    config = YAMLConfig(args.config)
+    predict(config)
