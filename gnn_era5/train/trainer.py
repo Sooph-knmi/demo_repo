@@ -25,7 +25,7 @@ class GraphForecaster(pl.LightningModule):
         graph_data: HeteroData,
         fc_dim: int,
         aux_dim: int,
-        num_levels: int, 
+        num_levels: int,
         encoder_num_layers: int = 4,
         encoder_mapper_num_layers: int = 1,
         encoder_hidden_channels: int = 128,
@@ -38,7 +38,7 @@ class GraphForecaster(pl.LightningModule):
         log_to_neptune: bool = False,
         log_persistence: bool = False,
         loss_scaling: Optional[torch.Tensor] = None,
-        pl_names: list = [],
+        pl_names: Optional[List] = None,
     ) -> None:
         super().__init__()
 
@@ -61,11 +61,9 @@ class GraphForecaster(pl.LightningModule):
 
         self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
         self.metric_ranges = {}
-        for i,key in enumerate(pl_names):
-            self.metric_ranges[key] = [i*num_levels,(i+1)*num_levels]
-        #for j,key in enumerate([""])
-        self.metrics = WeightedMSELoss(area_weights=self.era_weights) #
-        
+        for i, key in enumerate(pl_names):
+            self.metric_ranges[key] = [i * num_levels, (i + 1) * num_levels]
+        self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
         self.feature_dim = fc_dim
         self.lr = lr
@@ -150,7 +148,8 @@ class GraphForecaster(pl.LightningModule):
                 sync_dist=True,
             )
         for metric in metrics.keys():
-            self.log("val_"+metric,
+            self.log(
+                "val_" + metric,
                 metrics[metric],
                 on_epoch=True,
                 on_step=False,
@@ -211,8 +210,8 @@ class GraphForecaster(pl.LightningModule):
                 loss += self.loss(y_hat, y[..., : self.feature_dim])
                 persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
                 for metric_key in self.metric_ranges.keys():
-                    low,high = self.metric_ranges[metric_key]
-                    metrics[f"{metric_key}_{rstep+1}"] = self.metrics(x[..., low:high], y[...,low:high])
+                    low, high = self.metric_ranges[metric_key]
+                    metrics[f"{metric_key}_{rstep+1}"] = self.metrics(y_hat[..., low:high], y[..., low:high])
                 if plot_sample and self.global_rank == 0:
                     self._plot_loss(y_hat, y[..., : self.feature_dim], rollout_step=rstep)
                     self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)

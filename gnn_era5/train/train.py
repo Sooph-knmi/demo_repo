@@ -79,7 +79,7 @@ def train(config: YAMLConfig) -> None:
         log_to_neptune=config["model:neptune:enabled"],
         log_persistence=False,
         loss_scaling=loss_scaling,
-        pl_names=config["input:pl:names"]
+        pl_names=config["input:pl:names"],
     )
 
     if config["model:compile"]:
