@@ -8,8 +8,10 @@ from gnn_era5.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
+
 def pl_scaling(plev):
     return np.array(plev) / 1000
+
 
 def setup_exp_logger(config: YAMLConfig):
     if config["model:wandb:enabled"]:

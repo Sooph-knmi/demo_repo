@@ -38,9 +38,9 @@ def train(config: YAMLConfig) -> None:
 
     loss_scaling = np.array([])
     for scl in config["input:loss-scaling-pl"]:
-        loss_scaling= np.append(loss_scaling, [scl] * pl_scaling(config["input:pl:levels"]))
+        loss_scaling = np.append(loss_scaling, [scl] * pl_scaling(config["input:pl:levels"]))
     for scl in config["input:loss-scaling-sfc"]:
-        loss_scaling= np.append(loss_scaling, [scl])
+        loss_scaling = np.append(loss_scaling, [scl])
     assert len(loss_scaling) == num_fc_features
     LOGGER.debug("Loss scaling: %s", loss_scaling)
     loss_scaling = torch.from_numpy(np.array(loss_scaling, dtype=np.float32))
