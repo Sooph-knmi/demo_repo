@@ -12,7 +12,7 @@ from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAv
 
 from gnn_era5.data.era_datamodule import ERA5DataModule
 from gnn_era5.train.trainer import GraphForecaster
-from gnn_era5.train.utils import get_args, setup_exp_logger
+from gnn_era5.train.utils import get_args, setup_exp_logger, pl_scaling
 from gnn_era5.utils.config import YAMLConfig
 from gnn_era5.utils.logger import get_logger
 
@@ -36,11 +36,11 @@ def train(config: YAMLConfig) -> None:
     num_aux_features = config["input:num-aux-features"]
     num_fc_features = num_features - num_aux_features
 
-    loss_scaling = []
+    loss_scaling = np.array([])
     for scl in config["input:loss-scaling-pl"]:
-        loss_scaling.extend([scl] * len(config["input:pl:levels"]))
+        loss_scaling= np.append(loss_scaling, [scl] * pl_scaling(config["input:pl:levels"]))
     for scl in config["input:loss-scaling-sfc"]:
-        loss_scaling.append(scl)
+        loss_scaling= np.append(loss_scaling, [scl])
     assert len(loss_scaling) == num_fc_features
     LOGGER.debug("Loss scaling: %s", loss_scaling)
     loss_scaling = torch.from_numpy(np.array(loss_scaling, dtype=np.float32))

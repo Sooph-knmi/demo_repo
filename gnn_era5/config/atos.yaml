@@ -17,29 +17,27 @@ input:
       predict:
         # use validation dataset (for now)
         basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/pl
-        filename: era5_{resolution}_t_u_v_w_z_pl_predict.zarr
+        filename: era5_{resolution}_t_u_v_w_z_pl_validation.zarr
       names:
-      # not used!
         - t
         - u
         - v
         - w
         - z
       levels:
-      # not used!
-        - 50
-        - 100
-        - 150
-        - 200
-        - 250
-        - 300
-        - 400
-        - 500
-        - 600
-        - 700
-        - 850
-        - 925
         - 1000
+        - 925
+        - 850
+        - 700
+        - 600
+        - 500
+        - 400
+        - 300
+        - 250
+        - 200
+        - 150
+        - 100
+        - 50
   sfc:
       training:
         basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/sfc
@@ -54,7 +52,7 @@ input:
       predict:
         # use validation dataset (for now)
         basedir: /ec/res4/scratch/syma/era5/{resolution}/zarr/sfc
-        filename: era5_{resolution}_blh_lsm_msl_z_sfc_predict.zarr
+        filename: era5_{resolution}_blh_lsm_msl_z_sfc_validation.zarr
       names:
       # not used!
         - blh
@@ -73,7 +71,7 @@ input:
     - 1
     - 0.5
     - 0.33
-    - 0.05
+    - 0.01
     - 1
   loss-scaling-sfc:
     - 1
@@ -83,7 +81,7 @@ input:
 #  OUTPUT BLOCK
 ###################
 output:
-  basedir: /ec/res4/scratch/syma/GNN/ERA5/{resolution}/
+  basedir: /ec/res4/scratch/pamc/GNN/ERA5/{resolution}/
   logging:
     log-dir: logs
     log-interval: 250
@@ -113,7 +111,7 @@ model:
     # this will detect and trace back NaNs / Infs etc. but will slow down training
     anomaly-detection: False
   wandb:
-    enabled: False
+    enabled: True
   neptune:
     enabled: False
   dataloader:
@@ -132,7 +130,8 @@ model:
   warm-restart:
     enabled: False
     # path should be relative to the output:checkpoints:chkpt-dir, as defined above
-    ckpt-path: 20230403_1256/gnn-era5-ckpt-epoch=01-val_wmse=0.0672.ckpt
+    ckpt-path: 20230405_1226/gnn-era5-ckpt-epoch=00-val_wmse=0.0761.ckpt
+  #202304_1014/gnn-era5-resolution=0-ckpt-epoch=49-val_wmse=0.010.ckpt
   
   # enable checkpointing of GNN activations? T/F
   # saves GPU memory at the expense of additional compute
@@ -147,27 +146,27 @@ model:
   # runs only N training batches [N = integer | null]
   # if null then we run through all the batches
   limit-batches:
-    training: 250 # null
-    validation: 50 # null
+    training: null
+    validation: null
     test: 200
-    predict: 200
+    predict: 10
 
   # parallel strategy
   # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
   strategy: ddp_find_unused_parameters_false # ddp # auto  # ddp_find_unused_parameters_false
 
   # number of GPUs per node and number of nodes (for DDP)
-  num-gpus: 2
+  num-gpus: 4
   num-nodes: 1
 
   # training settings
   lead-time: 6
-  max-epochs: 2
+  max-epochs: 50
   learn-rate: 1.25e-4
 
   # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
   # the effective batch size becomes num-devices * batch-size * k
-  accum-grad-batches: 2
+  accum-grad-batches: 1
 
   # stochastic weight averaging
   # https://pytorch.org/blog/stochastic-weight-averaging-in-pytorch/
@@ -177,7 +176,7 @@ model:
 
   # specific GNN encoder settings
   encoder:
-    num-layers: 5
+    num-layers: 12
     mapper-num-layers: 1
     num-heads: 8
     activation: gelu
