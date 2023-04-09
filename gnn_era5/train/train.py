@@ -54,8 +54,9 @@ def train(config: YAMLConfig) -> None:
     LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * config["model:learn-rate"])
     LOGGER.debug("Rollout window length: %d", config["model:rollout"])
 
-    graph_data = torch.load(os.path.join(config["graph:data-basedir"], 
-        config["graph:data-file"].format(resolution=config["input:resolution"])))
+    graph_data = torch.load(
+        os.path.join(config["graph:data-basedir"], config["graph:data-file"].format(resolution=config["input:resolution"]))
+    )
 
     # TODO: revisit this?
     # all weights = 1

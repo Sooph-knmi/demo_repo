@@ -49,6 +49,7 @@ def normalize_era_data_wrapper(mu: np.ndarray, sd: np.ndarray) -> Callable:
 
     return _normalize_era_data
 
+
 # ---------------------------------------------------------------------------------
 # Denormalizer logic
 # - surface (2D) vars: min-max or (mu, sd) normalization
