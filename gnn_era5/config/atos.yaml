@@ -25,7 +25,6 @@ input:
         - w
         - z
       levels:
-      # not used!
         - 50
         - 100
         - 150
@@ -42,8 +41,8 @@ input:
   sfc:
       names:
       # not used!
-        - blh
         - msl
+        - blh
         - z
         - lsm
   # features that are not part of the forecast state
@@ -55,17 +54,17 @@ input:
     - 1
     - 0.5
     - 0.33
-    - 0.025
+    - 0.01
     - 1
   loss-scaling-sfc:
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
+    - 0.1
     - 1
-    - 1
-    - 1
-    - 1
-    - 1
-    - 1
-    - 1
-    - 1
+    - 0.1
+    - 0.1
 
 ###################
 #  OUTPUT BLOCK
@@ -120,7 +119,8 @@ model:
   warm-restart:
     enabled: False
     # path should be relative to the output:checkpoints:chkpt-dir, as defined above
-    ckpt-path: 20230403_1256/gnn-era5-ckpt-epoch=01-val_wmse=0.0672.ckpt
+    ckpt-path: 20230405_1226/gnn-era5-ckpt-epoch=00-val_wmse=0.0761.ckpt
+  #202304_1014/gnn-era5-resolution=0-ckpt-epoch=49-val_wmse=0.010.ckpt
   
   # enable checkpointing of GNN activations? T/F
   # saves GPU memory at the expense of additional compute
@@ -135,27 +135,27 @@ model:
   # runs only N training batches [N = integer | null]
   # if null then we run through all the batches
   limit-batches:
-    training: 20 #null
-    validation: 20 #null
+    training: null
+    validation: null
     test: 20
     predict: 20
 
   # parallel strategy
   # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
-  strategy: auto # ddp_find_unused_parameters_false # ddp # auto  # ddp_find_unused_parameters_false
+  strategy: ddp_find_unused_parameters_false # ddp # auto  # ddp_find_unused_parameters_false
 
   # number of GPUs per node and number of nodes (for DDP)
-  num-gpus: 1
+  num-gpus: 4
   num-nodes: 1
 
   # training settings
   lead-time: 6
-  max-epochs: 2
+  max-epochs: 50
   learn-rate: 1.25e-4
 
   # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
   # the effective batch size becomes num-devices * batch-size * k
-  accum-grad-batches: 2
+  accum-grad-batches: 1
 
   # stochastic weight averaging
   # https://pytorch.org/blog/stochastic-weight-averaging-in-pytorch/
@@ -165,7 +165,7 @@ model:
 
   # specific GNN encoder settings
   encoder:
-    num-layers: 5
+    num-layers: 8
     mapper-num-layers: 1
     num-heads: 8
     activation: gelu

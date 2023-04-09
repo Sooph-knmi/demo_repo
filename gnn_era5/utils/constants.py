@@ -14,7 +14,7 @@ _NC_COMPRESS_LEVEL = 9  # max
 _NORMALIZERS_2D = ["max", "std", "max", "none"]
 
 # plotting
-_IDXVARS_TO_PLOT = [2, 15, 28, 41, 54, 67, 79, 80]
+_IDXVARS_TO_PLOT = [10, 23, 36, 49, 62, 75, 79, 80]
 _NUM_VARS_TO_PLOT = len(_IDXVARS_TO_PLOT)
 _NAM_VARS_TO_PLOT = ["q850", "t850", "u850", "v850", "w850", "z850", "msl", "blh"]
 _NUM_PLOTS_PER_SAMPLE = 6
