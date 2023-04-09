@@ -64,6 +64,7 @@ def train(config: YAMLConfig) -> None:
         graph_data=graph_data,
         fc_dim=num_fc_features,
         aux_dim=num_aux_features,
+        num_levels=len(config["input:pl:levels"]),
         encoder_hidden_channels=config["model:encoder:num-hidden-channels"],
         encoder_out_channels=config["model:encoder:num-out-channels"],
         encoder_num_layers=config["model:encoder:num-layers"],
@@ -78,6 +79,7 @@ def train(config: YAMLConfig) -> None:
         log_to_neptune=config["model:neptune:enabled"],
         log_persistence=False,
         loss_scaling=loss_scaling,
+        pl_names=config["input:pl:names"],
     )
 
     if config["model:compile"]:
