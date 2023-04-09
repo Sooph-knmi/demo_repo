@@ -35,34 +35,6 @@ def setup_exp_logger(config: YAMLConfig):
     LOGGER.warning("You did not set up an experiment logger ...")
     return False
 
-    # if config["model:mlflow:enabled"]:
-    #     from pytorch_lightning.loggers.mlflow import MLFlowLogger
-
-    #     run = mlflow.active_run()
-    #     return MLFlowLogger(
-    #         experiment_name="gnn-era5",
-    #         tracking_uri="https://mlflow.copernicus-climate.eu",
-    #         run_id=run.info.run_id,
-    #     )
-    # if config["model:aim:enabled"]:
-    #     # make sure you `pip install aim` first
-    #     from aim.pytorch_lightning import AimLogger
-
-    #     # track experimental data by using Aim
-    #     return AimLogger(
-    #         repo="aim://marsdev-core:5555",
-    #         experiment="gnn-era5",
-    #         train_metric_prefix="train_",
-    #         val_metric_prefix="val_",
-    #     )
-    # if config["model:comet:enabled"]:
-    #     from pytorch_lightning.loggers import CometLogger
-
-    #     return CometLogger(
-    #         project_name="gnn-era5",
-    #         workspace="mchantry",
-    #     )
-
 
 def get_args() -> argparse.Namespace:
     """Returns a namespace containing the command line arguments"""

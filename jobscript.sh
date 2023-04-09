@@ -2,12 +2,12 @@
 
 #SBATCH --qos=ng
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
+#SBATCH --ntasks-per-node=1
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256G
-#SBATCH --time=24:00:00
-#SBATCH --output=o160-unet-neptune.out.%j
+#SBATCH --time=01:00:00
+#SBATCH --output=o160-h3_3-msg-torch-swa.out.%j
 
 # debugging flags (optional)
 # export NCCL_DEBUG=INFO
@@ -18,8 +18,8 @@
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-# export WANDB_NAME="mihai-o160-unet-gpu4-bs8"
-# export WANDB_NOTES="o160 ddp test run"
+export WANDB_NAME="o160-h3_3-gpu4-bs2-acc2-r1-swa"
+export WANDB_NOTES="TEST: SWA + gradient accumulation"
 
 # generic settings
 CONDA_ENV=gnn-pyg-2.3

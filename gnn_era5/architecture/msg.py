@@ -1,5 +1,3 @@
-from typing import Any
-
 import einops
 import numpy as np
 import torch
@@ -27,6 +25,7 @@ class GraphMSG(nn.Module):
         encoder_hidden_channels: int,
         encoder_out_channels: int,
         encoder_mapper_num_layers: int = 1,
+        act_checkpoints: bool = True,
     ) -> None:
         super().__init__()
 
@@ -93,34 +92,32 @@ class GraphMSG(nn.Module):
 
         # Latent graph (ERA5 -> H)
         self.forward_mapper = MessagePassingMapper(
-            in_channels=(encoder_out_channels, encoder_out_channels),
             hidden_dim=encoder_out_channels,
-            out_channels=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             edge_dim=3,
+            checkpoints=act_checkpoints,
         )
 
         self.h_encoder = MessagePassingEncoder(
-            in_channels=encoder_out_channels,
             hidden_dim=encoder_hidden_channels,
-            out_channels=encoder_out_channels,
             hidden_layers=encoder_num_layers,
             edge_dim=3,
+            checkpoints=act_checkpoints,
         )
 
         # H -> ERA5
         self.backward_mapper = MessagePassingMapper(
-            in_channels=(encoder_out_channels, encoder_out_channels),
             hidden_dim=encoder_out_channels,
-            out_channels=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             edge_dim=3,
+            checkpoints=act_checkpoints,
         )
 
         # extract features:
         self.node_era_extractor = MessagePassingNodeExtractor(
             latent_dim=encoder_out_channels,
             out_channels=in_channels,
+            checkpoints=act_checkpoints,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

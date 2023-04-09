@@ -4,23 +4,52 @@ input:
   format: zarr
   resolution: o96
   training:
-    basedir: /ec/res4/scratch/pamc/GNN/ERA5/
+    basedir: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-{resolution}
     filename: panguweather-{resolution}-1979-2015.zarr
   validation:
-    basedir: /ec/res4/scratch/pamc/GNN/ERA5/
-    filename: panguweather-{resolution}-2016-2018.zarr
+    basedir: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-{resolution}
+    filename: panguweather-{resolution}-2016-2017.zarr
   test:
     basedir: 
     filename:
-  prediction:
+  predict:
     basedir: 
     filename:
   pl:
-    levels: 13
+      names:
+      # not used!
+        - q
+        - t
+        - u
+        - v
+        - w
+        - z
+      levels:
+      # not used!
+        - 50
+        - 100
+        - 150
+        - 200
+        - 250
+        - 300
+        - 400
+        - 500
+        - 600
+        - 700
+        - 850
+        - 925
+        - 1000
+  sfc:
+      names:
+      # not used!
+        - blh
+        - msl
+        - z
+        - lsm
   # features that are not part of the forecast state
   # these are presumed to be located at the "end" of the flattened (bs, latlon, nvar) input tensor
-  num-features: 90
-  num-aux-features: 0  # all 2D fields
+  num-features: 99
+  num-aux-features: 13  # all 2D fields
   loss-scaling-pl:
     - 1
     - 1
@@ -29,10 +58,6 @@ input:
     - 0.025
     - 1
   loss-scaling-sfc:
-    - 1
-    - 1
-    - 1
-    - 1
     - 1
     - 1
     - 1
@@ -51,10 +76,11 @@ output:
     log-dir: logs
     log-interval: 250
   checkpoints:
+    # model checkpoints: used to resume training or do inference
     ckpt-dir: checkpoints
   model:
     save-top-k: 5
-    checkpoint-filename: "gnn-era5-{resolution}-ckpt-{epoch:02d}-{val_wmse:.3f}"
+    checkpoint-filename: gnn-era5-ckpt-{epoch:02d}-{val_wmse:.4f}
   plots:
     plot-dir: plots
 
@@ -63,12 +89,13 @@ output:
 ###################
 graph:
   data-basedir: /ec/res4/hpcperm/pamc/gnn/
-  data-file: graph_mappings_normed_edge_attrs_o96_h3_3.pt 
+  data-file: graph_mappings_normed_edge_attrs_{resolution}_h3_3.pt 
 
 ###################
 #  MODEL BLOCK
 ###################
 model:
+  # torch.compile is not working (yet), set this option to False 
   compile: False
   debug:
     # this will detect and trace back NaNs / Infs etc. but will slow down training
@@ -79,17 +106,32 @@ model:
     enabled: False
   dataloader:
     num-workers:
-      training: 8
-      validation: 8
-      inference: 1
+      training: 16
+      validation: 16
+      test: 8
+      predict: 8
     batch-size:
       training: 2
       validation: 2
-      inference: 1
+      test: 4
+      predict: 4
+
+  # resume training from a checkpoint
+  warm-restart:
+    enabled: False
+    # path should be relative to the output:checkpoints:chkpt-dir, as defined above
+    ckpt-path: 20230403_1256/gnn-era5-ckpt-epoch=01-val_wmse=0.0672.ckpt
+  
+  # enable checkpointing of GNN activations? T/F
+  # saves GPU memory at the expense of additional compute
+  act-checkpoints: True
 
   # miscellaneous
   precision: 16-mixed  # "16" with Lightning < 2.0
+
+  # use this for rapid debugging runs (push through a single batch)
   fast-dev-run: False
+
   # runs only N training batches [N = integer | null]
   # if null then we run through all the batches
   limit-batches:
@@ -108,8 +150,18 @@ model:
 
   # training settings
   lead-time: 6
-  max-epochs: 50
+  max-epochs: 2
   learn-rate: 1.25e-4
+
+  # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
+  # the effective batch size becomes num-devices * batch-size * k
+  accum-grad-batches: 2
+
+  # stochastic weight averaging
+  # https://pytorch.org/blog/stochastic-weight-averaging-in-pytorch/
+  swa:
+    enabled: False
+    lr: 1.e-4
 
   # specific GNN encoder settings
   encoder:

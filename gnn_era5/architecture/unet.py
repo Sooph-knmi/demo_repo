@@ -401,9 +401,9 @@ if __name__ == "__main__":
 
     _O160_SIZE = graph_mappings[("o160", "to", "o160")].coords_rad.shape[0]
 
-    x = torch.randn(4, _O160_SIZE, num_inputs + num_aux_inputs).to(device)  # input tensor
-    LOGGER.debug("Input shape: %s", x.shape)
-    y_pred = gnn(x)
+    x_input = torch.randn(4, _O160_SIZE, num_inputs + num_aux_inputs).to(device)  # input tensor
+    LOGGER.debug("Input shape: %s", x_input.shape)
+    y_pred = gnn(x_input)
     LOGGER.debug("Output shape: %s", y_pred.shape)
     LOGGER.debug("Model parameter count: %d", count_parameters(gnn))
     loss = y_pred.sum()
