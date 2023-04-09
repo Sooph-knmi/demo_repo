@@ -29,6 +29,7 @@ class GraphForecaster(pl.LightningModule):
         encoder_mapper_num_layers: int = 1,
         encoder_hidden_channels: int = 128,
         encoder_out_channels: int = 128,
+        activation: str = "SiLu",
         lr: float = 1e-4,
         rollout: int = 1,
         save_basedir: Optional[str] = None,
@@ -47,6 +48,7 @@ class GraphForecaster(pl.LightningModule):
             encoder_num_layers=encoder_num_layers,
             encoder_hidden_channels=encoder_hidden_channels,
             encoder_out_channels=encoder_out_channels,
+            activation=activation,
             encoder_mapper_num_layers=encoder_mapper_num_layers,
             act_checkpoints=act_checkpoints,
         )

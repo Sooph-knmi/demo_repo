@@ -126,13 +126,28 @@ class GATEncoder(nn.Module):
         return self.encoder(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
 
-# for MSG, where should this go?
-def gen_mlp(in_features: int, hidden_dim: int, out_features: int, layer_norm: bool = True, checkpoints: bool = True) -> nn.Module:
+def gen_mlp(
+    in_features: int,
+    hidden_dim: int,
+    out_features: int,
+    activation_func: str = "SiLU",
+    layer_norm: bool = True,
+    checkpoints: bool = True,
+) -> nn.Module:
+    if activation_func == "Gaussian":
+        act_func = GaussianActivation
+    else:
+        try:
+            act_func = getattr(nn, activation_func)
+        except:
+            print(f"Activation function {activation_func} not supported")
+            raise
+
     mlp1 = nn.Sequential(
         nn.Linear(in_features, hidden_dim),
-        nn.SiLU(),
+        act_func(),
         nn.Linear(hidden_dim, hidden_dim),
-        nn.SiLU(),
+        act_func(),
         nn.Linear(hidden_dim, out_features),
     )
     if layer_norm:
@@ -141,11 +156,25 @@ def gen_mlp(in_features: int, hidden_dim: int, out_features: int, layer_norm: bo
     return CheckpointWrapper(mlp1) if checkpoints else mlp1
 
 
+class GaussianActivation(nn.Module):
+    def __init__(self, alpha: int = 1.0):
+        super().__init__()
+        self.alpha = alpha
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.exp(-0.5 * x ** 2.0 / self.alpha ** 2.0)
+
+
 class MessagePassingNodeEmbedder(nn.Module):
-    def __init__(self, in_channels: int, latent_dim: int, checkpoints: bool = True) -> None:
+    def __init__(self, in_channels: int, latent_dim: int, activation: str = "SiLU", checkpoints: bool = True) -> None:
         super().__init__()
         self.node_emb = gen_mlp(
-            in_features=in_channels, hidden_dim=latent_dim, out_features=latent_dim, layer_norm=True, checkpoints=checkpoints
+            in_features=in_channels,
+            hidden_dim=latent_dim,
+            out_features=latent_dim,
+            activation_func=activation,
+            layer_norm=True,
+            checkpoints=checkpoints,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -153,10 +182,15 @@ class MessagePassingNodeEmbedder(nn.Module):
 
 
 class MessagePassingNodeExtractor(nn.Module):
-    def __init__(self, latent_dim: int, out_channels: int, checkpoints: bool = False) -> None:
+    def __init__(self, latent_dim: int, out_channels: int, activation: str = "SiLU", checkpoints: bool = False) -> None:
         super().__init__()
         self.node_ext = gen_mlp(
-            in_features=latent_dim, hidden_dim=latent_dim, out_features=out_channels, layer_norm=False, checkpoints=checkpoints
+            in_features=latent_dim,
+            hidden_dim=latent_dim,
+            out_features=out_channels,
+            activation_func=activation,
+            layer_norm=False,
+            checkpoints=checkpoints,
         )
 
     def forward(self, x: torch.Tensor):
@@ -164,14 +198,23 @@ class MessagePassingNodeExtractor(nn.Module):
 
 
 class MessagePassingMapper(nn.Module):  # should we remove self loops to be able to use same graph as Encoder?
-    def __init__(self, hidden_dim: int, edge_dim: int, hidden_layers: int, checkpoints: bool = True) -> None:
+    def __init__(
+        self, hidden_dim: int, edge_dim: int, hidden_layers: int, activation: str = "SiLU", checkpoints: bool = True
+    ) -> None:
         super().__init__()
 
         self.hidden_layers = hidden_layers
         self.edge_enc = gen_mlp(
-            in_features=edge_dim, hidden_dim=hidden_dim, out_features=hidden_dim, layer_norm=True, checkpoints=checkpoints
+            in_features=edge_dim,
+            hidden_dim=hidden_dim,
+            out_features=hidden_dim,
+            activation_func=activation,
+            layer_norm=True,
+            checkpoints=checkpoints,
         )
-        self.proc = nn.ModuleList([MessagePassingBlock(hidden_dim, hidden_dim) for _ in range(self.hidden_layers)])
+        self.proc = nn.ModuleList(
+            [MessagePassingBlock(hidden_dim, hidden_dim, activation=activation) for _ in range(self.hidden_layers)]
+        )
 
     def forward(self, x: Tuple[torch.Tensor, torch.Tensor], edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
         x_src, x_dst = x  # this should be Union[Tensor, PairTensor] or something from typing ... Union
@@ -183,15 +226,24 @@ class MessagePassingMapper(nn.Module):  # should we remove self loops to be able
         return x_dst
 
 
-class MessagePassingEncoder(nn.Module):  # should we remove self loops to be able to use same graph as Encoder?
-    def __init__(self, hidden_dim: int, edge_dim: int, hidden_layers: int, checkpoints: bool = True) -> None:
+class MessagePassingProcessor(nn.Module):  # should we remove self loops to be able to use same graph as Encoder?
+    def __init__(
+        self, hidden_dim: int, edge_dim: int, hidden_layers: int, activation: str = "SiLU", checkpoints: bool = True
+    ) -> None:
         super().__init__()
 
         self.hidden_layers = hidden_layers
         self.edge_enc = gen_mlp(
-            in_features=edge_dim, hidden_dim=hidden_dim, out_features=hidden_dim, layer_norm=True, checkpoints=checkpoints
+            in_features=edge_dim,
+            hidden_dim=hidden_dim,
+            out_features=hidden_dim,
+            activation_func=activation,
+            layer_norm=True,
+            checkpoints=checkpoints,
         )
-        self.proc = nn.ModuleList([MessagePassingBlock(hidden_dim, hidden_dim) for _ in range(self.hidden_layers)])
+        self.proc = nn.ModuleList(
+            [MessagePassingBlock(hidden_dim, hidden_dim, activation=activation) for _ in range(self.hidden_layers)]
+        )
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
         edge_attr = self.edge_enc(edge_attr)
@@ -202,11 +254,11 @@ class MessagePassingEncoder(nn.Module):  # should we remove self loops to be abl
 
 
 class MessagePassingBlock(MessagePassing):
-    def __init__(self, in_channels: int, out_channels: int, checkpoints: bool = True, **kwargs) -> None:
+    def __init__(self, in_channels: int, out_channels: int, activation: str = "SiLU", checkpoints: bool = True, **kwargs) -> None:
         super().__init__(**kwargs)
 
-        self.node_mlp = gen_mlp(2 * in_channels, out_channels, out_channels, checkpoints=checkpoints)
-        self.edge_mlp = gen_mlp(3 * in_channels, out_channels, out_channels, checkpoints=checkpoints)
+        self.node_mlp = gen_mlp(2 * in_channels, out_channels, out_channels, activation_func=activation, checkpoints=checkpoints)
+        self.edge_mlp = gen_mlp(3 * in_channels, out_channels, out_channels, activation_func=activation, checkpoints=checkpoints)
 
     def forward(self, x, edge_index, edge_attr, size=None) -> Tuple[torch.Tensor, torch.Tensor]:
         out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size)
@@ -295,47 +347,6 @@ class CheckpointWrapper(nn.Module):
 #         x_res, _, _ = self.pool.unpool(x_trans, unpool_info)
 
 #         return x_res
-
-
-# class ProcessorLayer(MessagePassing):
-#     def __init__(self, in_channels, out_channels, **kwargs):
-#         super().__init__(**kwargs)
-
-#         self.edge_mlp = nn.Sequential(
-#             nn.Linear(3 * in_channels, out_channels),
-#             nn.SiLU(),
-#             nn.Linear(out_channels, out_channels),
-#             nn.SiLU(),
-#             nn.Linear(out_channels, out_channels),
-#             nn.LayerNorm(out_channels),
-#         )
-#         self.node_mlp = nn.Sequential(
-#             nn.Linear(2 * in_channels, out_channels),
-#             nn.SiLU(),
-#             nn.Linear(out_channels, out_channels),
-#             nn.SiLU(),
-#             nn.Linear(out_channels, out_channels),
-#             nn.LayerNorm(out_channels),
-#         )
-
-#     def forward(self, x, edge_index, edge_attr, size=None):
-#         out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size)
-#         nodes_new = torch.cat([x, out], dim=1)
-#         nodes_new = x + self.node_mlp(nodes_new)
-
-#         return nodes_new, edges_new
-
-#     def message(self, x_i, x_j, edge_attr):
-#         edges_new = torch.cat([x_i, x_j, edge_attr], dim=1)
-#         edges_new = self.edge_mlp(edges_new) + edge_attr
-
-#         return edges_new
-
-#     def aggregate(self, edges_new, edge_index, dim_size=None):
-#         del dim_size  # not used
-#         out = scatter(edges_new, edge_index[0, :], dim=0, reduce="sum")
-
-#         return out, edges_new
 
 
 if __name__ == "__main__":
