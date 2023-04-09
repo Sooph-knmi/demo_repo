@@ -168,7 +168,7 @@ model:
     num-layers: 8
     mapper-num-layers: 1
     num-heads: 8
-    activation: gelu
+    activation: SiLU
     num-hidden-channels: 256
     num-out-channels: 256
     dropout: 0.
