@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch_geometric.data import HeteroData
 
 from gnn_era5.architecture.layers import (
-    MessagePassingEncoder,
+    MessagePassingProcessor,
     MessagePassingMapper,
     MessagePassingNodeEmbedder,
     MessagePassingNodeExtractor,
@@ -24,6 +24,7 @@ class GraphMSG(nn.Module):
         encoder_num_layers: int,
         encoder_hidden_channels: int,
         encoder_out_channels: int,
+        activation: str,
         encoder_mapper_num_layers: int = 1,
         act_checkpoints: bool = True,
     ) -> None:
@@ -85,23 +86,33 @@ class GraphMSG(nn.Module):
 
         # latent nodes:
         self.node_era_embedder = MessagePassingNodeEmbedder(
-            in_channels=in_channels + aux_in_channels + self.pos_channels, latent_dim=encoder_out_channels
+            in_channels=in_channels + aux_in_channels + self.pos_channels,
+            latent_dim=encoder_out_channels,
+            activation=activation,
+            checkpoints=act_checkpoints,
         )
 
-        self.node_h_embedder = MessagePassingNodeEmbedder(in_channels=4, latent_dim=encoder_out_channels)  # position channels only
+        self.node_h_embedder = MessagePassingNodeEmbedder(
+            in_channels=4,
+            latent_dim=encoder_out_channels,
+            activation=activation,
+            checkpoints=act_checkpoints,
+        )  # position channels only
 
         # Latent graph (ERA5 -> H)
         self.forward_mapper = MessagePassingMapper(
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             edge_dim=3,
+            activation=activation,
             checkpoints=act_checkpoints,
         )
 
-        self.h_encoder = MessagePassingEncoder(
+        self.h_processor = MessagePassingProcessor(
             hidden_dim=encoder_hidden_channels,
             hidden_layers=encoder_num_layers,
             edge_dim=3,
+            activation=activation,
             checkpoints=act_checkpoints,
         )
 
@@ -110,6 +121,7 @@ class GraphMSG(nn.Module):
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             edge_dim=3,
+            activation=activation,
             checkpoints=act_checkpoints,
         )
 
@@ -117,6 +129,7 @@ class GraphMSG(nn.Module):
         self.node_era_extractor = MessagePassingNodeExtractor(
             latent_dim=encoder_out_channels,
             out_channels=in_channels,
+            activation=activation,
             checkpoints=act_checkpoints,
         )
 
@@ -149,7 +162,7 @@ class GraphMSG(nn.Module):
             edge_attr=einops.repeat(self.e2h_edge_attr, "e f -> (repeat e) f", repeat=bs),
         )
 
-        x_latent_proc = self.h_encoder(  # has skipped connections
+        x_latent_proc = self.h_processor(  # has skipped connections
             x=x_latent,
             edge_index=torch.cat(
                 [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bs)],

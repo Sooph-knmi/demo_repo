@@ -69,6 +69,7 @@ def train(config: YAMLConfig) -> None:
         encoder_out_channels=config["model:encoder:num-out-channels"],
         encoder_num_layers=config["model:encoder:num-layers"],
         encoder_mapper_num_layers=config["model:encoder:mapper-num-layers"],
+        activation=config["model:encoder:activation"],
         lr=total_gpu_count * config["model:learn-rate"],
         rollout=config["model:rollout"],
         save_basedir=os.path.join(
