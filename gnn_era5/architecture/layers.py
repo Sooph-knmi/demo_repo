@@ -157,7 +157,7 @@ def gen_mlp(
 
 
 class GaussianActivation(nn.Module):
-    def __init__(self, alpha: int = 1.0):
+    def __init__(self, alpha: int = 1.0) -> None:
         super().__init__()
         self.alpha = alpha
 
@@ -193,11 +193,11 @@ class MessagePassingNodeExtractor(nn.Module):
             checkpoints=checkpoints,
         )
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.node_ext(x)
 
 
-class MessagePassingMapper(nn.Module):  # should we remove self loops to be able to use same graph as Encoder?
+class MessagePassingMapper(nn.Module):
     def __init__(
         self, hidden_dim: int, edge_dim: int, hidden_layers: int, activation: str = "SiLU", checkpoints: bool = True
     ) -> None:
@@ -217,7 +217,7 @@ class MessagePassingMapper(nn.Module):  # should we remove self loops to be able
         )
 
     def forward(self, x: Tuple[torch.Tensor, torch.Tensor], edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
-        x_src, x_dst = x  # this should be Union[Tensor, PairTensor] or something from typing ... Union
+        x_src, x_dst = x
         edge_attr = self.edge_enc(edge_attr)
         for i in range(self.hidden_layers):
             # here only x_dst is updated for the next layer, x_src always stays the same, is this what we want? I assume yes
@@ -226,7 +226,7 @@ class MessagePassingMapper(nn.Module):  # should we remove self loops to be able
         return x_dst
 
 
-class MessagePassingProcessor(nn.Module):  # should we remove self loops to be able to use same graph as Encoder?
+class MessagePassingProcessor(nn.Module):
     def __init__(
         self, hidden_dim: int, edge_dim: int, hidden_layers: int, activation: str = "SiLU", checkpoints: bool = True
     ) -> None:
@@ -265,7 +265,7 @@ class MessagePassingBlock(MessagePassing):
 
         if isinstance(x, torch.Tensor):
             nodes_new = torch.cat([x, out], dim=1)
-            nodes_new = x + self.node_mlp(nodes_new)
+            nodes_new = self.node_mlp(nodes_new) + x
         else:
             nodes_new = torch.cat([x[1], out], dim=1)
             nodes_new = self.node_mlp(nodes_new) + x[1]
