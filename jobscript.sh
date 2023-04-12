@@ -2,7 +2,7 @@
 
 #SBATCH --qos=ng
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
+#SBATCH --ntasks-per-node=4
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256G
@@ -18,13 +18,13 @@
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="o160-h3_3-gpu4-bs2-acc2-r1-swa"
-export WANDB_NOTES="TEST: SWA + gradient accumulation"
+#export WANDB_NAME="o160-h3_3-gpu4-bs2-acc2-r1-swa"
+#export WANDB_NOTES="TEST: SWA + gradient accumulation"
 
 # generic settings
 CONDA_ENV=gnn-pyg-2.3
-GITDIR=/home/syma/GNN/gnn-era5.git
-WORKDIR=/home/syma/GNN/gnn-era5.git
+GITDIR=/perm/pamc/software/gnn-era5
+WORKDIR=$GITDIR
 
 cd $WORKDIR
 module load conda

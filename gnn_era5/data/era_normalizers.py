@@ -39,15 +39,15 @@ def normalize_2d_era_data_wrapper(norm_methods: List[str], stats_2d: np.ndarray)
     return _normalize_2d_era_data
 
 
-def normalize_3d_era_data_wrapper(mu: np.ndarray, sd: np.ndarray) -> Callable:
-    def _normalize_3d_era_data(data: np.ndarray) -> np.ndarray:
+def normalize_era_data_wrapper(mu: np.ndarray, sd: np.ndarray) -> Callable:
+    def _normalize_era_data(data: np.ndarray) -> np.ndarray:
         LOGGER.debug("Worker %d produced 3D var data.shape: %s", os.getpid(), data.shape)
         # always standardize to N(0, 1)
         # 3D data.shape = (rollout, nvar, nlev, latlon)
         # assumes mu.shape and sd.shape align with the data dims
         return (data - mu) / sd
 
-    return _normalize_3d_era_data
+    return _normalize_era_data
 
 
 # ---------------------------------------------------------------------------------
@@ -56,36 +56,36 @@ def normalize_3d_era_data_wrapper(mu: np.ndarray, sd: np.ndarray) -> Callable:
 # - plev (3D) vars: (mu, sd) normalization only
 # All statistics need to be precomputed and available to pass to the wrappers
 # ---------------------------------------------------------------------------------
-def denormalize_2d_era_data_wrapper(norm_methods: List[str], stats_2d: np.ndarray) -> Callable:
-    def _denormalize_2d_era_data(data: np.ndarray) -> np.ndarray:
-        LOGGER.debug("Worker %d produced 2D var data.shape: %s", os.getpid(), data.shape)
-        # 2D data.shape = (rollout, nvar, latlon)
-        for vidx in range(data.shape[1]):
-            if norm_methods[vidx] == "min-max":
-                data[:, vidx, ...] = data[:, vidx, ...] * (stats_2d[vidx, 1] - stats_2d[vidx, 0]) + stats_2d[vidx, 0]
-                # data[:, vidx, ...] = (data[:, vidx, ...] - stats_2d[vidx, 0]) / (stats_2d[vidx, 1] - stats_2d[vidx, 0])
-            elif norm_methods[vidx] == "max":
-                data[:, vidx, ...] = data[:, vidx, ...] * stats_2d[vidx, 1]
-                # data[:, vidx, ...] = data[:, vidx, ...] / stats_2d[vidx, 1]
-            elif norm_methods[vidx] == "std":
-                data[:, vidx, ...] = data[:, vidx, ...] * stats_2d[vidx, 1] + stats_2d[vidx, 0]
-                # data[:, vidx, ...] = (data[:, vidx, ...] - stats_2d[vidx, 0]) / stats_2d[vidx, 1]
-            elif norm_methods[vidx] == "none":
-                # leave data untouched
-                pass
-            else:
-                LOGGER.error("Invalid normalization method %s for variable index %d ...", norm_methods[vidx], vidx)
-                raise RuntimeError
-        return data
+# def denormalize_2d_era_data_wrapper(norm_methods: List[str], stats_2d: np.ndarray) -> Callable:
+#     def _denormalize_2d_era_data(data: np.ndarray) -> np.ndarray:
+#         LOGGER.debug("Worker %d produced 2D var data.shape: %s", os.getpid(), data.shape)
+#         # 2D data.shape = (rollout, nvar, latlon)
+#         for vidx in range(data.shape[1]):
+#             if norm_methods[vidx] == "min-max":
+#                 data[:, vidx, ...] = data[:, vidx, ...] * (stats_2d[vidx, 1] - stats_2d[vidx, 0]) + stats_2d[vidx, 0]
+#                 # data[:, vidx, ...] = (data[:, vidx, ...] - stats_2d[vidx, 0]) / (stats_2d[vidx, 1] - stats_2d[vidx, 0])
+#             elif norm_methods[vidx] == "max":
+#                 data[:, vidx, ...] = data[:, vidx, ...] * stats_2d[vidx, 1]
+#                 # data[:, vidx, ...] = data[:, vidx, ...] / stats_2d[vidx, 1]
+#             elif norm_methods[vidx] == "std":
+#                 data[:, vidx, ...] = data[:, vidx, ...] * stats_2d[vidx, 1] + stats_2d[vidx, 0]
+#                 # data[:, vidx, ...] = (data[:, vidx, ...] - stats_2d[vidx, 0]) / stats_2d[vidx, 1]
+#             elif norm_methods[vidx] == "none":
+#                 # leave data untouched
+#                 pass
+#             else:
+#                 LOGGER.error("Invalid normalization method %s for variable index %d ...", norm_methods[vidx], vidx)
+#                 raise RuntimeError
+#         return data
 
-    return _denormalize_2d_era_data
+#     return _denormalize_2d_era_data
 
 
-def denormalize_3d_era_data_wrapper(mu: np.ndarray, sd: np.ndarray) -> Callable:
-    def _denormalize_3d_era_data(data: np.ndarray) -> np.ndarray:
+def denormalize_era_data_wrapper(mu: np.ndarray, sd: np.ndarray) -> Callable:
+    def _denormalize_era_data(data: np.ndarray) -> np.ndarray:
         LOGGER.debug("Worker %d produced 3D var data.shape: %s", os.getpid(), data.shape)
         # 3D data.shape = (rollout, nvar, nlev, latlon)
         # assumes mu.shape and sd.shape align with the data dims
         return data * sd + mu
 
-    return _denormalize_3d_era_data
+    return _denormalize_era_data

@@ -12,7 +12,7 @@ from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAv
 
 from gnn_era5.data.era_datamodule import ERA5DataModule
 from gnn_era5.train.trainer import GraphForecaster
-from gnn_era5.train.utils import get_args, setup_exp_logger
+from gnn_era5.train.utils import get_args, setup_exp_logger, pl_scaling
 from gnn_era5.utils.config import YAMLConfig
 from gnn_era5.utils.logger import get_logger
 
@@ -32,15 +32,15 @@ def train(config: YAMLConfig) -> None:
     dmod = ERA5DataModule(config)
 
     # number of variables (features)
-    num_features = len(config["input:pl:names"]) * len(config["input:pl:levels"]) + len(config["input:sfc:names"])
+    num_features = config["input:num-features"]
     num_aux_features = config["input:num-aux-features"]
     num_fc_features = num_features - num_aux_features
 
-    loss_scaling = []
+    loss_scaling = np.array([])
     for scl in config["input:loss-scaling-pl"]:
-        loss_scaling.extend([scl] * len(config["input:pl:levels"]))
+        loss_scaling = np.append(loss_scaling, [scl] * pl_scaling(config["input:pl:levels"]))
     for scl in config["input:loss-scaling-sfc"]:
-        loss_scaling.append(scl)
+        loss_scaling = np.append(loss_scaling, [scl])
     assert len(loss_scaling) == num_fc_features
     LOGGER.debug("Loss scaling: %s", loss_scaling)
     loss_scaling = torch.from_numpy(np.array(loss_scaling, dtype=np.float32))
@@ -54,7 +54,9 @@ def train(config: YAMLConfig) -> None:
     LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * config["model:learn-rate"])
     LOGGER.debug("Rollout window length: %d", config["model:rollout"])
 
-    graph_data = torch.load(os.path.join(config["graph:data-basedir"], config["graph:data-file"]))
+    graph_data = torch.load(
+        os.path.join(config["graph:data-basedir"], config["graph:data-file"].format(resolution=config["input:resolution"]))
+    )
 
     # TODO: revisit this?
     # all weights = 1

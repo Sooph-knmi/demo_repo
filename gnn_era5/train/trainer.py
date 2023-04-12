@@ -263,7 +263,7 @@ class GraphForecaster(pl.LightningModule):
         # TODO: revisit the choice of optimizer (switch to something fancier, like FusedAdam/LAMB?)
         # TODO: Using a momentum-free optimizer (SGD) may reduce memory usage (but degrade convergence?) - to test
         optimizer = torch.optim.Adam(self.parameters(), betas=(0.9, 0.95), lr=self.lr, fused=True)
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=5.0e-6)
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300000, eta_min=5.0e-7)
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
