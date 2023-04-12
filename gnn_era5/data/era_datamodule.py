@@ -49,7 +49,6 @@ class ERA5DataModule(pl.LightningDataModule):
         self.ds_train = self._get_dataset("training")
         self.ds_valid = self._get_dataset("validation")
 
-
     def _get_dataset(self, stage: str) -> ERA5NativeGridDataset:
         return ERA5NativeGridDataset(
             fname=self._get_data_filename(stage),
@@ -78,7 +77,7 @@ class ERA5DataModule(pl.LightningDataModule):
             # see https://pytorch.org/docs/stable/notes/cuda.html#cuda-memory-pinning
             pin_memory=True,
             # custom collator (see above)
-            #collate_fn=era_batch_collator,
+            # collate_fn=era_batch_collator,
             # worker initializer
             worker_init_fn=worker_init_func,
             # prefetch batches (default prefetch_factor == 2)
@@ -156,7 +155,7 @@ class ERA5TestDataModule(pl.LightningDataModule):
             # see https://pytorch.org/docs/stable/notes/cuda.html#cuda-memory-pinning
             pin_memory=True,
             # custom collator (see above)
-            #collate_fn=era_batch_collator,
+            # collate_fn=era_batch_collator,
             # worker initializer
             worker_init_fn=worker_init_func,
             # prefetch batches (default prefetch_factor == 2)

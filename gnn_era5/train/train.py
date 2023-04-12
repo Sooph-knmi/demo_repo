@@ -36,14 +36,14 @@ def train(config: YAMLConfig) -> None:
     num_aux_features = config["input:num-aux-features"]
     num_fc_features = num_features - num_aux_features
 
-    loss_scaling = np.array([])
+    loss_scaling = np.array([],dtype=np.float32)
     for scl in config["input:loss-scaling-pl"]:
         loss_scaling = np.append(loss_scaling, [scl] * pl_scaling(config["input:pl:levels"]))
     for scl in config["input:loss-scaling-sfc"]:
         loss_scaling = np.append(loss_scaling, [scl])
     assert len(loss_scaling) == num_fc_features
     LOGGER.debug("Loss scaling: %s", loss_scaling)
-    loss_scaling = torch.from_numpy(np.array(loss_scaling, dtype=np.float32))
+    loss_scaling = torch.from_numpy(loss_scaling)
 
     LOGGER.debug("Total number of prognostic variables: %d", num_fc_features)
     LOGGER.debug("Total number of auxiliary variables: %d", num_aux_features)

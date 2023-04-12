@@ -201,7 +201,7 @@ class GraphForecaster(pl.LightningModule):
                 # get new "constants" needed for time-varying fields
                 x[..., self.feature_dim :] = batch[:, rstep + 1, :, self.feature_dim :]
                 preds.append(y_hat)
-        return torch.stack(preds, dim=-1) #, batch.idx  # stack along new last dimension, return sample indices too
+        return torch.stack(preds, dim=-1) # stack along new last dimension, return sample indices too
 
     def _shared_eval_step(self, batch: torch.Tensor, batch_idx: int) -> Tuple[torch.Tensor, ...]:
         plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
