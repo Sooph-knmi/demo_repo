@@ -133,7 +133,7 @@ class ERA5NativeGridDataset(IterableDataset):
             # X = np.concatenate([X3d, X2d], axis=-1)
             LOGGER.debug("Worker PID %d produced a sample of size %s", os.getpid(), X.shape)
 
-            yield (torch.from_numpy(X), start)
+            yield torch.from_numpy(X)
 
     def __repr__(self) -> str:
         return f"""

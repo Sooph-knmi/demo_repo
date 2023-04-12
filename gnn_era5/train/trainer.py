@@ -84,22 +84,22 @@ class GraphForecaster(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.gnn(x)
 
-    def training_step(self, batch: ERA5DataBatch, batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         del batch_idx  # not used
-        train_loss = torch.zeros(1, dtype=batch.X.dtype, device=self.device, requires_grad=False)
-        persist_loss = torch.zeros(1, dtype=batch.X.dtype, device=self.device, requires_grad=False)  # persistence
+        train_loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
+        persist_loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)  # persistence
         # start rollout
-        x = batch.X[:, 0, ...]
+        x = batch[:, 0, ...]
         for rstep in range(self.rollout):
             y_hat = self(x)  # prediction at rollout step rstep
-            y = batch.X[:, rstep + 1, ...]  # target
+            y = batch[:, rstep + 1, ...]  # target
             # y includes the auxiliary variables, so we must leave those out when computing the loss
             train_loss += self.loss(y_hat, y[..., : self.feature_dim])
             persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
             # autoregressive predictions - we re-init the "variable" part of x
             x[..., : self.feature_dim] = y_hat
             # get new "constants" needed for time-varying fields
-            x[..., self.feature_dim :] = batch.X[:, rstep + 1, :, self.feature_dim :]
+            x[..., self.feature_dim :] = batch[:, rstep + 1, :, self.feature_dim :]
         # scale loss
         train_loss *= 1.0 / self.rollout
         persist_loss *= 1.0 / self.rollout
@@ -111,7 +111,7 @@ class GraphForecaster(pl.LightningModule):
             on_step=True,
             prog_bar=True,
             logger=True,
-            batch_size=batch.X.shape[0],
+            batch_size=batch.shape[0],
             sync_dist=True,
         )
         if self.log_persistence:
@@ -122,7 +122,7 @@ class GraphForecaster(pl.LightningModule):
                 on_step=True,
                 prog_bar=False,
                 logger=True,
-                batch_size=batch.X.shape[0],
+                batch_size=batch.shape[0],
                 sync_dist=True,
             )
 
@@ -137,7 +137,7 @@ class GraphForecaster(pl.LightningModule):
             on_step=True,
             prog_bar=True,
             logger=True,
-            batch_size=batch.X.shape[0],
+            batch_size=batch.shape[0],
             sync_dist=True,
         )
         if self.log_persistence:
@@ -148,7 +148,7 @@ class GraphForecaster(pl.LightningModule):
                 on_step=True,
                 prog_bar=True,
                 logger=True,
-                batch_size=batch.X.shape[0],
+                batch_size=batch.shape[0],
                 sync_dist=True,
             )
         for metric in metrics.keys():
@@ -158,7 +158,7 @@ class GraphForecaster(pl.LightningModule):
                 on_epoch=True,
                 on_step=False,
                 logger=True,
-                batch_size=batch.X.shape[0],
+                batch_size=batch.shape[0],
                 sync_dist=True,
             )
         return val_loss
@@ -172,7 +172,7 @@ class GraphForecaster(pl.LightningModule):
             on_step=True,
             prog_bar=True,
             logger=True,
-            batch_size=batch.X.shape[0],
+            batch_size=batch.shape[0],
             sync_dist=True,
         )
 
@@ -184,35 +184,35 @@ class GraphForecaster(pl.LightningModule):
                 on_step=True,
                 prog_bar=True,
                 logger=True,
-                batch_size=batch.X.shape[0],
+                batch_size=batch.shape[0],
                 sync_dist=True,
             )
         return test_loss
 
-    def predict_step(self, batch: ERA5DataBatch, batch_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def predict_step(self, batch: torch.Tensor, batch_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         del batch_idx  # not used
         preds: List[torch.Tensor] = []
         with torch.no_grad():
             # start rollout
-            x = batch.X[:, 0, ...]
+            x = batch[:, 0, ...]
             for rstep in range(self.rollout):
                 y_hat = self(x)
                 x[..., : self.feature_dim] = y_hat
                 # get new "constants" needed for time-varying fields
-                x[..., self.feature_dim :] = batch.X[:, rstep + 1, :, self.feature_dim :]
+                x[..., self.feature_dim :] = batch[:, rstep + 1, :, self.feature_dim :]
                 preds.append(y_hat)
-        return torch.stack(preds, dim=-1), batch.idx  # stack along new last dimension, return sample indices too
+        return torch.stack(preds, dim=-1) #, batch.idx  # stack along new last dimension, return sample indices too
 
-    def _shared_eval_step(self, batch: ERA5DataBatch, batch_idx: int) -> Tuple[torch.Tensor, ...]:
+    def _shared_eval_step(self, batch: torch.Tensor, batch_idx: int) -> Tuple[torch.Tensor, ...]:
         plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
         metrics = {}
         with torch.no_grad():
-            loss = torch.zeros(1, dtype=batch.X.dtype, device=self.device, requires_grad=False)
-            persist_loss = torch.zeros(1, dtype=batch.X.dtype, device=self.device, requires_grad=False)  # persistence loss
-            x = batch.X[:, 0, ...]
+            loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
+            persist_loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)  # persistence loss
+            x = batch[:, 0, ...]
             for rstep in range(self.rollout):
                 y_hat = self(x)
-                y = batch.X[:, rstep + 1, ...]
+                y = batch[:, rstep + 1, ...]
                 loss += self.loss(y_hat, y[..., : self.feature_dim])
                 persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
                 for metric_key in self.metric_ranges.keys():
@@ -223,7 +223,7 @@ class GraphForecaster(pl.LightningModule):
                     self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)
                 x[..., : self.feature_dim] = y_hat
                 # get new "constants" needed for time-varying fields
-                x[..., self.feature_dim :] = batch.X[:, rstep + 1, :, self.feature_dim :]
+                x[..., self.feature_dim :] = batch[:, rstep + 1, :, self.feature_dim :]
             loss *= 1.0 / self.rollout
             persist_loss *= 1.0 / self.rollout
         return loss, persist_loss, metrics

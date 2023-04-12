@@ -78,7 +78,7 @@ class ERA5DataModule(pl.LightningDataModule):
             # see https://pytorch.org/docs/stable/notes/cuda.html#cuda-memory-pinning
             pin_memory=True,
             # custom collator (see above)
-            collate_fn=era_batch_collator,
+            #collate_fn=era_batch_collator,
             # worker initializer
             worker_init_fn=worker_init_func,
             # prefetch batches (default prefetch_factor == 2)
@@ -92,10 +92,9 @@ class ERA5DataModule(pl.LightningDataModule):
     def val_dataloader(self) -> DataLoader:
         return self._get_dataloader(self.ds_valid, self.num_workers_val, self.bs_val)
 
-    def transfer_batch_to_device(self, batch: ERA5DataBatch, device: torch.device, dataloader_idx: int = 0) -> ERA5DataBatch:
+    def transfer_batch_to_device(self, batch: torch.Tensor, device: torch.device, dataloader_idx: int = 0) -> torch.Tensor:
         del dataloader_idx  # not used
-        batch.X = batch.X.to(device)
-        batch.idx = batch.idx.to(device)
+        batch = batch.to(device)
         return batch
 
 
@@ -157,7 +156,7 @@ class ERA5TestDataModule(pl.LightningDataModule):
             # see https://pytorch.org/docs/stable/notes/cuda.html#cuda-memory-pinning
             pin_memory=True,
             # custom collator (see above)
-            collate_fn=era_batch_collator,
+            #collate_fn=era_batch_collator,
             # worker initializer
             worker_init_fn=worker_init_func,
             # prefetch batches (default prefetch_factor == 2)
@@ -177,8 +176,7 @@ class ERA5TestDataModule(pl.LightningDataModule):
     def predict_dataloader(self) -> DataLoader:
         return self._get_dataloader(self.ds_predict, self.num_workers_test, self.bs_test)
 
-    def transfer_batch_to_device(self, batch: ERA5DataBatch, device: torch.device, dataloader_idx: int = 0) -> ERA5DataBatch:
+    def transfer_batch_to_device(self, batch: torch.Tensor, device: torch.device, dataloader_idx: int = 0) -> torch.Tensor:
         del dataloader_idx  # not used
-        batch.X = batch.X.to(device)
-        batch.idx = batch.idx.to(device)
+        batch = batch.to(device)
         return batch
