@@ -30,7 +30,7 @@ class GraphForecaster(pl.LightningModule):
         encoder_mapper_num_layers: int = 1,
         encoder_hidden_channels: int = 128,
         encoder_out_channels: int = 128,
-        activation: str = "SiLu",
+        activation: str = "SiLU",
         lr: float = 1e-4,
         rollout: int = 1,
         save_basedir: Optional[str] = None,
@@ -98,6 +98,8 @@ class GraphForecaster(pl.LightningModule):
             persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
             # autoregressive predictions - we re-init the "variable" part of x
             x[..., : self.feature_dim] = y_hat
+            # get new "constants" needed for time-varying fields
+            x[..., self.feature_dim :] = batch.X[:, rstep + 1, :, self.feature_dim :]
         # scale loss
         train_loss *= 1.0 / self.rollout
         persist_loss *= 1.0 / self.rollout
@@ -193,9 +195,11 @@ class GraphForecaster(pl.LightningModule):
         with torch.no_grad():
             # start rollout
             x = batch.X[:, 0, ...]
-            for _ in range(self.rollout):
+            for rstep in range(self.rollout):
                 y_hat = self(x)
                 x[..., : self.feature_dim] = y_hat
+                # get new "constants" needed for time-varying fields
+                x[..., self.feature_dim :] = batch.X[:, rstep + 1, :, self.feature_dim :]
                 preds.append(y_hat)
         return torch.stack(preds, dim=-1), batch.idx  # stack along new last dimension, return sample indices too
 
@@ -218,6 +222,8 @@ class GraphForecaster(pl.LightningModule):
                     self._plot_loss(y_hat, y[..., : self.feature_dim], rollout_step=rstep)
                     self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)
                 x[..., : self.feature_dim] = y_hat
+                # get new "constants" needed for time-varying fields
+                x[..., self.feature_dim :] = batch.X[:, rstep + 1, :, self.feature_dim :]
             loss *= 1.0 / self.rollout
             persist_loss *= 1.0 / self.rollout
         return loss, persist_loss, metrics

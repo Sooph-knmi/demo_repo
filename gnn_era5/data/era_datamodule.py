@@ -49,6 +49,7 @@ class ERA5DataModule(pl.LightningDataModule):
         self.ds_train = self._get_dataset("training")
         self.ds_valid = self._get_dataset("validation")
 
+
     def _get_dataset(self, stage: str) -> ERA5NativeGridDataset:
         return ERA5NativeGridDataset(
             fname=self._get_data_filename(stage),
@@ -109,32 +110,41 @@ class ERA5TestDataModule(pl.LightningDataModule):
         self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
         # load data used to transform input
-        self._stats_2d: np.ndarray = np.load(config["input:transformations:sfc"].format(resolution=config["input:resolution"]))
-        self._mu_3d: np.ndarray = np.load(config["input:transformations:pl:mu"].format(resolution=config["input:resolution"]))
-        self._sd_3d: np.ndarray = np.load(config["input:transformations:pl:sd"].format(resolution=config["input:resolution"]))
+        zar = zarr.open(
+            os.path.join(
+                self.config[f"input:training:basedir"].format(resolution=self.config["input:resolution"]),
+                self.config[f"input:training:filename"].format(resolution=self.config["input:resolution"]),
+            ),
+            mode="r",
+        )
+        self._mu: np.ndarray = np.array(zar.attrs["climetlab"]["statistics_by_index"]["mean"], dtype="float32")[
+            np.newaxis, :, np.newaxis
+        ]
+        self._sd: np.ndarray = np.array(zar.attrs["climetlab"]["statistics_by_index"]["stdev"], dtype="float32")[
+            np.newaxis, :, np.newaxis
+        ]
+        zar = None
 
         self.ds_test = self._get_dataset("test")
         self.ds_predict = self._get_dataset("predict")
 
     def _get_dataset(self, stage: str) -> ERA5NativeGridDataset:
         return ERA5NativeGridDataset(
-            fname_2d=self._get_data_filename("sfc", stage),
-            fname_3d=self._get_data_filename("pl", stage),
-            era_2d_data_reader=read_2d_era_data,
-            era_3d_data_reader=read_3d_era_data,
-            era_2d_data_normalizer=normalize_2d_era_data_wrapper(_NORMALIZERS_2D, self._stats_2d),
-            era_3d_data_normalizer=normalize_3d_era_data_wrapper(self._mu_3d, self._sd_3d),
+            fname=self._get_data_filename(stage),
+            era_data_reader=read_era_data,
+            era_data_normalizer=normalize_era_data_wrapper(self._mu, self._sd),
             lead_time=self.config["model:lead-time"],
             rollout=self.config["model:rollout"],
             rank=self.local_rank,
             world_size=self.config["model:num-gpus"] * self.config["model:num-nodes"],
+            shuffle=False,
         )
 
-    def _get_data_filename(self, field_type: str, stage: str) -> str:
+    def _get_data_filename(self, stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation | test]
         return os.path.join(
-            self.config[f"input:{field_type}:{stage}:basedir"].format(resolution=self.config["input:resolution"]),
-            self.config[f"input:{field_type}:{stage}:filename"].format(resolution=self.config["input:resolution"]),
+            self.config[f"input:{stage}:basedir"].format(resolution=self.config["input:resolution"]),
+            self.config[f"input:{stage}:filename"].format(resolution=self.config["input:resolution"]),
         )
 
     def _get_dataloader(self, ds: ERA5NativeGridDataset, num_workers: int, batch_size: int) -> DataLoader:
