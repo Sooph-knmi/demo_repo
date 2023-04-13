@@ -99,7 +99,7 @@ class GraphForecaster(pl.LightningModule):
             # autoregressive predictions - we re-init the "variable" part of x
             x[..., : self.feature_dim] = y_hat
             # get new "constants" needed for time-varying fields
-            x[..., self.feature_dim :] = batch[:, rstep + 1, :, self.feature_dim :]
+            x[..., self.feature_dim :] = y[..., self.feature_dim :]
         # scale loss
         train_loss *= 1.0 / self.rollout
         persist_loss *= 1.0 / self.rollout
@@ -189,7 +189,7 @@ class GraphForecaster(pl.LightningModule):
             )
         return test_loss
 
-    def predict_step(self, batch: torch.Tensor, batch_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def predict_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         del batch_idx  # not used
         preds: List[torch.Tensor] = []
         with torch.no_grad():
@@ -198,10 +198,11 @@ class GraphForecaster(pl.LightningModule):
             for rstep in range(self.rollout):
                 y_hat = self(x)
                 x[..., : self.feature_dim] = y_hat
-                # get new "constants" needed for time-varying fields
-                x[..., self.feature_dim :] = batch[:, rstep + 1, :, self.feature_dim :]
+                if rstep + 1 < self.rollout:
+                    # get new "constants" needed for time-varying fields
+                    x[..., self.feature_dim :] = batch[:, rstep + 1, :, self.feature_dim :]
                 preds.append(y_hat)
-        return torch.stack(preds, dim=-1) # stack along new last dimension, return sample indices too
+        return torch.stack(preds, dim=-1)  # stack along new last dimension, return sample indices too
 
     def _shared_eval_step(self, batch: torch.Tensor, batch_idx: int) -> Tuple[torch.Tensor, ...]:
         plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
@@ -223,7 +224,7 @@ class GraphForecaster(pl.LightningModule):
                     self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)
                 x[..., : self.feature_dim] = y_hat
                 # get new "constants" needed for time-varying fields
-                x[..., self.feature_dim :] = batch[:, rstep + 1, :, self.feature_dim :]
+                x[..., self.feature_dim :] = y[..., self.feature_dim :]
             loss *= 1.0 / self.rollout
             persist_loss *= 1.0 / self.rollout
         return loss, persist_loss, metrics
