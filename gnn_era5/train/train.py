@@ -64,6 +64,7 @@ def train(config: YAMLConfig) -> None:
 
     model = GraphForecaster(
         graph_data=graph_data,
+        metadata=dmod.input_metadata,
         fc_dim=num_fc_features,
         aux_dim=num_aux_features,
         num_levels=len(config["input:pl:levels"]),
