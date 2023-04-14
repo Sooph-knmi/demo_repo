@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,6 +9,7 @@ from torch_geometric.data import HeteroData
 
 import wandb
 from gnn_era5.architecture.losses import WeightedMSELoss
+from gnn_era5.data.era_normalizers import InputNormalizer
 from gnn_era5.architecture.msg import GraphMSG
 from gnn_era5.utils.logger import get_logger
 from gnn_era5.utils.plots import plot_predicted_multilevel_flat_sample, init_plot_settings, plot_loss
@@ -22,6 +23,7 @@ class GraphForecaster(pl.LightningModule):
     def __init__(
         self,
         graph_data: HeteroData,
+        metadata: Dict,
         fc_dim: int,
         aux_dim: int,
         num_levels: int,
@@ -54,6 +56,8 @@ class GraphForecaster(pl.LightningModule):
             act_checkpoints=act_checkpoints,
         )
 
+        self.normalizer = InputNormalizer(metadata)
+
         self.era_latlons = graph_data[("era", "to", "era")].ecoords_rad
         self.era_weights = graph_data[("era", "to", "era")].area_weights
 
@@ -61,6 +65,9 @@ class GraphForecaster(pl.LightningModule):
             loss_scaling = torch.ones(1, dtype=torch.float32)  # unit weights
 
         self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
+
+        # TODO: what if pl_names is None? either guard against that or make it a required arg
+        # or, better yet, can we replace `pl_names` with the level names from the input metadata?
         self.metric_ranges = {}
         for i, key in enumerate(pl_names):
             self.metric_ranges[key] = [i * num_levels, (i + 1) * num_levels]
@@ -87,6 +94,7 @@ class GraphForecaster(pl.LightningModule):
         del batch_idx  # not used
         train_loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
         persist_loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)  # persistence
+        batch = self.normalizer(batch)  # normalized in-place
         # start rollout
         x = batch[:, 0, ...]
         for rstep in range(self.rollout):
@@ -150,10 +158,10 @@ class GraphForecaster(pl.LightningModule):
                 batch_size=batch.shape[0],
                 sync_dist=True,
             )
-        for metric in metrics.keys():
+        for mname, mvalue in metrics.items():
             self.log(
-                "val_" + metric,
-                metrics[metric],
+                "val_" + mname,
+                mvalue,
                 on_epoch=True,
                 on_step=False,
                 logger=True,
@@ -190,6 +198,8 @@ class GraphForecaster(pl.LightningModule):
 
     def predict_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         del batch_idx  # not used
+        batch = self.normalizer(batch)
+
         preds: List[torch.Tensor] = []
         with torch.no_grad():
             # start rollout
@@ -203,8 +213,9 @@ class GraphForecaster(pl.LightningModule):
                 preds.append(y_hat)
         return torch.stack(preds, dim=-1)  # stack along new last dimension, return sample indices too
 
-    def _shared_eval_step(self, batch: torch.Tensor, batch_idx: int) -> Tuple[torch.Tensor, ...]:
+    def _shared_eval_step(self, batch: torch.Tensor, batch_idx: int) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
         plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
+        batch = self.normalizer(batch)
         metrics = {}
         with torch.no_grad():
             loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
@@ -215,9 +226,9 @@ class GraphForecaster(pl.LightningModule):
                 y = batch[:, rstep + 1, ...]
                 loss += self.loss(y_hat, y[..., : self.feature_dim])
                 persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
-                for metric_key in self.metric_ranges.keys():
-                    low, high = self.metric_ranges[metric_key]
-                    metrics[f"{metric_key}_{rstep+1}"] = self.metrics(y_hat[..., low:high], y[..., low:high])
+                for mkey, mranges in self.metric_ranges.items():
+                    low, high = mranges
+                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat[..., low:high], y[..., low:high])
                 if plot_sample and self.global_rank == 0:
                     self._plot_loss(y_hat, y[..., : self.feature_dim], rollout_step=rstep)
                     self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)
@@ -239,17 +250,22 @@ class GraphForecaster(pl.LightningModule):
         )
 
     def _plot_sample(self, batch_idx: int, rollout_step: int, x: torch.Tensor, y_true: torch.Tensor, y_pred: torch.Tensor) -> None:
+        """Plots a denormalized sample: input, target and prediction."""
         sample_idx = 0
+        x_ = self.normalizer.denormalize(x.clone()).cpu().numpy()
+        y_true_ = self.normalizer.denormalize(y_true.clone()).cpu().numpy()
+        y_pred_ = self.normalizer.denormalize(y_pred.clone()).cpu().numpy()
+
         fig = plot_predicted_multilevel_flat_sample(
             np.rad2deg(self.era_latlons.numpy()),
-            x[sample_idx, ...].cpu().numpy().squeeze(),
-            y_true[sample_idx, ...].cpu().numpy().squeeze(),
-            y_pred[sample_idx, ...].cpu().numpy().squeeze(),
+            x_[sample_idx, ...].squeeze(),
+            y_true_[sample_idx, ...].squeeze(),
+            y_pred_[sample_idx, ...].squeeze(),
         )
         fig.tight_layout()
         self._output_figure(
             fig,
-            tag=f"gnn_pred_val_sample_rstep{rollout_step:02d}_batch{batch_idx:04d}_rank0000",
+            tag=f"gnn_pred_val_sample_rstep{rollout_step:02d}_batch{batch_idx:04d}_rank0",
             exp_log_tag=f"val_pred_sample_rstep{rollout_step:02d}_rank{self.local_rank:01d}",
         )
 

@@ -38,47 +38,40 @@ LOGGER = get_logger(__name__)
 #     )
 
 
-def store_predictions(
-    predictions: torch.Tensor,
-    sample_idx: torch.Tensor,
-    config: YAMLConfig,
-) -> None:
-    plevs = config['input:pl:levels']
-    plevs.reverse()
-    pl_vars = config['input:pl:names']
-    for i in range(4):
-        for j in range(13):
-            plevs.append
-    print(sample_idx)
-    for i,idxs in enumerate(sample_idx):
-        #this is loop over batches
-        #need to add loop over batch itself            
-        print(idx)
-        if idx % 4 > 0:
-            pass
-        date = dt.datetime(2015,1,1) + dt.timedate(hours = 6 * idx)
-        filename = os.path.join(
-            "/ec/res4/scratch/pamc/era5/o160/zarr/pl",  
-            f"test_{date.strftime(format='%Y%m%d%H')}_pl.grib"
-        )
-        pl_output = cml.new_grib_output(filename)
-        print(
-            "Writing pressure levels output to %s",
-            os.path.realpath(f"{output}_pl{ext}"),
-        )
+# def store_predictions(
+#     predictions: torch.Tensor,
+#     sample_idx: torch.Tensor,
+#     config: YAMLConfig,
+# ) -> None:
+#     plevs = config["input:pl:levels"]
+#     plevs.reverse()
+#     pl_vars = config["input:pl:names"]
+#     for i in range(4):
+#         for j in range(13):
+#             plevs.append
+#     print(sample_idx)
+#     for i, idxs in enumerate(sample_idx):
+#         # this is loop over batches
+#         # need to add loop over batch itself
+#         print(idx)
+#         if idx % 4 > 0:
+#             pass
+#         date = dt.datetime(2015, 1, 1) + dt.timedate(hours=6 * idx)
+#         filename = os.path.join("/ec/res4/scratch/pamc/era5/o160/zarr/pl", f"test_{date.strftime(format='%Y%m%d%H')}_pl.grib")
+#         pl_output = cml.new_grib_output(filename)
+#         print(
+#             "Writing pressure levels output to %s",
+#             os.path.realpath(f"{output}_pl{ext}"),
+#         )
 
-        for step in range(predictions.shape[1]):
-            pl_data = predictions[i,step,:,:5*13].swapaxes(0,1)
-            metadata = {"type": "fc", "expver": "gnn0", "step": (step + 1) * 6, 
-                "date":date
-            }
-            for j,data in enumerate(pl_data):
-                my_lev = plevs[j % len(plevs)]
-                my_var = pl_vars[j // len(plevs)]
-                template_dic = dict(param=my_var,
-                    level=my_lev,levtype='pl')
-                pl_output.write(data, # template=f, 
-                metadata={**metadata,**template_dic})
+#         for step in range(predictions.shape[1]):
+#             pl_data = predictions[i, step, :, : 5 * 13].swapaxes(0, 1)
+#             metadata = {"type": "fc", "expver": "gnn0", "step": (step + 1) * 6, "date": date}
+#             for j, data in enumerate(pl_data):
+#                 my_lev = plevs[j % len(plevs)]
+#                 my_var = pl_vars[j // len(plevs)]
+#                 template_dic = dict(param=my_var, level=my_lev, levtype="pl")
+#                 pl_output.write(data, metadata={**metadata, **template_dic})  # template=f,
 
 
 #     # create a new xarray Dataset with similar coordinates as ds_test, plus the rollout
@@ -176,6 +169,7 @@ def predict(config: YAMLConfig) -> None:
 
     model = GraphForecaster(
         graph_data=graph_data,
+        metadata=dmod.input_metadata,
         fc_dim=num_fc_features,
         aux_dim=num_aux_features,
         num_levels=len(config["input:pl:levels"]),
@@ -194,7 +188,7 @@ def predict(config: YAMLConfig) -> None:
         log_to_neptune=config["model:neptune:enabled"],
         log_persistence=False,
         loss_scaling=loss_scaling,
-        pl_names=config["input:pl:names"]
+        pl_names=config["input:pl:names"],
     )
 
     ckpt_path = os.path.join(
@@ -220,7 +214,7 @@ def predict(config: YAMLConfig) -> None:
     )
 
     # run a test loop (calculates & logs test loss and metrics, returns nothing)
-    #trainer.test(model, datamodule=dmod, ckpt_path=ckpt_path, verbose=True)
+    # trainer.test(model, datamodule=dmod, ckpt_path=ckpt_path, verbose=True)
 
     # run a predict loop on a "predict" dataset (can be the same as "test" or different)
     # this returns the predictions and sample indices
@@ -240,8 +234,9 @@ def predict(config: YAMLConfig) -> None:
 
     LOGGER.debug("predictions.shape = %s", predictions.shape)
     LOGGER.debug("sample_idx.shape = %s", sample_idx.shape)
-    for p,i in zip(predictions_,sample_idx_)
-    store_predictions(p, i,config)
+    # for p, i in zip(predictions_, sample_idx_):
+    #     store_predictions(p, i, config)
+
     # *****************
     # TODO:
     # *****************

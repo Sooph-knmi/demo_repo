@@ -1,15 +1,13 @@
-import numpy as np
-
-import matplotlib.cm as cm
-import matplotlib.pyplot as plt
-from matplotlib import colors
-from matplotlib.figure import Figure
-
 import cartopy.crs as ccrs
 import cartopy.feature as cf
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib import cm
+from matplotlib.colors import TwoSlopeNorm
+from matplotlib.figure import Figure
 
+from gnn_era5.utils.constants import _IDXVARS_TO_PLOT, _NAM_VARS_TO_PLOT, _NUM_PLOTS_PER_SAMPLE, _NUM_VARS_TO_PLOT
 from gnn_era5.utils.logger import get_logger
-from gnn_era5.utils.constants import _NUM_VARS_TO_PLOT, _NUM_PLOTS_PER_SAMPLE, _IDXVARS_TO_PLOT, _NAM_VARS_TO_PLOT
 
 LOGGER = get_logger(__name__)
 
@@ -45,52 +43,35 @@ def plot_2d_sample(
     cmap = cm.bwr
     cmap.set_bad(color="gray")
 
-    pcm = ax[0].pcolormesh(truth, cmap=cmap, norm=colors.TwoSlopeNorm(vcenter=0.0))
+    pcm = ax[0].pcolormesh(truth, cmap=cmap, norm=TwoSlopeNorm(vcenter=0.0))
     ax[0].set_title(f"Truth idx={idx}")
     _hide_axes_ticks(ax[0])
     fig.colorbar(pcm, ax=ax[0])
 
-    pcm = ax[1].pcolormesh(pred, cmap=cmap, norm=colors.TwoSlopeNorm(vcenter=0.0))
+    pcm = ax[1].pcolormesh(pred, cmap=cmap, norm=TwoSlopeNorm(vcenter=0.0))
     ax[1].set_title(f"Prediction idx={idx}")
     _hide_axes_ticks(ax[1])
     fig.colorbar(pcm, ax=ax[1])
 
-    pcm = ax[2].pcolormesh(truth - pred, cmap=cmap, norm=colors.TwoSlopeNorm(vcenter=0.0))
+    pcm = ax[2].pcolormesh(truth - pred, cmap=cmap, norm=TwoSlopeNorm(vcenter=0.0))
     ax[2].set_title("Prediction error")
     _hide_axes_ticks(ax[2])
     fig.colorbar(pcm, ax=ax[2])
 
-    pcm = ax[3].pcolormesh(input_, cmap=cmap, norm=colors.TwoSlopeNorm(vcenter=0.0))
+    pcm = ax[3].pcolormesh(input_, cmap=cmap, norm=TwoSlopeNorm(vcenter=0.0))
     ax[3].set_title("Input")
     _hide_axes_ticks(ax[3])
     fig.colorbar(pcm, ax=ax[3])
 
-    pcm = ax[4].pcolormesh(pred - input_, cmap=cmap, norm=colors.TwoSlopeNorm(vcenter=0.0))
+    pcm = ax[4].pcolormesh(pred - input_, cmap=cmap, norm=TwoSlopeNorm(vcenter=0.0))
     ax[4].set_title("Increment [Pred - Input]")
     _hide_axes_ticks(ax[4])
     fig.colorbar(pcm, ax=ax[4])
 
-    pcm = ax[5].pcolormesh(truth - input_, cmap=cmap, norm=colors.TwoSlopeNorm(vcenter=0.0))
+    pcm = ax[5].pcolormesh(truth - input_, cmap=cmap, norm=TwoSlopeNorm(vcenter=0.0))
     ax[5].set_title("Persistence error")
     _hide_axes_ticks(ax[5])
     fig.colorbar(pcm, ax=ax[5])
-
-
-def plot_2d(
-    fig,
-    ax,
-    array: np.ndarray,
-    truth: np.ndarray,
-    pred: np.ndarray,
-    idx: int,
-) -> None:
-    cmap = cm.bwr
-    cmap.set_bad(color="gray")
-
-    pcm = ax[0].pcolormesh(truth, cmap=cmap, norm=colors.TwoSlopeNorm(vcenter=0.0))
-    ax[0].set_title(f"Loss idx={idx}")
-    _hide_axes_ticks(ax[0])
-    fig.colorbar(pcm, ax=ax[0])
 
 
 def plot_predicted_multilevel_sample(
@@ -189,15 +170,15 @@ def plot_flat_sample(
 
     lat, lon = latlons[:, 0], latlons[:, 1]
 
-    scatter_plot(fig, ax[0], pc, lat, lon, truth, title=f"{vname} target")
-    scatter_plot(fig, ax[1], pc, lat, lon, pred, title=f"{vname} pred")
-    scatter_plot(fig, ax[2], pc, lat, lon, truth - pred, title=f"{vname} pred err")
-    scatter_plot(fig, ax[3], pc, lat, lon, input_, title=f"{vname} input")
-    scatter_plot(fig, ax[4], pc, lat, lon, pred - input_, title=f"{vname} increment [pred - input]")
-    scatter_plot(fig, ax[5], pc, lat, lon, truth - input_, title=f"{vname} persist err")
+    scatter_plot(fig, ax[0], pc, lat, lon, input_, title=f"{vname} input")
+    scatter_plot(fig, ax[1], pc, lat, lon, truth, title=f"{vname} target")
+    scatter_plot(fig, ax[2], pc, lat, lon, pred, title=f"{vname} pred")
+    scatter_plot(fig, ax[3], pc, lat, lon, truth - pred, cmap="bwr", title=f"{vname} pred err")
+    scatter_plot(fig, ax[4], pc, lat, lon, pred - input_, cmap="bwr", title=f"{vname} increment [pred - input]")
+    scatter_plot(fig, ax[5], pc, lat, lon, truth - input_, cmap="bwr", title=f"{vname} persist err")
 
 
-def scatter_plot(fig, ax, pc, lat, lon, x, title=None) -> None:
+def scatter_plot(fig, ax, pc, lat, lon, x, cmap="viridis", title=None) -> None:
     """Lat-lon scatter plot: can work with arbitrary grids."""
     ax.set_global()
     ax.add_feature(cf.COASTLINE, edgecolor="black", linewidth=0.5)
@@ -206,11 +187,11 @@ def scatter_plot(fig, ax, pc, lat, lon, x, title=None) -> None:
         x=lon,
         y=lat,
         c=x,
-        cmap="bwr",
+        cmap=cmap,
         s=1,
         alpha=1.0,
         transform=pc,
-        norm=colors.TwoSlopeNorm(vcenter=0.0),
+        norm=TwoSlopeNorm(vcenter=0.0) if cmap == "bwr" else None,
     )
     if title is not None:
         ax.set_title(title)
