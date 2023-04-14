@@ -139,9 +139,9 @@ def gen_mlp(
     else:
         try:
             act_func = getattr(nn, activation_func)
-        except:
-            print(f"Activation function {activation_func} not supported")
-            raise
+        except AttributeError as ae:
+            LOGGER.error("Activation function %s not supported", activation_func)
+            raise RuntimeError from ae
 
     mlp1 = nn.Sequential(
         nn.Linear(in_features, hidden_dim),
@@ -162,7 +162,7 @@ class GaussianActivation(nn.Module):
         self.alpha = alpha
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.exp(-0.5 * x ** 2.0 / self.alpha ** 2.0)
+        return torch.exp(-0.5 * x**2.0 / self.alpha**2.0)
 
 
 class MessagePassingNodeEmbedder(nn.Module):
@@ -292,61 +292,6 @@ class CheckpointWrapper(nn.Module):
 
     def forward(self, *args):
         return checkpoint(self.module, *args, use_reentrant=False)
-
-
-# class EdgePoolEncoder(nn.Module):
-#     def __init__(
-#         self,
-#         in_channels: int,
-#         out_channels: int = 16,
-#         num_layers: int = 2,
-#         hidden_channels: int = 16,
-#         num_heads: int = 2,
-#         dropout: float = 0.0,
-#         activation: Optional[str] = "gelu",
-#         jk_mode: Optional[str] = "last",
-#     ) -> None:
-#         super().__init__()
-
-#         # we need to pool otherwise memory consumption will be large
-#         # OK to use dropout? the EdgePooling paper reports good results with dropout = 0.2
-#         self.pool = tgnn.EdgePooling(in_channels=in_channels, edge_score_method=tgnn.EdgePooling.compute_edge_score_softmax)
-
-#         self.encoder = GATEncoder(
-#             num_layers=num_layers,
-#             in_channels=in_channels,
-#             hidden_channels=hidden_channels,
-#             out_channels=out_channels,
-#             num_heads=num_heads,
-#             dropout=dropout,
-#             activation=activation,
-#             jk_mode=jk_mode,
-#         )
-
-#     def forward(
-#         self,
-#         x: torch.Tensor,
-#         edge_index: torch.Tensor,
-#         edge_attr: torch.Tensor,
-#         batch_size: int,
-#     ) -> torch.Tensor:
-#         del edge_attr  # not used
-
-#         # x is on ERA grid
-#         batch_nodes = torch.cat(
-#             [torch.ones(x.shape[0] // batch_size, dtype=torch.int64, device=x.device) * b for b in range(batch_size)]
-#         )
-
-#         # pool first
-#         x_pool, edge_pool, _, unpool_info = self.pool(x=x, edge_index=edge_index, batch=batch_nodes)
-
-#         # transform
-#         x_trans = self.encoder(x_pool, edge_pool)
-
-#         # unpool
-#         x_res, _, _ = self.pool.unpool(x_trans, unpool_info)
-
-#         return x_res
 
 
 if __name__ == "__main__":

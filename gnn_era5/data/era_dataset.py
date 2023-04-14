@@ -27,6 +27,7 @@ class ERA5NativeGridDataset(IterableDataset):
         rollout: int = 4,
         rank: int = 0,
         world_size: int = 1,
+        shuffle: bool = True,
     ) -> None:
         """
         Initialize (part of) the dataset state.
@@ -72,6 +73,7 @@ class ERA5NativeGridDataset(IterableDataset):
         # additional state vars (lazy init)
         self.n_samples_per_worker = 0
         self.chunk_index_range: Optional[np.ndarray] = None
+        self.shuffle = shuffle
 
     def per_worker_init(self, n_workers: int, worker_id: int) -> None:
         """Called by worker_init_func on each copy of WeatherBenchDataset after the worker process has been spawned."""
@@ -109,7 +111,10 @@ class ERA5NativeGridDataset(IterableDataset):
 
     def __iter__(self):
         # this needs to happen at the start of every epoch
-        shuffled_chunk_indices = self.rng.choice(self.chunk_index_range, size=self.n_samples_per_worker, replace=False)
+        if self.shuffle:
+            shuffled_chunk_indices = self.rng.choice(self.chunk_index_range, size=self.n_samples_per_worker, replace=False)
+        else:
+            shuffled_chunk_indices = self.chunk_index_range
 
         for i in shuffled_chunk_indices:
             start, end = i, i + (self.rollout + 1) * self.lead_step
@@ -128,7 +133,7 @@ class ERA5NativeGridDataset(IterableDataset):
             # X = np.concatenate([X3d, X2d], axis=-1)
             LOGGER.debug("Worker PID %d produced a sample of size %s", os.getpid(), X.shape)
 
-            yield (torch.from_numpy(X), start)
+            yield torch.from_numpy(X)
 
     def __repr__(self) -> str:
         return f"""
@@ -153,59 +158,59 @@ def worker_init_func(worker_id: int) -> None:
     )
 
 
-if __name__ == "__main__":
-    from torch.utils.data import DataLoader
+# if __name__ == "__main__":
+#     from torch.utils.data import DataLoader
 
-    from gnn_era5.data.era_datamodule import era_batch_collator, read_2d_era_data, read_3d_era_data
-    from gnn_era5.utils.config import YAMLConfig
+#     from gnn_era5.data.era_datamodule import era_batch_collator, read_2d_era_data, read_3d_era_data
+#     from gnn_era5.utils.config import YAMLConfig
 
-    _ROLLOUT = 2
-    config = YAMLConfig("/perm/pamc/software/gnn-era5/gnn_era5/config/atos96.yaml")
+#     _ROLLOUT = 2
+#     config = YAMLConfig("/perm/pamc/software/gnn-era5/gnn_era5/config/atos96.yaml")
 
-    def get_data_filename(type_: str, cfg_: YAMLConfig) -> str:
-        # type == [pl | sfc]
-        return os.path.join(
-            cfg_[f"input:{type_}:validation:basedir"].format(resolution=cfg_["input:resolution"]),
-            cfg_[f"input:{type_}:validation:filename"].format(resolution=cfg_["input:resolution"]),
-        )
+#     def get_data_filename(type_: str, cfg_: YAMLConfig) -> str:
+#         # type == [pl | sfc]
+#         return os.path.join(
+#             cfg_[f"input:{type_}:validation:basedir"].format(resolution=cfg_["input:resolution"]),
+#             cfg_[f"input:{type_}:validation:filename"].format(resolution=cfg_["input:resolution"]),
+#         )
 
-    # dummy normalizers
-    def normalize_era_data(data: np.ndarray) -> np.ndarray:
-        return data
+#     # dummy normalizers
+#     def normalize_era_data(data: np.ndarray) -> np.ndarray:
+#         return data
 
-    # def normalize_3d_era_data(data: np.ndarray) -> np.ndarray:
-    #    return data
+#     # def normalize_3d_era_data(data: np.ndarray) -> np.ndarray:
+#     #    return data
 
-    era5_ds = ERA5NativeGridDataset(
-        fname=get_data_filename("sfc", config),
-        # fname_3d=get_data_filename("pl", config),
-        era_data_reader=read_era_data,
-        # era_3d_data_reader=read_3d_era_data,
-        era_data_normalizer=normalize_era_data,
-        # era_3d_data_normalizer=normalize_3d_era_data,
-        lead_time=config["model:lead-time"],
-        rollout=_ROLLOUT,
-        rank=int(os.environ.get("LOCAL_RANK", "0")),
-        world_size=config["model:num-gpus"] * config["model:num-nodes"],
-    )
+#     era5_ds = ERA5NativeGridDataset(
+#         fname=get_data_filename("sfc", config),
+#         # fname_3d=get_data_filename("pl", config),
+#         era_data_reader=read_era_data,
+#         # era_3d_data_reader=read_3d_era_data,
+#         era_data_normalizer=normalize_era_data,
+#         # era_3d_data_normalizer=normalize_3d_era_data,
+#         lead_time=config["model:lead-time"],
+#         rollout=_ROLLOUT,
+#         rank=int(os.environ.get("LOCAL_RANK", "0")),
+#         world_size=config["model:num-gpus"] * config["model:num-nodes"],
+#     )
 
-    era5_dl = DataLoader(
-        era5_ds,
-        batch_size=8,
-        num_workers=8,
-        collate_fn=era_batch_collator,
-        # worker initializer
-        worker_init_fn=worker_init_func,
-        # prefetch batches (default prefetch_factor == 2)
-        prefetch_factor=_DL_PREFETCH_FACTOR,
-        persistent_workers=True,
-    )
+#     era5_dl = DataLoader(
+#         era5_ds,
+#         batch_size=8,
+#         num_workers=8,
+#         collate_fn=era_batch_collator,
+#         # worker initializer
+#         worker_init_fn=worker_init_func,
+#         # prefetch batches (default prefetch_factor == 2)
+#         prefetch_factor=_DL_PREFETCH_FACTOR,
+#         persistent_workers=True,
+#     )
 
-    # simple dataloader speed test
-    for idx_batch, batch in enumerate(era5_dl):
-        LOGGER.info("Batch index: %d - X.shape: %s idx: %s", idx_batch, batch.X.shape, batch.idx)
-        assert len(batch) == (_ROLLOUT + 1)
-        for r in range(len(batch)):
-            LOGGER.debug("Rollout step %d: batch.X.shape = %s", r, batch.X[:, r, ...].shape)
-        if idx_batch > 16:
-            break
+#     # simple dataloader speed test
+#     for idx_batch, batch in enumerate(era5_dl):
+#         LOGGER.info("Batch index: %d - X.shape: %s idx: %s", idx_batch, batch.X.shape, batch.idx)
+#         assert len(batch) == (_ROLLOUT + 1)
+#         for r in range(len(batch)):
+#             LOGGER.debug("Rollout step %d: batch.X.shape = %s", r, batch.X[:, r, ...].shape)
+#         if idx_batch > 16:
+#             break
