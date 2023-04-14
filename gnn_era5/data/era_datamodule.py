@@ -113,14 +113,9 @@ class ERA5TestDataModule(pl.LightningDataModule):
         return DataLoader(
             ds,
             batch_size=batch_size,
-            # number of worker processes
             num_workers=num_workers,
-            # use of pinned memory can speed up CPU-to-GPU data transfers
-            # see https://pytorch.org/docs/stable/notes/cuda.html#cuda-memory-pinning
             pin_memory=True,
-            # worker initializer
             worker_init_fn=worker_init_func,
-            # prefetch batches (default prefetch_factor == 2)
             prefetch_factor=_DL_PREFETCH_FACTOR,
             persistent_workers=True,
         )

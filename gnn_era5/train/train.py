@@ -42,7 +42,7 @@ def train(config: YAMLConfig) -> None:
     for scl in config["input:loss-scaling-sfc"]:
         loss_scaling = np.append(loss_scaling, [scl])
     assert len(loss_scaling) == num_fc_features
-    LOGGER.debug("Loss scaling: %s", loss_scaling)
+    # LOGGER.debug("Loss scaling: %s", loss_scaling)
     loss_scaling = torch.from_numpy(loss_scaling)
 
     LOGGER.debug("Total number of prognostic variables: %d", num_fc_features)
@@ -57,10 +57,6 @@ def train(config: YAMLConfig) -> None:
     graph_data = torch.load(
         os.path.join(config["graph:data-basedir"], config["graph:data-file"].format(resolution=config["input:resolution"]))
     )
-
-    # TODO: revisit this?
-    # all weights = 1
-    # var_dt_sigma = np.ones(len(config["input:variables:names"]) * len(config["input:variables:levels"]))
 
     model = GraphForecaster(
         graph_data=graph_data,

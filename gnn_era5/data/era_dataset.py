@@ -39,9 +39,6 @@ class ERA5NativeGridDataset(IterableDataset):
             world_size: total number of processes (nodes * GPUs_per_node) in the torch.distributed context
         """
         self.fname = fname
-        # self.fname_3d = fname_3d
-
-        # self.ds_3d: Optional[Array] = None
         self.ds: Optional[Array] = None
 
         self.lead_time = lead_time
@@ -120,6 +117,8 @@ class ERA5NativeGridDataset(IterableDataset):
             X = rearrange(X, "r var latlon -> r latlon var")
             LOGGER.debug("Worker PID %d produced a sample of size %s", os.getpid(), X.shape)
 
+            assert np.all(np.isfinite(X)), "Invalid values in raw input tensor!!!"
+
             yield torch.from_numpy(X)
 
     def __repr__(self) -> str:
@@ -147,11 +146,11 @@ def worker_init_func(worker_id: int) -> None:
 if __name__ == "__main__":
     from torch.utils.data import DataLoader
 
-    from gnn_era5.data.era_datamodule import read_era_data
+    from gnn_era5.data.era_readers import read_era_data
     from gnn_era5.utils.config import YAMLConfig
 
     _ROLLOUT = 2
-    config = YAMLConfig("/perm/pamc/software/gnn-era5/gnn_era5/config/atos.yaml")
+    config = YAMLConfig("/home/syma/GNN/gnn-era5.git/gnn_era5/config/atos.yaml")
 
     def _get_data_filename(stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation]

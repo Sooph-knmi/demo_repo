@@ -135,8 +135,8 @@ model:
   # runs only N training batches [N = integer | null]
   # if null then we run through all the batches
   limit-batches:
-    training: null
-    validation: null
+    training: 1000 # null
+    validation: 250 # null
     test: 20
     predict: 20
 
@@ -145,12 +145,12 @@ model:
   strategy: auto
 
   # number of GPUs per node and number of nodes (for DDP)
-  num-gpus: 4
+  num-gpus: 1
   num-nodes: 1
 
   # training settings
   lead-time: 6
-  max-epochs: 50
+  max-epochs: 5
   learn-rate: 1.25e-4
 
   # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
