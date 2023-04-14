@@ -170,10 +170,10 @@ def plot_flat_sample(
 
     lat, lon = latlons[:, 0], latlons[:, 1]
 
-    scatter_plot(fig, ax[0], pc, lat, lon, truth, title=f"{vname} target")
-    scatter_plot(fig, ax[1], pc, lat, lon, pred, title=f"{vname} pred")
-    scatter_plot(fig, ax[2], pc, lat, lon, truth - pred, cmap="bwr", title=f"{vname} pred err")
-    scatter_plot(fig, ax[3], pc, lat, lon, input_, title=f"{vname} input")
+    scatter_plot(fig, ax[0], pc, lat, lon, input_, title=f"{vname} input")
+    scatter_plot(fig, ax[1], pc, lat, lon, truth, title=f"{vname} target")
+    scatter_plot(fig, ax[2], pc, lat, lon, pred, title=f"{vname} pred")
+    scatter_plot(fig, ax[3], pc, lat, lon, truth - pred, cmap="bwr", title=f"{vname} pred err")
     scatter_plot(fig, ax[4], pc, lat, lon, pred - input_, cmap="bwr", title=f"{vname} increment [pred - input]")
     scatter_plot(fig, ax[5], pc, lat, lon, truth - input_, cmap="bwr", title=f"{vname} persist err")
 
