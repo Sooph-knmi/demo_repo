@@ -10,7 +10,6 @@ from torch_geometric.data import HeteroData
 import wandb
 from gnn_era5.architecture.losses import WeightedMSELoss
 from gnn_era5.architecture.msg import GraphMSG
-from gnn_era5.data.era_datamodule import ERA5DataBatch
 from gnn_era5.utils.logger import get_logger
 from gnn_era5.utils.plots import plot_predicted_multilevel_flat_sample, init_plot_settings, plot_loss
 
