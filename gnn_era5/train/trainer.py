@@ -127,7 +127,7 @@ class GraphForecaster(pl.LightningModule):
 
         return train_loss
 
-    def validation_step(self, batch: ERA5DataBatch, batch_idx: int) -> torch.Tensor:
+    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         val_loss, persist_loss, metrics = self._shared_eval_step(batch, batch_idx)
         self.log(
             "val_wmse",
@@ -162,7 +162,7 @@ class GraphForecaster(pl.LightningModule):
             )
         return val_loss
 
-    def test_step(self, batch: ERA5DataBatch, batch_idx: int) -> torch.Tensor:
+    def test_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         test_loss, persist_loss, _ = self._shared_eval_step(batch, batch_idx)
         self.log(
             "test_wmse",
