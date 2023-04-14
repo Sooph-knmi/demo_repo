@@ -11,7 +11,6 @@ import wandb
 from gnn_era5.architecture.losses import WeightedMSELoss
 from gnn_era5.data.era_normalizers import InputNormalizer
 from gnn_era5.architecture.msg import GraphMSG
-from gnn_era5.data.era_datamodule import ERA5DataBatch
 from gnn_era5.utils.logger import get_logger
 from gnn_era5.utils.plots import plot_predicted_multilevel_flat_sample, init_plot_settings, plot_loss
 
@@ -88,16 +87,16 @@ class GraphForecaster(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.gnn(x)
 
-    def training_step(self, batch: ERA5DataBatch, batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         del batch_idx  # not used
-        train_loss = torch.zeros(1, dtype=batch.X.dtype, device=self.device, requires_grad=False)
-        persist_loss = torch.zeros(1, dtype=batch.X.dtype, device=self.device, requires_grad=False)  # persistence
-        batch.X = self.normalizer(batch.X)  # normalized in-place
+        train_loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
+        persist_loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)  # persistence
+        batch = self.normalizer(batch)  # normalized in-place
         # start rollout
-        x = batch.X[:, 0, ...]
+        x = batch[:, 0, ...]
         for rstep in range(self.rollout):
             y_hat = self(x)  # prediction at rollout step rstep
-            y = batch.X[:, rstep + 1, ...]  # target
+            y = batch[:, rstep + 1, ...]  # target
             # y includes the auxiliary variables, so we must leave those out when computing the loss
             train_loss += self.loss(y_hat, y[..., : self.feature_dim])
             persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
@@ -116,7 +115,7 @@ class GraphForecaster(pl.LightningModule):
             on_step=True,
             prog_bar=True,
             logger=True,
-            batch_size=batch.X.shape[0],
+            batch_size=batch.shape[0],
             sync_dist=True,
         )
         if self.log_persistence:
@@ -127,13 +126,13 @@ class GraphForecaster(pl.LightningModule):
                 on_step=True,
                 prog_bar=False,
                 logger=True,
-                batch_size=batch.X.shape[0],
+                batch_size=batch.shape[0],
                 sync_dist=True,
             )
 
         return train_loss
 
-    def validation_step(self, batch: ERA5DataBatch, batch_idx: int) -> torch.Tensor:
+    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         val_loss, persist_loss, metrics = self._shared_eval_step(batch, batch_idx)
         self.log(
             "val_wmse",
@@ -142,7 +141,7 @@ class GraphForecaster(pl.LightningModule):
             on_step=True,
             prog_bar=True,
             logger=True,
-            batch_size=batch.X.shape[0],
+            batch_size=batch.shape[0],
             sync_dist=True,
         )
         if self.log_persistence:
@@ -153,7 +152,7 @@ class GraphForecaster(pl.LightningModule):
                 on_step=True,
                 prog_bar=True,
                 logger=True,
-                batch_size=batch.X.shape[0],
+                batch_size=batch.shape[0],
                 sync_dist=True,
             )
         for mname, mvalue in metrics.items():
@@ -163,12 +162,12 @@ class GraphForecaster(pl.LightningModule):
                 on_epoch=True,
                 on_step=False,
                 logger=True,
-                batch_size=batch.X.shape[0],
+                batch_size=batch.shape[0],
                 sync_dist=True,
             )
         return val_loss
 
-    def test_step(self, batch: ERA5DataBatch, batch_idx: int) -> torch.Tensor:
+    def test_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         test_loss, persist_loss, _ = self._shared_eval_step(batch, batch_idx)
         self.log(
             "test_wmse",
@@ -177,7 +176,7 @@ class GraphForecaster(pl.LightningModule):
             on_step=True,
             prog_bar=True,
             logger=True,
-            batch_size=batch.X.shape[0],
+            batch_size=batch.shape[0],
             sync_dist=True,
         )
 
@@ -189,36 +188,39 @@ class GraphForecaster(pl.LightningModule):
                 on_step=True,
                 prog_bar=True,
                 logger=True,
-                batch_size=batch.X.shape[0],
+                batch_size=batch.shape[0],
                 sync_dist=True,
             )
         return test_loss
 
-    def predict_step(self, batch: ERA5DataBatch, batch_idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def predict_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         del batch_idx  # not used
-        batch.X = self.normalizer(batch.X)
+        batch = self.normalizer(batch)
 
         preds: List[torch.Tensor] = []
         with torch.no_grad():
             # start rollout
-            x = batch.X[:, 0, ...]
-            for _ in range(self.rollout):
-                y_hat = self(x)
-                x[..., : self.feature_dim] = y_hat
-                preds.append(y_hat)
-        return torch.stack(preds, dim=-1), batch.idx  # stack along new last dimension, return sample indices too
-
-    def _shared_eval_step(self, batch: ERA5DataBatch, batch_idx: int) -> Tuple[Union[torch.Tensor, Dict], ...]:
-        plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
-        batch.X = self.normalizer(batch.X)
-        metrics = {}
-        with torch.no_grad():
-            loss = torch.zeros(1, dtype=batch.X.dtype, device=self.device, requires_grad=False)
-            persist_loss = torch.zeros(1, dtype=batch.X.dtype, device=self.device, requires_grad=False)  # persistence loss
-            x = batch.X[:, 0, ...]
+            x = batch[:, 0, ...]
             for rstep in range(self.rollout):
                 y_hat = self(x)
-                y = batch.X[:, rstep + 1, ...]
+                x[..., : self.feature_dim] = y_hat
+                if rstep + 1 < self.rollout:
+                    # get new "constants" needed for time-varying fields
+                    x[..., self.feature_dim :] = batch[:, rstep + 1, :, self.feature_dim :]
+                preds.append(y_hat)
+        return torch.stack(preds, dim=-1)  # stack along new last dimension, return sample indices too
+
+    def _shared_eval_step(self, batch: torch.Tensor, batch_idx: int) -> Tuple[Union[torch.Tensor, Dict], ...]:
+        plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
+        batch = self.normalizer(batch)
+        metrics = {}
+        with torch.no_grad():
+            loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
+            persist_loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)  # persistence loss
+            x = batch[:, 0, ...]
+            for rstep in range(self.rollout):
+                y_hat = self(x)
+                y = batch[:, rstep + 1, ...]
                 loss += self.loss(y_hat, y[..., : self.feature_dim])
                 persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
                 for mkey, mranges in self.metric_ranges.items():
@@ -228,6 +230,8 @@ class GraphForecaster(pl.LightningModule):
                     self._plot_loss(y_hat, y[..., : self.feature_dim], rollout_step=rstep)
                     self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)
                 x[..., : self.feature_dim] = y_hat
+                # get new "constants" needed for time-varying fields
+                x[..., self.feature_dim :] = y[..., self.feature_dim :]
             loss *= 1.0 / self.rollout
             persist_loss *= 1.0 / self.rollout
         return loss, persist_loss, metrics

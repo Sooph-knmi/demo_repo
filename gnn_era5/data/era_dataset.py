@@ -26,6 +26,7 @@ class ERA5NativeGridDataset(IterableDataset):
         rollout: int = 4,
         rank: int = 0,
         world_size: int = 1,
+        shuffle: bool = True,
     ) -> None:
         """
         Initialize (part of) the dataset state.
@@ -67,6 +68,7 @@ class ERA5NativeGridDataset(IterableDataset):
         # additional state vars (lazy init)
         self.n_samples_per_worker = 0
         self.chunk_index_range: Optional[np.ndarray] = None
+        self.shuffle = shuffle
 
     def per_worker_init(self, n_workers: int, worker_id: int) -> None:
         """Called by worker_init_func on each copy of WeatherBenchDataset after the worker process has been spawned."""
@@ -99,7 +101,10 @@ class ERA5NativeGridDataset(IterableDataset):
 
     def __iter__(self):
         # this needs to happen at the start of every epoch
-        shuffled_chunk_indices = self.rng.choice(self.chunk_index_range, size=self.n_samples_per_worker, replace=False)
+        if self.shuffle:
+            shuffled_chunk_indices = self.rng.choice(self.chunk_index_range, size=self.n_samples_per_worker, replace=False)
+        else:
+            shuffled_chunk_indices = self.chunk_index_range
 
         for i in shuffled_chunk_indices:
             start, end = i, i + (self.rollout + 1) * self.lead_step
@@ -115,7 +120,7 @@ class ERA5NativeGridDataset(IterableDataset):
             X = rearrange(X, "r var latlon -> r latlon var")
             LOGGER.debug("Worker PID %d produced a sample of size %s", os.getpid(), X.shape)
 
-            yield (torch.from_numpy(X), start)
+            yield torch.from_numpy(X)
 
     def __repr__(self) -> str:
         return f"""
@@ -142,7 +147,7 @@ def worker_init_func(worker_id: int) -> None:
 if __name__ == "__main__":
     from torch.utils.data import DataLoader
 
-    from gnn_era5.data.era_datamodule import era_batch_collator, read_era_data
+    from gnn_era5.data.era_datamodule import read_era_data
     from gnn_era5.utils.config import YAMLConfig
 
     _ROLLOUT = 2
@@ -168,19 +173,16 @@ if __name__ == "__main__":
         era5_ds,
         batch_size=8,
         num_workers=8,
-        collate_fn=era_batch_collator,
-        # worker initializer
         worker_init_fn=worker_init_func,
-        # prefetch batches (default prefetch_factor == 2)
         prefetch_factor=_DL_PREFETCH_FACTOR,
         persistent_workers=True,
     )
 
     # simple dataloader speed test
     for idx_batch, batch in enumerate(era5_dl):
-        LOGGER.info("Batch index: %d - X.shape: %s idx: %s", idx_batch, batch.X.shape, batch.idx)
-        assert len(batch) == (_ROLLOUT + 1)
-        for r in range(len(batch)):
-            LOGGER.debug("Rollout step %d: batch.X.shape = %s", r, batch.X[:, r, ...].shape)
-        if idx_batch > 16:
+        LOGGER.info("Batch index: %d - shape: %s", idx_batch, batch.shape)
+        assert batch.shape[1] == (_ROLLOUT + 1)
+        for r in range(batch.shape[1]):
+            LOGGER.debug("Rollout step %d: batch.shape = %s", r, batch[:, r, ...].shape)
+        if idx_batch > 4:
             break

@@ -139,9 +139,9 @@ def gen_mlp(
     else:
         try:
             act_func = getattr(nn, activation_func)
-        except:
-            print(f"Activation function {activation_func} not supported")
-            raise
+        except AttributeError as ae:
+            LOGGER.error("Activation function %s not supported", activation_func)
+            raise RuntimeError from ae
 
     mlp1 = nn.Sequential(
         nn.Linear(in_features, hidden_dim),
