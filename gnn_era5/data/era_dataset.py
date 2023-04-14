@@ -116,9 +116,6 @@ class ERA5NativeGridDataset(IterableDataset):
             X = self.ds[start : end : self.lead_step]
             X = rearrange(X, "r var latlon -> r latlon var")
             LOGGER.debug("Worker PID %d produced a sample of size %s", os.getpid(), X.shape)
-
-            assert np.all(np.isfinite(X)), "Invalid values in raw input tensor!!!"
-
             yield torch.from_numpy(X)
 
     def __repr__(self) -> str:
