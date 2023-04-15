@@ -25,6 +25,7 @@ class GraphMSG(nn.Module):
         encoder_hidden_channels: int,
         encoder_out_channels: int,
         activation: str,
+        mlp_extra_layers: int = 0,
         encoder_mapper_num_layers: int = 1,
         act_checkpoints: bool = True,
     ) -> None:
@@ -88,6 +89,7 @@ class GraphMSG(nn.Module):
         self.node_era_embedder = MessagePassingNodeEmbedder(
             in_channels=in_channels + aux_in_channels + self.pos_channels,
             latent_dim=encoder_out_channels,
+            mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             checkpoints=act_checkpoints,
         )
@@ -95,6 +97,7 @@ class GraphMSG(nn.Module):
         self.node_h_embedder = MessagePassingNodeEmbedder(
             in_channels=4,
             latent_dim=encoder_out_channels,
+            mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             checkpoints=act_checkpoints,
         )  # position channels only
@@ -104,6 +107,7 @@ class GraphMSG(nn.Module):
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             edge_dim=3,
+            mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             checkpoints=act_checkpoints,
         )
@@ -112,6 +116,7 @@ class GraphMSG(nn.Module):
             hidden_dim=encoder_hidden_channels,
             hidden_layers=encoder_num_layers,
             edge_dim=3,
+            mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             checkpoints=act_checkpoints,
         )
@@ -121,6 +126,7 @@ class GraphMSG(nn.Module):
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             edge_dim=3,
+            mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             checkpoints=act_checkpoints,
         )
@@ -129,6 +135,7 @@ class GraphMSG(nn.Module):
         self.node_era_extractor = MessagePassingNodeExtractor(
             latent_dim=encoder_out_channels,
             out_channels=in_channels,
+            mlp_extra_layers=mlp_extra_layers + 1, # add decoder head
             activation=activation,
             checkpoints=act_checkpoints,
         )

@@ -171,6 +171,7 @@ model:
     activation: SiLU
     num-hidden-channels: 256
     num-out-channels: 256
+    mlp-extra-layers: 0
     dropout: 0.
 
   # length of the "rollout" window (see Keisler's paper)
