@@ -135,7 +135,7 @@ class GraphMSG(nn.Module):
         self.node_era_extractor = MessagePassingNodeExtractor(
             latent_dim=encoder_out_channels,
             out_channels=in_channels,
-            mlp_extra_layers=mlp_extra_layers + 1, # add decoder head
+            mlp_extra_layers=mlp_extra_layers + 1,  # add decoder head
             activation=activation,
             checkpoints=act_checkpoints,
         )

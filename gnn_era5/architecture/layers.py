@@ -170,7 +170,9 @@ class GaussianActivation(nn.Module):
 
 
 class MessagePassingNodeEmbedder(nn.Module):
-    def __init__(self, in_channels: int, latent_dim: int, mlp_extra_layers: int = 0, activation: str = "SiLU", checkpoints: bool = True) -> None:
+    def __init__(
+        self, in_channels: int, latent_dim: int, mlp_extra_layers: int = 0, activation: str = "SiLU", checkpoints: bool = True
+    ) -> None:
         super().__init__()
         self.node_emb = gen_mlp(
             in_features=in_channels,
@@ -187,7 +189,9 @@ class MessagePassingNodeEmbedder(nn.Module):
 
 
 class MessagePassingNodeExtractor(nn.Module):
-    def __init__(self, latent_dim: int, out_channels: int, mlp_extra_layers: int = 0, activation: str = "SiLU", checkpoints: bool = False) -> None:
+    def __init__(
+        self, latent_dim: int, out_channels: int, mlp_extra_layers: int = 0, activation: str = "SiLU", checkpoints: bool = False
+    ) -> None:
         super().__init__()
         self.node_ext = gen_mlp(
             in_features=latent_dim,
@@ -206,7 +210,13 @@ class MessagePassingNodeExtractor(nn.Module):
 
 class MessagePassingMapper(nn.Module):
     def __init__(
-        self, hidden_dim: int, edge_dim: int, hidden_layers: int, mlp_extra_layers: int = 0, activation: str = "SiLU", checkpoints: bool = True
+        self,
+        hidden_dim: int,
+        edge_dim: int,
+        hidden_layers: int,
+        mlp_extra_layers: int = 0,
+        activation: str = "SiLU",
+        checkpoints: bool = True,
     ) -> None:
         super().__init__()
 
@@ -236,7 +246,13 @@ class MessagePassingMapper(nn.Module):
 
 class MessagePassingProcessor(nn.Module):
     def __init__(
-        self, hidden_dim: int, edge_dim: int, hidden_layers: int, mlp_extra_layers: int = 0, activation: str = "SiLU", checkpoints: bool = True
+        self,
+        hidden_dim: int,
+        edge_dim: int,
+        hidden_layers: int,
+        mlp_extra_layers: int = 0,
+        activation: str = "SiLU",
+        checkpoints: bool = True,
     ) -> None:
         super().__init__()
 
@@ -263,11 +279,33 @@ class MessagePassingProcessor(nn.Module):
 
 
 class MessagePassingBlock(MessagePassing):
-    def __init__(self, in_channels: int, out_channels: int, mlp_extra_layers: int = 0, activation: str = "SiLU", checkpoints: bool = True, **kwargs) -> None:
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        mlp_extra_layers: int = 0,
+        activation: str = "SiLU",
+        checkpoints: bool = True,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
 
-        self.node_mlp = gen_mlp(2 * in_channels, out_channels, out_channels, n_extra_layers=mlp_extra_layers, activation_func=activation, checkpoints=checkpoints)
-        self.edge_mlp = gen_mlp(3 * in_channels, out_channels, out_channels, n_extra_layers=mlp_extra_layers, activation_func=activation, checkpoints=checkpoints)
+        self.node_mlp = gen_mlp(
+            2 * in_channels,
+            out_channels,
+            out_channels,
+            n_extra_layers=mlp_extra_layers,
+            activation_func=activation,
+            checkpoints=checkpoints,
+        )
+        self.edge_mlp = gen_mlp(
+            3 * in_channels,
+            out_channels,
+            out_channels,
+            n_extra_layers=mlp_extra_layers,
+            activation_func=activation,
+            checkpoints=checkpoints,
+        )
 
     def forward(self, x, edge_index, edge_attr, size=None) -> Tuple[torch.Tensor, torch.Tensor]:
         out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size)
