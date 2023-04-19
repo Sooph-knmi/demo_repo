@@ -81,6 +81,7 @@ def train(config: YAMLConfig) -> None:
         log_persistence=False,
         loss_scaling=loss_scaling,
         pl_names=config["input:pl:names"],
+        metric_names=config["metrics"],
     )
 
     if config["model:compile"]:

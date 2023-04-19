@@ -42,6 +42,7 @@ class GraphForecaster(pl.LightningModule):
         log_persistence: bool = False,
         loss_scaling: Optional[torch.Tensor] = None,
         pl_names: Optional[List] = None,
+        metric_names: Optional[List] = None,
     ) -> None:
         super().__init__()
 
@@ -73,6 +74,9 @@ class GraphForecaster(pl.LightningModule):
         self.metric_ranges = {}
         for i, key in enumerate(pl_names):
             self.metric_ranges[key] = [i * num_levels, (i + 1) * num_levels]
+        for key in metric_names:
+            idx = metadata["name_to_index"][key]
+            self.metric_ranges[key] = [idx, idx + 1]
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
         self.feature_dim = fc_dim
@@ -228,15 +232,17 @@ class GraphForecaster(pl.LightningModule):
                 y = batch[:, rstep + 1, ...]
                 loss += self.loss(y_hat, y[..., : self.feature_dim])
                 persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
-                for mkey, mranges in self.metric_ranges.items():
-                    low, high = mranges
-                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat[..., low:high], y[..., low:high])
                 if plot_sample and self.global_rank == 0:
                     self._plot_loss(y_hat, y[..., : self.feature_dim], rollout_step=rstep)
                     self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)
                 x[..., : self.feature_dim] = y_hat
                 # get new "constants" needed for time-varying fields
                 x[..., self.feature_dim :] = y[..., self.feature_dim :]
+                for mkey, mranges in self.metric_ranges.items():
+                    y_denorm = self.normalizer.denormalize(y.clone())
+                    y_hat_denorm = self.normalizer.denormalize(x.clone())
+                    low, high = mranges
+                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
             loss *= 1.0 / self.rollout
             persist_loss *= 1.0 / self.rollout
         return loss, persist_loss, metrics

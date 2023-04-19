@@ -29,4 +29,5 @@ WORKDIR=$GITDIR
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-srun gnn-era-train --config $GITDIR/gnn_era5/config/atos.yaml
+#srun gnn-era-train --config $GITDIR/gnn_era5/config/atos.yaml
+srun gnn-era-train --config $GITDIR/gnn_era5/config/atosh32.yaml
