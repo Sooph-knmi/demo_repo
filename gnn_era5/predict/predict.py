@@ -177,6 +177,8 @@ def predict(config: YAMLConfig) -> None:
         encoder_out_channels=config["model:encoder:num-out-channels"],
         encoder_num_layers=config["model:encoder:num-layers"],
         encoder_mapper_num_layers=config["model:encoder:mapper-num-layers"],
+        mlp_extra_layers=config["model:encoder:mlp-extra-layers"],
+        activation=config["model:encoder:activation"],
         rollout=config["model:rollout"],
         save_basedir=os.path.join(
             config["output:basedir"].format(resolution=config["input:resolution"]),
