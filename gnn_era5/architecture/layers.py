@@ -166,7 +166,7 @@ class GaussianActivation(nn.Module):
         self.alpha = alpha
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.exp(-0.5 * x**2.0 / self.alpha**2.0)
+        return torch.exp(-0.5 * x ** 2.0 / self.alpha ** 2.0)
 
 
 class MessagePassingNodeEmbedder(nn.Module):
