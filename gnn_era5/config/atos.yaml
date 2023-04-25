@@ -3,18 +3,18 @@ input:
   # the zarr data are under /ec/res4/scratch/syma/era5/o160/zarr/[pl | sfc]
   format: zarr
   resolution: o96
-  training:
+  training: 
     basedir: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-{resolution}
-    filename: panguweather-{resolution}-1979-2015.zarr
+    filename: panguweather-{resolution}-1979-2015-6h.zarr
   validation:
     basedir: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-{resolution}
-    filename: panguweather-{resolution}-2016-2017.zarr
+    filename: panguweather-{resolution}-2016-2017-6h.zarr
   test:
     basedir: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-{resolution}
-    filename: panguweather-{resolution}-2016-2017.zarr
+    filename: panguweather-{resolution}-2016-2017-6h.zarr
   predict:
     basedir: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-{resolution}
-    filename: panguweather-{resolution}-2016-2017.zarr
+    filename: panguweather-{resolution}-2016-2017-6h.zarr
   pl:
       names:
       # not used!
@@ -42,28 +42,26 @@ input:
       names:
       # not used!
         - msl
-        - blh
         - z
         - lsm
   # features that are not part of the forecast state
   # these are presumed to be located at the "end" of the flattened (bs, latlon, nvar) input tensor
-  num-features: 99
+  num-features: 98
   num-aux-features: 13  # all 2D fields
   loss-scaling-pl:
     - 0.6 #1
-    - 1.5 #1
+    - 6 #1
     - 0.8 #0.5
     - 0.5 #0.33
     - 0.01
-    - 3 #1
+    - 12 #1
   loss-scaling-sfc:
     - 0.1
-    - 0.1
+    - 1
     - 0.1
     - 0.1
     - 0.1
     - 1
-    - 0.1
     - 0.1
 
 metrics:
@@ -83,14 +81,13 @@ plot:
   - w_850 
   - z_850
   - msl
-  - blh
   - 2t
 
 ###################
 #  OUTPUT BLOCK
 ###################
 output:
-  basedir: /ec/res4/scratch/syma/GNN/ERA5/{resolution}/
+  basedir: /ec/res4/scratch/pamc/GNN/ERA5/{resolution}/
   logging:
     log-dir: logs
     log-interval: 250
@@ -108,7 +105,8 @@ output:
 ###################
 graph:
   data-basedir: /ec/res4/hpcperm/pamc/gnn/
-  data-file: graph_mappings_normed_edge_attrs_{resolution}_h3_2.pt 
+  data-file: graph_mappings_normed_edge_attrs_rot_{resolution}_h3_0_1_2.pt
+  #graph_mappings_normed_edge_attrs_{resolution}_h3_2.pt 
 
 ###################
 #  MODEL BLOCK
@@ -130,8 +128,8 @@ model:
       test: 8
       predict: 8
     batch-size:
-      training: 2
-      validation: 2
+      training: 4
+      validation: 4
       test: 4
       predict: 4
 
@@ -161,16 +159,16 @@ model:
 
   # parallel strategy
   # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
-  strategy: auto
+  strategy: ddp_find_unused_parameters_false #auto
 
   # number of GPUs per node and number of nodes (for DDP)
-  num-gpus: 1
-  num-nodes: 1
+  num-gpus: 4
+  num-nodes: 2
 
   # training settings
   lead-time: 6
-  max-epochs: 50 #50
-  learn-rate: 1.25e-4
+  max-epochs: 100 #50
+  learn-rate: 0.000125 #0.625e-4
 
   # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
   # the effective batch size becomes num-devices * batch-size * k
@@ -184,12 +182,12 @@ model:
 
   # specific GNN encoder settings
   encoder:
-    num-layers: 8
+    num-layers: 16
     mapper-num-layers: 1
     num-heads: 8
     activation: SiLU
-    num-hidden-channels: 256
-    num-out-channels: 256
+    num-hidden-channels: 512
+    num-out-channels: 512
     mlp-extra-layers: 0
     dropout: 0.
 
