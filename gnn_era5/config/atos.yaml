@@ -133,6 +133,10 @@ model:
       test: 4
       predict: 4
 
+  # logger options (these probably come with some overhead)
+  log-gradients: True
+  log-parameters: True
+
   # resume training from a checkpoint
   warm-restart:
     enabled: False
@@ -159,7 +163,7 @@ model:
 
   # parallel strategy
   # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
-  strategy: ddp_find_unused_parameters_false #auto
+  strategy: auto
 
   # number of GPUs per node and number of nodes (for DDP)
   num-gpus: 4
