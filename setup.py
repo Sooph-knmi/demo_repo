@@ -4,8 +4,8 @@ setup(
     name="aifs",
     version="0.6",
     url="https://github.com/ecmwf-lab/aifs-model",
-    license="MIT License",
-    company="ECMWF",
+    license="Apache Lincense Version 2.0",
+    author="European Centre for Medium-Range Weather Forecasts (ECMWF)",
     author_email="ecmwf-authors@ecmwf.int",
     description="ERA5 forecasting with Graph Neural Networks",
     install_requires=[
@@ -28,6 +28,7 @@ setup(
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
         "License :: OSI Approved :: Apache Software License",
         "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
     ],
     packages=find_packages(),
     entry_points={
