@@ -134,6 +134,16 @@ def train(config: YAMLConfig) -> None:
             )
         )
 
+    logger = setup_exp_logger(config)
+    if config["model:log-gradients"] or config["model:log-parameters"]:
+        if config["model:log-gradients"] and config["model:log-parameters"]:
+            log_ = "all"
+        elif config["model:log-gradients"]:
+            log_ = "gradients"
+        else:
+            log_ = "parameters"
+        logger.watch(model, log=log_, log_freq=config["output:logging:log-interval"], log_graph=False)
+
     trainer = pl.Trainer(
         accelerator="gpu" if config["model:num-gpus"] > 0 else "cpu",
         callbacks=trainer_callbacks,

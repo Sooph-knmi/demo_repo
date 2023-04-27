@@ -22,7 +22,8 @@ DO_NOT_NORMALIZE = [
     "lsm",
 ]
 
-MAX_NORMALIZE = ["blh", "sdor", "slor", "z"]
+MAX_NORMALIZE = ["sdor", "slor", "z"]
+
 
 
 class InputNormalizer(nn.Module):
