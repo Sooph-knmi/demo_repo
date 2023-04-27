@@ -1,6 +1,6 @@
-# gnn-era5
+# AIFS
 
-GNN for the ERA5 dataset
+GNN for for weather prediction trained on the ERA5 dataset
 
 ## Pre-commit Etiquette
 
@@ -22,7 +22,7 @@ All done!
 $> cd <... your local clone dir ...>
 $> pip install -e .
 # this creates entry points for training and prediction
-# see gnn-era5/config/atos.yaml for an example o160 input configuration
-$> gnn-era-train --config <path-to-config-file>
+# see aifs/config/atos.yaml for an example o160 input configuration
+$> aifs-train --config <path-to-config-file>
 ```
 

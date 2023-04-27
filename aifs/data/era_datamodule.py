@@ -4,11 +4,11 @@ import pytorch_lightning as pl
 import zarr
 from torch.utils.data import DataLoader
 
-from gnn_era5.data.era_dataset import ERA5NativeGridDataset, worker_init_func
-from gnn_era5.data.era_readers import read_era_data
-from gnn_era5.utils.config import YAMLConfig
-from gnn_era5.utils.constants import _DL_PREFETCH_FACTOR
-from gnn_era5.utils.logger import get_logger
+from aifs.data.era_dataset import ERA5NativeGridDataset, worker_init_func
+from aifs.data.era_readers import read_era_data
+from aifs.utils.config import YAMLConfig
+from aifs.utils.constants import _DL_PREFETCH_FACTOR
+from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 

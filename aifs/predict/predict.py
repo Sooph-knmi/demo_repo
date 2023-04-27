@@ -5,11 +5,11 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 
-from gnn_era5.data.era_datamodule import ERA5TestDataModule
-from gnn_era5.train.trainer import GraphForecaster
-from gnn_era5.train.utils import get_args, setup_exp_logger
-from gnn_era5.utils.config import YAMLConfig
-from gnn_era5.utils.logger import get_logger
+from aifs.data.era_datamodule import ERA5TestDataModule
+from aifs.train.trainer import GraphForecaster
+from aifs.train.utils import get_args, setup_exp_logger
+from aifs.utils.config import YAMLConfig
+from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
