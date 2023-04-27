@@ -10,7 +10,7 @@ setup(
     description="ERA5 forecasting with Graph Neural Networks",
     install_requires=[
         "torch_geometric==2.1.0",
-        "torch-sparse=0.6.17"
+        "torch-sparse==0.6.17"
         "pytorch-lightning==2.0.2",
     ],
     extras_require = {'extras': [
