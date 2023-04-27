@@ -12,7 +12,7 @@ setup(
         "pytorch_geometric==2.1.0",
         "pytorch-lightning==2.0.2",
     ],
-    extras_require = [
+    extras_require = {'extras': [
         "matplotlib==3.7.1",
         "cartopy==0.21.1",
         "tqdm==4.65.0",
@@ -21,7 +21,7 @@ setup(
         "zarr==2.14.2",
         "networkx==3.1",
         "h3==4.1.0"
-    ],
+    ]},
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
