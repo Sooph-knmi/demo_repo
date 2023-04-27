@@ -147,7 +147,7 @@ if __name__ == "__main__":
     from aifs.utils.config import YAMLConfig
 
     _ROLLOUT = 2
-    config = YAMLConfig("/home/syma/GNN/aifs.git/aifs/config/atos.yaml")
+    config = YAMLConfig("/config/atos.yaml")
 
     def _get_data_filename(stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation]
