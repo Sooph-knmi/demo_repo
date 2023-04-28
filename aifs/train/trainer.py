@@ -8,9 +8,9 @@ import torch
 from torch_geometric.data import HeteroData
 
 import wandb
-from aifs.architecture.losses import WeightedMSELoss
+from aifs.model.losses import WeightedMSELoss
 from aifs.data.era_normalizers import InputNormalizer
-from aifs.architecture.msg import GraphMSG
+from aifs.model.msg import GraphMSG
 from aifs.utils.logger import get_logger
 from aifs.utils.plots import plot_predicted_multilevel_flat_sample, init_plot_settings, plot_loss
 
