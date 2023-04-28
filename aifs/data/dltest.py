@@ -3,10 +3,10 @@ from time import time
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from gnn_era5.utils.config import YAMLConfig
-from gnn_era5.data.era_datamodule import ERA5DataModule
-from gnn_era5.utils.logger import get_logger
-from gnn_era5.train.utils import get_args
+from aifs.utils.config import YAMLConfig
+from aifs.data.era_datamodule import ERA5DataModule
+from aifs.utils.logger import get_logger
+from aifs.train.utils import get_args
 
 LOGGER = get_logger(__name__)
 

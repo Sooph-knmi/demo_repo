@@ -1,7 +1,7 @@
 from typing import Mapping, Any
 import yaml
 
-from gnn_era5.utils.logger import get_logger
+from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 

@@ -23,11 +23,11 @@
 
 # generic settings
 CONDA_ENV=gnn-pyg-2.3
-GITDIR=/perm/pamc/software/gnn-era5
+GITDIR=/perm/pamc/software/aifs
 WORKDIR=$GITDIR
 
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-#srun gnn-era-train --config $GITDIR/gnn_era5/config/atos.yaml
-srun gnn-era-train --config $GITDIR/gnn_era5/config/atosh32.yaml
+#srun aifs-train --config $GITDIR/aifs/config/atos.yaml
+srun aifs-train --config $GITDIR/aifs/config/atosh32.yaml

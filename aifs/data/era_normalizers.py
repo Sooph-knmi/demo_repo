@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from gnn_era5.utils.logger import get_logger
+from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__, debug=True)
 

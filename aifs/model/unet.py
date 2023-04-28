@@ -6,8 +6,8 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
 
-from gnn_era5.architecture.layers import TransformerMapper, GATEncoder
-from gnn_era5.utils.logger import get_logger
+from aifs.model.layers import TransformerMapper, GATEncoder
+from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 GRID_NAMES = ["o160", "o80", "o48", "o32"]

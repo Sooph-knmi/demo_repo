@@ -96,7 +96,7 @@ output:
     ckpt-dir: checkpoints
   model:
     save-top-k: 5
-    checkpoint-filename: gnn-era5-ckpt-{epoch:02d}-{val_wmse:.4f}
+    checkpoint-filename: aifs-ckpt-{epoch:02d}-{val_wmse:.4f}
   plots:
     plot-dir: plots
 
@@ -141,7 +141,7 @@ model:
   warm-restart:
     enabled: False
     # path should be relative to the output:checkpoints:chkpt-dir, as defined above
-    ckpt-path: 202304_1014/gnn-era5-resolution=0-ckpt-epoch=49-val_wmse=0.010.ckpt
+    ckpt-path: 202304_1014/aifs-resolution=0-ckpt-epoch=49-val_wmse=0.010.ckpt
   
   # enable checkpointing of GNN activations? T/F
   # saves GPU memory at the expense of additional compute

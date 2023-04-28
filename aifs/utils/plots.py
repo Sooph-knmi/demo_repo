@@ -6,8 +6,8 @@ from matplotlib import cm
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.figure import Figure
 
-from gnn_era5.utils.constants import _IDXVARS_TO_PLOT, _NAM_VARS_TO_PLOT, _NUM_PLOTS_PER_SAMPLE, _NUM_VARS_TO_PLOT
-from gnn_era5.utils.logger import get_logger
+from aifs.utils.constants import _IDXVARS_TO_PLOT, _NAM_VARS_TO_PLOT, _NUM_PLOTS_PER_SAMPLE, _NUM_VARS_TO_PLOT
+from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 

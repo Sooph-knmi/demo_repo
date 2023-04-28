@@ -4,13 +4,13 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
 
-from gnn_era5.architecture.layers import (
+from aifs.model.layers import (
     MessagePassingProcessor,
     MessagePassingMapper,
     MessagePassingNodeEmbedder,
     MessagePassingNodeExtractor,
 )
-from gnn_era5.utils.logger import get_logger
+from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 

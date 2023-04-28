@@ -7,8 +7,8 @@ from einops import rearrange
 from torch.utils.data import IterableDataset, get_worker_info
 from zarr.core import Array
 
-from gnn_era5.utils.constants import _DL_PREFETCH_FACTOR, _ERA_PLEV
-from gnn_era5.utils.logger import get_logger
+from aifs.utils.constants import _DL_PREFETCH_FACTOR, _ERA_PLEV
+from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__, debug=False)
 
@@ -143,11 +143,11 @@ def worker_init_func(worker_id: int) -> None:
 if __name__ == "__main__":
     from torch.utils.data import DataLoader
 
-    from gnn_era5.data.era_readers import read_era_data
-    from gnn_era5.utils.config import YAMLConfig
+    from aifs.data.era_readers import read_era_data
+    from aifs.utils.config import YAMLConfig
 
     _ROLLOUT = 2
-    config = YAMLConfig("/home/syma/GNN/gnn-era5.git/gnn_era5/config/atos.yaml")
+    config = YAMLConfig("/config/atos.yaml")
 
     def _get_data_filename(stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation]

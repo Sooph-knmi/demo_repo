@@ -8,7 +8,7 @@ from torch.utils.checkpoint import checkpoint
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import scatter
 
-from gnn_era5.utils.logger import get_logger
+from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 

@@ -3,8 +3,8 @@ import argparse
 import numpy as np
 
 # import mlflow
-from gnn_era5.utils.config import YAMLConfig
-from gnn_era5.utils.logger import get_logger
+from aifs.utils.config import YAMLConfig
+from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
@@ -31,7 +31,7 @@ def setup_exp_logger(config: YAMLConfig):
         from pytorch_lightning.loggers.neptune import NeptuneLogger
 
         logger = NeptuneLogger(
-            project="ecmwf/gnn-era5",
+            project="ecmwf/aifs",
             log_model_checkpoints=False,
         )
         logger.log_hyperparams(config._cfg)
