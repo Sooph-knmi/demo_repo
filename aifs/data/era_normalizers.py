@@ -25,7 +25,6 @@ DO_NOT_NORMALIZE = [
 MAX_NORMALIZE = ["sdor", "slor", "z"]
 
 
-
 class InputNormalizer(nn.Module):
     def __init__(self, zarr_metadata: Dict) -> None:
         super().__init__()

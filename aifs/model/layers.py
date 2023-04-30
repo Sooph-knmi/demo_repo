@@ -231,7 +231,9 @@ class MessagePassingMapper(nn.Module):
         for i in range(self.hidden_layers):
             # here only x_dst is updated for the next layer, x_src always stays the same, is this what we want? I assume yes
             if self.act_checkpoints:
-                x_dst, edge_attr = checkpoint(self.proc[i], (x_src, x_dst), edge_index, edge_attr, size=(x_src.shape[0], x_dst.shape[0]), use_reentrant=False)
+                x_dst, edge_attr = checkpoint(
+                    self.proc[i], (x_src, x_dst), edge_index, edge_attr, size=(x_src.shape[0], x_dst.shape[0]), use_reentrant=False
+                )
             else:
                 x_dst, edge_attr = self.proc[i]((x_src, x_dst), edge_index, edge_attr, size=(x_src.shape[0], x_dst.shape[0]))
 

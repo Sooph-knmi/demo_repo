@@ -178,7 +178,9 @@ class GraphMSG(nn.Module):
         x_era_latent = self.node_era_embedder(x_in)
         x_h_latent = self.node_h_embedder(einops.repeat(self.h_latlons, "e f -> (repeat e) f", repeat=bs))
 
-        edge_era_to_h_latent = self.edge_era_to_h_embedder(einops.repeat(self.e2h_edge_attr, "e f -> (repeat e) f", repeat=bs)) # copy edge attributes bs times
+        edge_era_to_h_latent = self.edge_era_to_h_embedder(
+            einops.repeat(self.e2h_edge_attr, "e f -> (repeat e) f", repeat=bs)
+        )  # copy edge attributes bs times
         x_latent = self.forward_mapper(
             (x_era_latent, x_h_latent),
             # expand edge index correct number of times while adding the proper number to the edge index
@@ -186,10 +188,12 @@ class GraphMSG(nn.Module):
                 [self.e2h_edge_index + i * self._e2h_edge_inc for i in range(bs)],
                 dim=1,
             ),
-            edge_attr=edge_era_to_h_latent
+            edge_attr=edge_era_to_h_latent,
         )
 
-        edge_h_to_h_latent = self.edge_h_to_h_embedder(einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs)) #.to(self.devices[1])
+        edge_h_to_h_latent = self.edge_h_to_h_embedder(
+            einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs)
+        )  # .to(self.devices[1])
         x_latent_proc = self.h_processor(  # has skipped connections
             x=x_latent,
             edge_index=torch.cat(

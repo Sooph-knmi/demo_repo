@@ -148,7 +148,7 @@ def train(config: YAMLConfig) -> None:
         accelerator="gpu" if config["model:num-gpus"] > 0 else "cpu",
         callbacks=trainer_callbacks,
         detect_anomaly=config["model:debug:anomaly-detection"],
-        strategy=config["model:strategy"], # we should use ddp with find_unused_parameters = False, static_graph = True
+        strategy=config["model:strategy"],  # we should use ddp with find_unused_parameters = False, static_graph = True
         devices=config["model:num-gpus"] if config["model:num-gpus"] > 0 else None,
         num_nodes=config["model:num-nodes"],
         precision=config["model:precision"],
