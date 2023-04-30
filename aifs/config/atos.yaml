@@ -178,6 +178,10 @@ model:
   # the effective batch size becomes num-devices * batch-size * k
   accum-grad-batches: 1
 
+  # clipp gradients, 0 : don't clip, default algorithm: norm, alternative: value
+  gradient-clip-val: 0
+  gradient-clip-algorithm: value
+
   # stochastic weight averaging
   # https://pytorch.org/blog/stochastic-weight-averaging-in-pytorch/
   swa:
