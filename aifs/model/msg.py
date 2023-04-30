@@ -7,7 +7,7 @@ from torch_geometric.data import HeteroData
 from aifs.model.layers import (
     MessagePassingProcessor,
     MessagePassingMapper,
-    MessagePassingNodeEmbedder,
+    MessagePassingNodeEdgeEmbedder,
     MessagePassingNodeExtractor,
 )
 from aifs.utils.logger import get_logger
@@ -86,7 +86,7 @@ class GraphMSG(nn.Module):
         )
 
         # latent nodes:
-        self.node_era_embedder = MessagePassingNodeEmbedder(
+        self.node_era_embedder = MessagePassingNodeEdgeEmbedder(
             in_channels=in_channels + aux_in_channels + self.pos_channels,
             latent_dim=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
@@ -94,7 +94,7 @@ class GraphMSG(nn.Module):
             checkpoints=act_checkpoints,
         )
 
-        self.node_h_embedder = MessagePassingNodeEmbedder(
+        self.node_h_embedder = MessagePassingNodeEdgeEmbedder(
             in_channels=4,
             latent_dim=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
@@ -102,11 +102,34 @@ class GraphMSG(nn.Module):
             checkpoints=act_checkpoints,
         )  # position channels only
 
+        self.edge_era_to_h_embedder = MessagePassingNodeEdgeEmbedder(
+            in_channels=3,
+            latent_dim=encoder_out_channels,
+            mlp_extra_layers=mlp_extra_layers,
+            activation=activation,
+            checkpoints=act_checkpoints,
+        )
+
+        self.edge_h_to_h_embedder = MessagePassingNodeEdgeEmbedder(
+            in_channels=3,
+            latent_dim=encoder_out_channels,
+            mlp_extra_layers=mlp_extra_layers,
+            activation=activation,
+            checkpoints=act_checkpoints,
+        )
+
+        self.edge_h_to_era_embedder = MessagePassingNodeEdgeEmbedder(
+            in_channels=3,
+            latent_dim=encoder_out_channels,
+            mlp_extra_layers=mlp_extra_layers,
+            activation=activation,
+            checkpoints=act_checkpoints,
+        )
+
         # Latent graph (ERA5 -> H)
         self.forward_mapper = MessagePassingMapper(
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
-            edge_dim=3,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             checkpoints=act_checkpoints,
@@ -115,7 +138,6 @@ class GraphMSG(nn.Module):
         self.h_processor = MessagePassingProcessor(
             hidden_dim=encoder_hidden_channels,
             hidden_layers=encoder_num_layers,
-            edge_dim=3,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             checkpoints=act_checkpoints,
@@ -125,7 +147,6 @@ class GraphMSG(nn.Module):
         self.backward_mapper = MessagePassingMapper(
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
-            edge_dim=3,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             checkpoints=act_checkpoints,
@@ -157,7 +178,7 @@ class GraphMSG(nn.Module):
         x_era_latent = self.node_era_embedder(x_in)
         x_h_latent = self.node_h_embedder(einops.repeat(self.h_latlons, "e f -> (repeat e) f", repeat=bs))
 
-        # encoder: processes era5 data
+        edge_era_to_h_latent = self.edge_era_to_h_embedder(einops.repeat(self.e2h_edge_attr, "e f -> (repeat e) f", repeat=bs)) # copy edge attributes bs times
         x_latent = self.forward_mapper(
             (x_era_latent, x_h_latent),
             # expand edge index correct number of times while adding the proper number to the edge index
@@ -165,33 +186,33 @@ class GraphMSG(nn.Module):
                 [self.e2h_edge_index + i * self._e2h_edge_inc for i in range(bs)],
                 dim=1,
             ),
-            # copy edge attributes bs times
-            edge_attr=einops.repeat(self.e2h_edge_attr, "e f -> (repeat e) f", repeat=bs),
+            edge_attr=edge_era_to_h_latent
         )
 
+        edge_h_to_h_latent = self.edge_h_to_h_embedder(einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs)) #.to(self.devices[1])
         x_latent_proc = self.h_processor(  # has skipped connections
             x=x_latent,
             edge_index=torch.cat(
                 [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bs)],
                 dim=1,
             ),
-            edge_attr=einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs),
+            edge_attr=edge_h_to_h_latent,
         )
 
         # added skip connection (H -> H)
-        x_latent_proc = x_latent_proc + x_latent  # do we need this one? everything else has skipped connections already
+        x_latent_proc = x_latent_proc + x_latent
 
-        x_out = self.backward_mapper(  # this one has a skipped connection, hence x_era_latent should now has skipped connection?
+        edge_h_to_e_latent = self.edge_h_to_era_embedder(einops.repeat(self.h2e_edge_attr, "e f -> (repeat e) f", repeat=bs))
+        x_out = self.backward_mapper(
             x=(x_latent_proc, x_era_latent),
             edge_index=torch.cat(
                 [self.h2e_edge_index + i * self._h2e_edge_inc for i in range(bs)],
                 dim=1,
             ),
-            edge_attr=einops.repeat(self.h2e_edge_attr, "e f -> (repeat e) f", repeat=bs),
+            edge_attr=edge_h_to_e_latent,
         )
 
         x_out = self.node_era_extractor(x_out)
-
         x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=bs)
 
         # residual connection (just for the predicted variables)
