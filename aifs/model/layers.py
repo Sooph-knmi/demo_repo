@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import einops
 import torch
@@ -223,21 +223,25 @@ class MessagePassingMapper(nn.Module):
         self.act_checkpoints = checkpoints
 
         self.proc = nn.ModuleList(
-            [MessagePassingBlock(hidden_dim, hidden_dim, activation=activation) for _ in range(self.hidden_layers)]
+            [
+                MessagePassingBlock(hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation)
+                for _ in range(self.hidden_layers)
+            ]
         )
 
-    def forward(self, x: Tuple[torch.Tensor, torch.Tensor], edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: Tuple[torch.Tensor, torch.Tensor], edge_index: torch.Tensor, edge_attr: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         x_src, x_dst = x
         for i in range(self.hidden_layers):
-            # here only x_dst is updated for the next layer, x_src always stays the same, is this what we want? I assume yes
             if self.act_checkpoints:
-                x_dst, edge_attr = checkpoint(
+                (x_src, x_dst), edge_attr = checkpoint(
                     self.proc[i], (x_src, x_dst), edge_index, edge_attr, size=(x_src.shape[0], x_dst.shape[0]), use_reentrant=False
                 )
             else:
                 x_dst, edge_attr = self.proc[i]((x_src, x_dst), edge_index, edge_attr, size=(x_src.shape[0], x_dst.shape[0]))
 
-        return x_dst
+        return (x_src, x_dst)
 
 
 class MessagePassingProcessor(nn.Module):
@@ -255,7 +259,10 @@ class MessagePassingProcessor(nn.Module):
         self.act_checkpoints = checkpoints
 
         self.proc = nn.ModuleList(
-            [MessagePassingBlock(hidden_dim, hidden_dim, activation=activation) for _ in range(self.hidden_layers)]
+            [
+                MessagePassingBlock(hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation)
+                for _ in range(self.hidden_layers)
+            ]
         )
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
@@ -276,7 +283,7 @@ class MessagePassingBlock(MessagePassing):
         out_channels: int,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
-        checkpoints: bool = True,
+        checkpoints: bool = False,  # memory consumption goes up when already checkpointed in processor / mapper
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -289,8 +296,7 @@ class MessagePassingBlock(MessagePassing):
             out_channels,
             n_extra_layers=mlp_extra_layers,
             activation_func=activation,
-            # checkpoints=checkpoints, # memory consumption goes up
-            checkpoints=False,
+            checkpoints=checkpoints,
         )
         self.edge_mlp = gen_mlp(
             3 * in_channels,
@@ -298,22 +304,20 @@ class MessagePassingBlock(MessagePassing):
             out_channels,
             n_extra_layers=mlp_extra_layers,
             activation_func=activation,
-            # checkpoints=checkpoints, # memory consumption goes up
-            checkpoints=False,
+            checkpoints=checkpoints,
         )
 
-    def forward(self, x, edge_index, edge_attr, size=None) -> Tuple[torch.Tensor, torch.Tensor]:
-        if self.act_checkpoints:
-            out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size)
-        else:
-            out, edges_new = checkpoint(self.propagate, edge_index, x=x, edge_attr=edge_attr, size=size, use_reentrant=False)
+    def forward(
+        self, x, edge_index, edge_attr, size=None
+    ) -> Union[Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]:
+        out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size)
 
         if isinstance(x, torch.Tensor):
-            nodes_new = torch.cat([x, out], dim=1)
-            nodes_new = self.node_mlp(nodes_new) + x
+            nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x
         else:
-            nodes_new = torch.cat([x[1], out], dim=1)
-            nodes_new = self.node_mlp(nodes_new) + x[1]
+            nodes_new_dst = self.node_mlp(torch.cat([x[1], out], dim=1)) + x[1]
+            nodes_new_src = self.node_mlp(torch.cat([x[0], x[0]], dim=1)) + x[0]  # todo: only update this in the forward mapper...
+            nodes_new = (nodes_new_src, nodes_new_dst)
 
         return nodes_new, edges_new
 

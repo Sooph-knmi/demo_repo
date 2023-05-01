@@ -181,7 +181,7 @@ class GraphMSG(nn.Module):
         edge_era_to_h_latent = self.edge_era_to_h_embedder(
             einops.repeat(self.e2h_edge_attr, "e f -> (repeat e) f", repeat=bs)
         )  # copy edge attributes bs times
-        x_latent = self.forward_mapper(
+        (x_era_latent, x_latent) = self.forward_mapper(
             (x_era_latent, x_h_latent),
             # expand edge index correct number of times while adding the proper number to the edge index
             edge_index=torch.cat(
@@ -207,7 +207,7 @@ class GraphMSG(nn.Module):
         x_latent_proc = x_latent_proc + x_latent
 
         edge_h_to_e_latent = self.edge_h_to_era_embedder(einops.repeat(self.h2e_edge_attr, "e f -> (repeat e) f", repeat=bs))
-        x_out = self.backward_mapper(
+        (_, x_out) = self.backward_mapper(
             x=(x_latent_proc, x_era_latent),
             edge_index=torch.cat(
                 [self.h2e_edge_index + i * self._h2e_edge_inc for i in range(bs)],
