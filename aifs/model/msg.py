@@ -200,7 +200,7 @@ class GraphMSG(nn.Module):
 
         edge_h_to_h_latent = self.edge_h_to_h_embedder(
             einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs)
-        )  # .to(self.devices[1])
+        )
         x_latent_proc = self.h_processor(  # has skipped connections
             x=x_latent,
             edge_index=torch.cat(
