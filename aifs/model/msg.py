@@ -7,8 +7,7 @@ from torch_geometric.data import HeteroData
 from aifs.model.layers import (
     MessagePassingProcessor,
     MessagePassingMapper,
-    MessagePassingNodeEdgeEmbedder,
-    MessagePassingNodeExtractor,
+    MessagePassingMLP,
 )
 from aifs.utils.logger import get_logger
 
@@ -86,47 +85,63 @@ class GraphMSG(nn.Module):
         )
 
         # latent nodes:
-        self.node_era_embedder = MessagePassingNodeEdgeEmbedder(
+        self.node_era_embedder = MessagePassingMLP(
             in_channels=in_channels + aux_in_channels + self.pos_channels,
             latent_dim=encoder_out_channels,
+            out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             checkpoints=act_checkpoints,
         )
 
-        self.node_h_embedder = MessagePassingNodeEdgeEmbedder(
+        self.node_h_embedder = MessagePassingMLP(
             in_channels=4,
             latent_dim=encoder_out_channels,
+            out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             checkpoints=act_checkpoints,
         )  # position channels only
 
-        self.edge_era_to_h_embedder = MessagePassingNodeEdgeEmbedder(
+        self.edge_era_to_h_embedder = MessagePassingMLP(
             in_channels=3,
             latent_dim=encoder_out_channels,
+            out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             checkpoints=act_checkpoints,
         )
 
-        self.edge_h_to_h_embedder = MessagePassingNodeEdgeEmbedder(
+        self.edge_h_to_h_embedder = MessagePassingMLP(
             in_channels=3,
             latent_dim=encoder_out_channels,
+            out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             checkpoints=act_checkpoints,
         )
 
-        self.edge_h_to_era_embedder = MessagePassingNodeEdgeEmbedder(
+        self.edge_h_to_era_embedder = MessagePassingMLP(
             in_channels=3,
             latent_dim=encoder_out_channels,
+            out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             checkpoints=act_checkpoints,
         )
 
-        # Latent graph (ERA5 -> H)
+        # extract features:
+        self.node_era_extractor = MessagePassingMLP(
+            in_channels=encoder_out_channels,
+            latent_dim=encoder_out_channels,
+            out_channels=in_channels,
+            mlp_extra_layers=mlp_extra_layers + 1,  # add decoder head
+            activation=activation,
+            final_activation=False,
+            checkpoints=act_checkpoints,
+        )
+
+        # ERA -> H
         self.forward_mapper = MessagePassingMapper(
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
@@ -135,6 +150,7 @@ class GraphMSG(nn.Module):
             checkpoints=act_checkpoints,
         )
 
+        # H -> H
         self.h_processor = MessagePassingProcessor(
             hidden_dim=encoder_hidden_channels,
             hidden_layers=encoder_num_layers,
@@ -148,15 +164,6 @@ class GraphMSG(nn.Module):
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             mlp_extra_layers=mlp_extra_layers,
-            activation=activation,
-            checkpoints=act_checkpoints,
-        )
-
-        # extract features:
-        self.node_era_extractor = MessagePassingNodeExtractor(
-            latent_dim=encoder_out_channels,
-            out_channels=in_channels,
-            mlp_extra_layers=mlp_extra_layers + 1,  # add decoder head
             activation=activation,
             checkpoints=act_checkpoints,
         )
