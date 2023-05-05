@@ -255,14 +255,20 @@ class MessagePassingProcessor(nn.Module):
     ) -> None:
         super().__init__()
 
-        self.hidden_layers = hidden_layers
+        self.hidden_layers_sub = 4
+        self.hidden_layers = int(hidden_layers/self.hidden_layers_sub)
         self.act_checkpoints = checkpoints
 
         self.proc = nn.ModuleList(
             [
-                MessagePassingBlock(hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation)
+                MessagePassingSubProc(hidden_dim, hidden_layers=self.hidden_layers_sub, mlp_extra_layers=mlp_extra_layers, activation=activation)
                 for _ in range(self.hidden_layers)
             ]
+        # self.proc = nn.ModuleList(
+        #     [
+        #         MessagePassingBlock(hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation)
+        #         for _ in range(self.hidden_layers)
+        #     ]
         )
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
@@ -274,6 +280,34 @@ class MessagePassingProcessor(nn.Module):
                 x, edge_attr = self.proc[i](x, edge_index, edge_attr, size=None)
 
         return x
+
+class MessagePassingSubProc(nn.Module):
+    def __init__(
+        self,
+        hidden_dim: int,
+        hidden_layers: int,
+        mlp_extra_layers: int = 0,
+        activation: str = "SiLU",
+        checkpoints: bool = False,
+    ) -> None:
+        super().__init__()
+
+        self.hidden_layers = hidden_layers
+        self.act_checkpoints = checkpoints
+
+        self.proc = nn.ModuleList(
+            [
+                MessagePassingBlock(hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation, checkpoints=checkpoints)
+                for _ in range(self.hidden_layers)
+            ]
+        )
+
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor, size=None) -> torch.Tensor:
+        for i in range(self.hidden_layers):
+
+            x, edge_attr = self.proc[i](x, edge_index, edge_attr, size=size)
+
+        return x, edge_attr
 
 
 class MessagePassingBlock(MessagePassing):

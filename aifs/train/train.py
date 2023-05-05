@@ -168,7 +168,7 @@ def train(config: YAMLConfig) -> None:
     )
 
     trainer.fit(model, datamodule=dmod, ckpt_path=ckpt_path)
-
+    LOGGER.debug(f"max memory alloc: {torch.cuda.max_memory_allocated(torch.device(0))/(1000.*1024)}")
     LOGGER.debug("---- DONE. ----")
 
 
