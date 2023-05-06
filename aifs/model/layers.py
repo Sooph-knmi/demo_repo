@@ -165,7 +165,8 @@ class MessagePassingMLP(nn.Module):
         out_channels: int,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
-        final_activation=True,
+        final_activation: bool =True,
+        layer_norm: bool = True,
         checkpoints: bool = True,
     ) -> None:
         super().__init__()
@@ -176,7 +177,7 @@ class MessagePassingMLP(nn.Module):
             n_extra_layers=mlp_extra_layers,
             activation_func=activation,
             final_activation=final_activation,
-            layer_norm=True,
+            layer_norm=layer_norm,
             checkpoints=checkpoints,
         )
 

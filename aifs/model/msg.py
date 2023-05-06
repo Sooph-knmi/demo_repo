@@ -137,6 +137,7 @@ class GraphMSG(nn.Module):
             out_channels=in_channels,
             mlp_extra_layers=mlp_extra_layers + 1,  # add decoder head
             activation=activation,
+            layer_norm=False,
             final_activation=False,
             checkpoints=act_checkpoints,
         )
