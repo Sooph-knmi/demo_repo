@@ -147,8 +147,10 @@ class GraphMSG(nn.Module):
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             mlp_extra_layers=mlp_extra_layers,
+            hidden_layers_block=1,
             activation=activation,
             checkpoints=act_checkpoints,
+            CPUOffload=False,
         )
 
         # H -> H
@@ -156,8 +158,10 @@ class GraphMSG(nn.Module):
             hidden_dim=encoder_hidden_channels,
             hidden_layers=encoder_num_layers,
             mlp_extra_layers=mlp_extra_layers,
+            hidden_layers_block=4,
             activation=activation,
             checkpoints=act_checkpoints,
+            CPUOffload=False,
         )
 
         # H -> ERA5
@@ -165,8 +169,10 @@ class GraphMSG(nn.Module):
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             mlp_extra_layers=mlp_extra_layers,
+            hidden_layers_block=1,
             activation=activation,
             checkpoints=act_checkpoints,
+            CPUOffload=False,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -199,9 +205,7 @@ class GraphMSG(nn.Module):
             edge_attr=edge_era_to_h_latent,
         )
 
-        edge_h_to_h_latent = self.edge_h_to_h_embedder(
-            einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs)
-        )
+        edge_h_to_h_latent = self.edge_h_to_h_embedder(einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs))
         x_latent_proc = self.h_processor(  # has skipped connections
             x=x_latent,
             edge_index=torch.cat(

@@ -8,6 +8,10 @@ from torch.utils.checkpoint import checkpoint
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import scatter
 
+from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+    offload_wrapper,
+)
+
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -165,7 +169,7 @@ class MessagePassingMLP(nn.Module):
         out_channels: int,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
-        final_activation: bool =True,
+        final_activation: bool = True,
         layer_norm: bool = True,
         checkpoints: bool = True,
     ) -> None:
@@ -185,15 +189,16 @@ class MessagePassingMLP(nn.Module):
         return self.node_emb(x)
 
 
-class MessagePassingMapper(nn.Module):
+class MessagePassingProcessor(nn.Module):
     def __init__(
         self,
         hidden_dim: int,
         hidden_layers: int,
-        hidden_layers_block: int = 1,
+        hidden_layers_block: int = 4,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
         checkpoints: bool = True,
+        CPUOffload: bool = False,
     ) -> None:
         super().__init__()
 
@@ -208,6 +213,26 @@ class MessagePassingMapper(nn.Module):
                 for _ in range(self.hidden_layers)
             ]
         )
+        if CPUOffload:
+            self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
+
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
+        for i in range(self.hidden_layers):
+
+            if self.act_checkpoints:
+                x, edge_attr = checkpoint(self.proc[i], x, edge_index, edge_attr, size=None, use_reentrant=False)
+            else:
+                x, edge_attr = self.proc[i](x, edge_index, edge_attr, size=None)
+
+        return x
+
+
+class MessagePassingMapper(MessagePassingProcessor):
+    def __init__(
+        self,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
 
     def forward(
         self, x: Tuple[torch.Tensor, torch.Tensor], edge_index: torch.Tensor, edge_attr: torch.Tensor
@@ -224,41 +249,6 @@ class MessagePassingMapper(nn.Module):
                 )
 
         return (x_src, x_dst)
-
-
-class MessagePassingProcessor(nn.Module):
-    def __init__(
-        self,
-        hidden_dim: int,
-        hidden_layers: int,
-        hidden_layers_block: int = 4,
-        mlp_extra_layers: int = 0,
-        activation: str = "SiLU",
-        checkpoints: bool = True,
-    ) -> None:
-        super().__init__()
-
-        self.hidden_layers = int(hidden_layers / hidden_layers_block)
-        self.act_checkpoints = checkpoints
-
-        self.proc = nn.ModuleList(
-            [
-                MessagePassingSubProc(
-                    hidden_dim, hidden_layers=hidden_layers_block, mlp_extra_layers=mlp_extra_layers, activation=activation
-                )
-                for _ in range(self.hidden_layers)
-            ]
-        )
-
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
-        for i in range(self.hidden_layers):
-
-            if self.act_checkpoints:
-                x, edge_attr = checkpoint(self.proc[i], x, edge_index, edge_attr, size=None, use_reentrant=False)
-            else:
-                x, edge_attr = self.proc[i](x, edge_index, edge_attr, size=None)
-
-        return x
 
 
 class MessagePassingSubProc(nn.Module):
