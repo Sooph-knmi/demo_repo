@@ -85,7 +85,6 @@ def add_nodes(G, resolution, self_loop=True):
 
 
 def multi_mesh(h3_resolutions, self_loop=True, flat=True, neighbour_children=False, depth=None):
-
     if depth is None:
         depth = len(h3_resolutions)
 

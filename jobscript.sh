@@ -6,8 +6,8 @@
 #SBATCH --gpus=4
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256G
-#SBATCH --time=48:00:00
-#SBATCH --output=outputs/o160-h3_3-msg-torch-swa.out.%j
+#SBATCH --time=01:00:00
+#SBATCH --output=aifs-multistep-test.%j
 
 # debugging flags (optional)
 # export NCCL_DEBUG=INFO
@@ -18,16 +18,15 @@
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-# export WANDB_NAME="o160-h3_3-gpu4-bs2-acc2-r1-swa"
-# export WANDB_NOTES="TEST: SWA + gradient accumulation"
+# export WANDB_NAME="aifs-multistep-test"
+# export WANDB_NOTES="TEST: multistep input"
 
 # generic settings
 CONDA_ENV=gnn-pyg-2.3
-GITDIR=/perm/pamc/software/aifs
+GITDIR=/home/syma/GNN/gnn-era5.git
 WORKDIR=$GITDIR
 
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-#srun aifs-train --config $GITDIR/aifs/config/atos.yaml
-srun aifs-train --config $GITDIR/aifs/config/atosh32.yaml
+srun aifs-train --config $GITDIR/aifs/config/atos.yaml

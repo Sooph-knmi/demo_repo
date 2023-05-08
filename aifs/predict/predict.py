@@ -7,7 +7,7 @@ import torch
 
 from aifs.data.era_datamodule import ERA5TestDataModule
 from aifs.train.trainer import GraphForecaster
-from aifs.train.utils import get_args, setup_exp_logger
+from aifs.train.utils import get_args, setup_wandb_logger
 from aifs.utils.config import YAMLConfig
 from aifs.utils.logger import get_logger
 
@@ -187,8 +187,6 @@ def predict(config: YAMLConfig) -> None:
         ),
         act_checkpoints=config["model:act-checkpoints"],
         log_to_wandb=config["model:wandb:enabled"],
-        log_to_neptune=config["model:neptune:enabled"],
-        log_persistence=False,
         loss_scaling=loss_scaling,
         pl_names=config["input:pl:names"],
     )
@@ -208,7 +206,7 @@ def predict(config: YAMLConfig) -> None:
         num_nodes=config["model:num-nodes"],
         precision=config["model:precision"],
         max_epochs=config["model:max-epochs"],
-        logger=setup_exp_logger(config),
+        logger=setup_wandb_logger(config),
         log_every_n_steps=config["output:logging:log-interval"],
         limit_predict_batches=config["model:limit-batches:predict"],
         limit_test_batches=config["model:limit-batches:test"],

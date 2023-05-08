@@ -87,10 +87,10 @@ plot:
 #  OUTPUT BLOCK
 ###################
 output:
-  basedir: /ec/res4/scratch/pamc/GNN/ERA5/{resolution}/
+  basedir: /ec/res4/scratch/syma/GNN/ERA5/{resolution}/
   logging:
     log-dir: logs
-    log-interval: 250
+    log-interval: 50
   checkpoints:
     # model checkpoints: used to resume training or do inference
     ckpt-dir: checkpoints
@@ -118,8 +118,6 @@ model:
     # this will detect and trace back NaNs / Infs etc. but will slow down training
     anomaly-detection: False
   wandb:
-    enabled: True
-  neptune:
     enabled: False
   dataloader:
     num-workers:
@@ -134,8 +132,8 @@ model:
       predict: 4
 
   # logger options (these probably come with some overhead)
-  log-gradients: True
-  log-parameters: True
+  log-gradients: False
+  log-parameters: False
 
   # resume training from a checkpoint
   warm-restart:
@@ -150,14 +148,11 @@ model:
   # miscellaneous
   precision: 16-mixed  # "16" with Lightning < 2.0
 
-  # use this for rapid debugging runs (push through a single batch)
-  fast-dev-run: False
-
   # runs only N training batches [N = integer | null]
   # if null then we run through all the batches
   limit-batches:
-    training: null
-    validation: null
+    training: 50  # null
+    validation: 5  # null
     test: 20
     predict: 20
 
@@ -166,20 +161,26 @@ model:
   strategy: auto
 
   # number of GPUs per node and number of nodes (for DDP)
-  num-gpus: 4
-  num-nodes: 2
+  num-gpus: 1
+  num-nodes: 1
 
   # training settings
   lead-time: 6
-  max-epochs: 100 #50
-  learn-rate: 0.000125 #0.625e-4
+  max-epochs: 2
+  learn-rate: 0.000125
+
+  # multistep input
+  # 1 = single step scheme, X(t-1) used to predict X(t)
+  # k > 1: multistep scheme, uses [X(t-k), X(t-k+1), ... X(t-1)] to predict X(t)
+  # Deepmind use k = 2 in their model
+  multistep-input: 2
 
   # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
   # the effective batch size becomes num-devices * batch-size * k
   accum-grad-batches: 1
 
   # clipp gradients, 0 : don't clip, default algorithm: norm, alternative: value
-  gradient-clip-val: 0
+  gradient-clip-val: 0.
   gradient-clip-algorithm: value
 
   # stochastic weight averaging
@@ -187,6 +188,9 @@ model:
   swa:
     enabled: False
     lr: 1.e-4
+
+  # activate the pytorch profiler (disable this in production)
+  profile: False
 
   # specific GNN encoder settings
   encoder:

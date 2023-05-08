@@ -1,7 +1,7 @@
 import einops
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 from torch_geometric.data import HeteroData
 
 from aifs.model.layers import (
@@ -21,6 +21,7 @@ class GraphMSG(nn.Module):
         graph_data: HeteroData,
         in_channels: int,
         aux_in_channels: int,
+        multistep: int,
         encoder_num_layers: int,
         encoder_hidden_channels: int,
         encoder_out_channels: int,
@@ -37,6 +38,7 @@ class GraphMSG(nn.Module):
         self._graph_data = graph_data
         self.in_channels = in_channels
         self.pos_channels = 4
+        self.mstep = multistep
 
         self.register_buffer("e2e_edge_index", self._graph_data[("era", "to", "era")].edge_index, persistent=False)
         self.register_buffer("h2e_edge_index", self._graph_data[("h", "to", "era")].edge_index, persistent=False)
@@ -87,7 +89,7 @@ class GraphMSG(nn.Module):
 
         # latent nodes:
         self.node_era_embedder = MessagePassingNodeEmbedder(
-            in_channels=in_channels + aux_in_channels + self.pos_channels,
+            in_channels=self.mstep * (in_channels + aux_in_channels) + self.pos_channels,
             latent_dim=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
@@ -142,20 +144,21 @@ class GraphMSG(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         bs = x.shape[0]
-
-        x_in = einops.rearrange(x, "b n f -> (b n) f")
+        LOGGER.debug("x.shape = %s", x.shape)
+        x_in = einops.rearrange(x, "b m n f -> (b n) (m f)")
 
         # add ERA positional info (lat/lon)
         x_in = torch.cat(
             [
                 x_in,
-                einops.repeat(self.era_latlons, "e f -> (repeat e) f", repeat=bs),
+                einops.repeat(self.era_latlons, "n f -> (repeat n) f", repeat=bs),
             ],
             dim=-1,  # feature dimension
         )
 
+        LOGGER.debug("x_in.shape = %s", x_in.shape)
         x_era_latent = self.node_era_embedder(x_in)
-        x_h_latent = self.node_h_embedder(einops.repeat(self.h_latlons, "e f -> (repeat e) f", repeat=bs))
+        x_h_latent = self.node_h_embedder(einops.repeat(self.h_latlons, "n f -> (repeat n) f", repeat=bs))
 
         # encoder: processes era5 data
         x_latent = self.forward_mapper(
@@ -178,10 +181,10 @@ class GraphMSG(nn.Module):
             edge_attr=einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs),
         )
 
-        # added skip connection (H -> H)
-        x_latent_proc = x_latent_proc + x_latent  # do we need this one? everything else has skipped connections already
+        # skip connection (H -> H)
+        x_latent_proc = x_latent_proc + x_latent
 
-        x_out = self.backward_mapper(  # this one has a skipped connection, hence x_era_latent should now has skipped connection?
+        x_out = self.backward_mapper(
             x=(x_latent_proc, x_era_latent),
             edge_index=torch.cat(
                 [self.h2e_edge_index + i * self._h2e_edge_inc for i in range(bs)],
@@ -195,4 +198,4 @@ class GraphMSG(nn.Module):
         x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=bs)
 
         # residual connection (just for the predicted variables)
-        return x_out + x[..., : self.in_channels]
+        return x_out + x[:, -1, :, : self.in_channels]
