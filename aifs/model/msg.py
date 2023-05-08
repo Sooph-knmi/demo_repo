@@ -48,6 +48,9 @@ class GraphMSG(nn.Module):
         self._era_size = self._graph_data[("era", "to", "era")].ecoords_rad.shape[0]
         self._h_size = self._graph_data[("h", "to", "h")].hcoords_rad.shape[0]
 
+        self.era_trainable = nn.Parameter(torch.Tensor(self._era_size,1))
+        self.h3_trainable  = nn.Parameter(torch.Tensor(self._h_size,1))
+
         self.register_buffer(
             "_e2h_edge_inc", torch.from_numpy(np.asarray([[self._era_size], [self._h_size]], dtype=np.int64)), persistent=False
         )
@@ -86,7 +89,7 @@ class GraphMSG(nn.Module):
 
         # latent nodes:
         self.node_era_embedder = MessagePassingMLP(
-            in_channels=in_channels + aux_in_channels + self.era_latlons.shape[1],
+            in_channels=in_channels + aux_in_channels + self.era_latlons.shape[1] + 1,
             latent_dim=encoder_out_channels,
             out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
@@ -94,7 +97,7 @@ class GraphMSG(nn.Module):
         )
 
         self.node_h_embedder = MessagePassingMLP(
-            in_channels=self.h_latlons.shape[1],
+            in_channels=self.h_latlons.shape[1] + 1,
             latent_dim=encoder_out_channels,
             out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
@@ -173,12 +176,21 @@ class GraphMSG(nn.Module):
             [
                 x_in,
                 einops.repeat(self.era_latlons, "e f -> (repeat e) f", repeat=bs),
+                einops.repeat(self.era_trainable, "e f -> (repeat e) f", repeat=bs),
             ],
             dim=-1,  # feature dimension
         )
 
         x_era_latent = self.node_era_embedder(x_in)
-        x_h_latent = self.node_h_embedder(einops.repeat(self.h_latlons, "e f -> (repeat e) f", repeat=bs))
+        x_h_latent = self.node_h_embedder(
+             torch.cat(
+            [           
+                einops.repeat(self.h_latlons, "e f -> (repeat e) f", repeat=bs),
+                einops.repeat(self.h3_trainable, "e f -> (repeat e) f", repeat=bs),
+            ],
+            dim=-1,  # feature dimension
+            )
+        )
 
         edge_era_to_h_latent = self.edge_era_to_h_embedder(
             einops.repeat(self.e2h_edge_attr, "e f -> (repeat e) f", repeat=bs)
