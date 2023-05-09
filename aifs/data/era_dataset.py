@@ -10,7 +10,7 @@ from zarr.core import Array
 from aifs.utils.constants import _DL_PREFETCH_FACTOR, _ERA_PLEV
 from aifs.utils.logger import get_logger
 
-LOGGER = get_logger(__name__, debug=True)
+LOGGER = get_logger(__name__, debug=False)
 
 
 class ERA5NativeGridDataset(IterableDataset):

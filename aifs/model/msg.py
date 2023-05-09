@@ -144,7 +144,6 @@ class GraphMSG(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         bs = x.shape[0]
-        LOGGER.debug("x.shape = %s", x.shape)
         x_in = einops.rearrange(x, "b m n f -> (b n) (m f)")
 
         # add ERA positional info (lat/lon)
@@ -156,7 +155,6 @@ class GraphMSG(nn.Module):
             dim=-1,  # feature dimension
         )
 
-        LOGGER.debug("x_in.shape = %s", x_in.shape)
         x_era_latent = self.node_era_embedder(x_in)
         x_h_latent = self.node_h_embedder(einops.repeat(self.h_latlons, "n f -> (repeat n) f", repeat=bs))
 
@@ -194,7 +192,6 @@ class GraphMSG(nn.Module):
         )
 
         x_out = self.node_era_extractor(x_out)
-
         x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=bs)
 
         # residual connection (just for the predicted variables)

@@ -85,7 +85,9 @@ class GraphForecaster(pl.LightningModule):
         self.mstep = multistep
         self.lr = lr
         self.rollout = rollout
+
         LOGGER.debug("Rollout window length: %d", self.rollout)
+        LOGGER.debug("Multistep: %d", self.mstep)
 
         self.log_to_wandb = log_to_wandb
         self.save_basedir = save_basedir
@@ -102,58 +104,6 @@ class GraphForecaster(pl.LightningModule):
         # get new "constants" needed for time-varying fields
         x[:, self.mstep - 1, :, self.fcdim :] = y[..., self.fcdim :]
         return x
-
-    # def _tstep(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-    #     loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
-    #     batch = self.normalizer(batch)  # normalized in-place
-
-    #     # start rollout
-    #     x = batch[:, 0 : self.mstep, ...]  # (bs, mstep, latlon, nvar)
-
-    #     for rstep in range(self.rollout):
-    #         y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
-    #         y = batch[:, self.mstep + rstep, ...]  # target, shape = (bs, latlon, nvar)
-    #         # y includes the auxiliary variables, so we must leave those out when computing the loss
-    #         loss += self.loss(y_pred, y[..., : self.fcdim])
-    #         x = self._update_input(x, y, y_pred)
-
-    #     # scale loss
-    #     loss *= 1.0 / self.rollout
-    #     return loss
-
-    # def _vstep(
-    #     self,
-    #     batch: torch.Tensor,
-    #     batch_idx: int,
-    #     plot: bool = False,
-    # ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
-    #     loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
-    #     batch = self.normalizer(batch)  # normalized in-place
-    #     metrics = {}
-
-    #     # start rollout
-    #     x = batch[:, 0 : self.mstep, ...]  # (bs, mstep, latlon, nvar)
-
-    #     for rstep in range(self.rollout):
-    #         y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
-    #         y = batch[:, self.mstep + rstep, ...]  # target, shape = (bs, latlon, nvar)
-    #         # y includes the auxiliary variables, so we must leave those out when computing the loss
-    #         loss += self.loss(y_pred, y[..., : self.fcdim])
-
-    #         if plot and self.global_rank == 0:
-    #             self._plot_loss(y_pred, y[..., : self.fcdim], rollout_step=rstep)
-    #             self._plot_sample(batch_idx, rstep, x[:, -1, :, : self.fcdim], y[..., : self.fcdim], y_pred)
-
-    #         x = self._update_input(x, y, y_pred)
-
-    #         for mkey, (low, high) in self.metric_ranges.items():
-    #             y_denorm = self.normalizer.denormalize(y.clone())
-    #             y_hat_denorm = self.normalizer.denormalize(x[:, -1, ...].clone())
-    #             metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
-
-    #     # scale loss
-    #     loss *= 1.0 / self.rollout
-    #     return loss, metrics
 
     def _step(
         self, batch: torch.Tensor, batch_idx: int, compute_metrics: bool = False, plot: bool = False
