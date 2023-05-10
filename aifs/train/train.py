@@ -75,7 +75,6 @@ def train(config: YAMLConfig) -> None:
         save_basedir=os.path.join(
             config["output:basedir"].format(resolution=config["input:resolution"]), config["output:plots:plot-dir"], timestamp
         ),
-        act_checkpoints=config["model:act-checkpoints"],
         log_to_wandb=config["model:wandb:enabled"],
         log_to_neptune=config["model:neptune:enabled"],
         log_persistence=False,

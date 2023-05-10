@@ -26,7 +26,6 @@ class GraphMSG(nn.Module):
         activation: str,
         mlp_extra_layers: int = 0,
         encoder_mapper_num_layers: int = 1,
-        act_checkpoints: bool = True,
     ) -> None:
         super().__init__()
 
@@ -35,7 +34,6 @@ class GraphMSG(nn.Module):
         # create mappings
         self._graph_data = graph_data
         self.in_channels = in_channels
-        self.pos_channels = 4
 
         self.register_buffer("e2e_edge_index", self._graph_data[("era", "to", "era")].edge_index, persistent=False)
         self.register_buffer("h2e_edge_index", self._graph_data[("h", "to", "era")].edge_index, persistent=False)
@@ -84,50 +82,47 @@ class GraphMSG(nn.Module):
             persistent=True,
         )
 
+        LOGGER.debug(f"----> {self.h_latlons.shape[1]}, f{self.e2h_edge_attr.shape[1]}")
+
         # latent nodes:
         self.node_era_embedder = MessagePassingMLP(
-            in_channels=in_channels + aux_in_channels + self.pos_channels,
+            in_channels=in_channels + aux_in_channels + self.era_latlons.shape[1],
             latent_dim=encoder_out_channels,
             out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
-            checkpoints=act_checkpoints,
         )
 
         self.node_h_embedder = MessagePassingMLP(
-            in_channels=4,
+            in_channels=self.h_latlons.shape[1],
             latent_dim=encoder_out_channels,
             out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
-            checkpoints=act_checkpoints,
         )  # position channels only
 
         self.edge_era_to_h_embedder = MessagePassingMLP(
-            in_channels=3,
+            in_channels=self.e2h_edge_attr.shape[1],
             latent_dim=encoder_out_channels,
             out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
-            checkpoints=act_checkpoints,
         )
 
         self.edge_h_to_h_embedder = MessagePassingMLP(
-            in_channels=3,
+            in_channels=self.h2h_edge_attr.shape[1],
             latent_dim=encoder_out_channels,
             out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
-            checkpoints=act_checkpoints,
         )
 
         self.edge_h_to_era_embedder = MessagePassingMLP(
-            in_channels=3,
+            in_channels=self.h2e_edge_attr.shape[1],
             latent_dim=encoder_out_channels,
             out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
-            checkpoints=act_checkpoints,
         )
 
         # extract features:
@@ -139,7 +134,6 @@ class GraphMSG(nn.Module):
             activation=activation,
             layer_norm=False,
             final_activation=False,
-            checkpoints=act_checkpoints,
         )
 
         # ERA -> H
@@ -147,10 +141,8 @@ class GraphMSG(nn.Module):
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             mlp_extra_layers=mlp_extra_layers,
-            hidden_layers_block=1,
+            chunks=1,
             activation=activation,
-            checkpoints=act_checkpoints,
-            CPUOffload=False,
         )
 
         # H -> H
@@ -158,10 +150,8 @@ class GraphMSG(nn.Module):
             hidden_dim=encoder_hidden_channels,
             hidden_layers=encoder_num_layers,
             mlp_extra_layers=mlp_extra_layers,
-            hidden_layers_block=4,
+            chunks=2,
             activation=activation,
-            checkpoints=act_checkpoints,
-            CPUOffload=False,
         )
 
         # H -> ERA5
@@ -169,10 +159,8 @@ class GraphMSG(nn.Module):
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             mlp_extra_layers=mlp_extra_layers,
-            hidden_layers_block=1,
+            chunks=1,
             activation=activation,
-            checkpoints=act_checkpoints,
-            CPUOffload=False,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
