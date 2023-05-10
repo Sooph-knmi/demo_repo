@@ -159,6 +159,8 @@ def train(config: YAMLConfig) -> None:
         limit_val_batches=config["model:limit-batches:validation"],
         num_sanity_val_steps=0,
         accumulate_grad_batches=config["model:accum-grad-batches"],
+        gradient_clip_val=config["model:gradient-clip-val"],
+        gradient_clip_algorithm=config["model:gradient-clip-algorithm"],
         # we have our own DDP-compliant sampler logic baked into the dataset
         # I'm running with lightning 2.0, if you use an older version comment out the following line
         # and use `replace_sampler_ddp=False` instead
