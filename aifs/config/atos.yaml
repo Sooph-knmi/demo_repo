@@ -143,10 +143,6 @@ model:
     # path should be relative to the output:checkpoints:chkpt-dir, as defined above
     ckpt-path: 202304_1014/aifs-resolution=0-ckpt-epoch=49-val_wmse=0.010.ckpt
   
-  # enable checkpointing of GNN activations? T/F
-  # saves GPU memory at the expense of additional compute
-  act-checkpoints: True
-
   # miscellaneous
   precision: 16-mixed  # "16" with Lightning < 2.0
 
