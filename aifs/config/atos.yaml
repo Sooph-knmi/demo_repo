@@ -90,7 +90,7 @@ output:
   basedir: /ec/res4/scratch/syma/GNN/ERA5/{resolution}/
   logging:
     log-dir: logs
-    log-interval: 50
+    log-interval: 250
   checkpoints:
     # model checkpoints: used to resume training or do inference
     ckpt-dir: checkpoints
@@ -118,7 +118,7 @@ model:
     # this will detect and trace back NaNs / Infs etc. but will slow down training
     anomaly-detection: False
   wandb:
-    enabled: False
+    enabled: True
   dataloader:
     num-workers:
       training: 16
@@ -147,8 +147,8 @@ model:
   # runs only N training batches [N = integer | null]
   # if null then we run through all the batches
   limit-batches:
-    training: 50  # null
-    validation: 5  # null
+    training: null
+    validation: null
     test: 20
     predict: 20
 
@@ -157,12 +157,12 @@ model:
   strategy: auto
 
   # number of GPUs per node and number of nodes (for DDP)
-  num-gpus: 1
+  num-gpus: 4
   num-nodes: 1
 
   # training settings
   lead-time: 6
-  max-epochs: 2
+  max-epochs: 100
   learn-rate: 0.000125
 
   # multistep input
