@@ -8,6 +8,8 @@ import torch
 import wandb
 from torch_geometric.data import HeteroData
 
+# from torch.autograd.graph import save_on_cpu
+
 from aifs.data.era_normalizers import InputNormalizer
 from aifs.model.losses import WeightedMSELoss
 from aifs.model.msg import GraphMSG
@@ -37,7 +39,6 @@ class GraphForecaster(pl.LightningModule):
         rollout: int = 1,
         multistep: int = 1,
         save_basedir: Optional[str] = None,
-        act_checkpoints: bool = True,
         log_to_wandb: bool = False,
         loss_scaling: Optional[torch.Tensor] = None,
         pl_names: Optional[List] = None,
@@ -56,7 +57,6 @@ class GraphForecaster(pl.LightningModule):
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             encoder_mapper_num_layers=encoder_mapper_num_layers,
-            act_checkpoints=act_checkpoints,
         )
 
         self.save_hyperparameters()
@@ -115,6 +115,7 @@ class GraphForecaster(pl.LightningModule):
         # start rollout
         x = batch[:, 0 : self.mstep, ...]  # (bs, mstep, latlon, nvar)
 
+        #         with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
             y = batch[:, self.mstep + rstep, ...]  # target, shape = (bs, latlon, nvar)

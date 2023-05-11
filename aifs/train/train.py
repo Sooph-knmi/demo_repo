@@ -76,7 +76,6 @@ def train(config: YAMLConfig) -> None:
         save_basedir=os.path.join(
             config["output:basedir"].format(resolution=config["input:resolution"]), config["output:plots:plot-dir"], timestamp
         ),
-        act_checkpoints=config["model:act-checkpoints"],
         log_to_wandb=config["model:wandb:enabled"],
         loss_scaling=loss_scaling,
         pl_names=config["input:pl:names"],
@@ -157,7 +156,7 @@ def train(config: YAMLConfig) -> None:
         accelerator="gpu" if config["model:num-gpus"] > 0 else "cpu",
         callbacks=trainer_callbacks,
         detect_anomaly=config["model:debug:anomaly-detection"],
-        strategy=config["model:strategy"],
+        strategy=config["model:strategy"],  # we should use ddp with find_unused_parameters = False, static_graph = True
         devices=config["model:num-gpus"] if config["model:num-gpus"] > 0 else None,
         num_nodes=config["model:num-nodes"],
         precision=config["model:precision"],
@@ -177,7 +176,6 @@ def train(config: YAMLConfig) -> None:
     )
 
     trainer.fit(model, datamodule=dmod, ckpt_path=ckpt_path)
-
     LOGGER.debug("---- DONE. ----")
 
 

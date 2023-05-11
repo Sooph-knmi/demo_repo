@@ -185,7 +185,6 @@ def predict(config: YAMLConfig) -> None:
             config["output:plots:plot-dir"],
             timestamp,
         ),
-        act_checkpoints=config["model:act-checkpoints"],
         log_to_wandb=config["model:wandb:enabled"],
         loss_scaling=loss_scaling,
         pl_names=config["input:pl:names"],
