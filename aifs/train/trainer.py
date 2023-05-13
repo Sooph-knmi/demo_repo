@@ -44,6 +44,8 @@ class GraphForecaster(pl.LightningModule):
         loss_scaling: Optional[torch.Tensor] = None,
         pl_names: Optional[List] = None,
         metric_names: Optional[List] = None,
+        rollout_epoch_increment: int = 0,
+        rollout_max: int = 12,
     ) -> None:
         super().__init__()
 
@@ -82,7 +84,12 @@ class GraphForecaster(pl.LightningModule):
         self.feature_dim = fc_dim
         self.lr = lr
         self.rollout = rollout
+        self.rollout_epoch_increment = rollout_epoch_increment
+        self.rollout_max = rollout_max
         LOGGER.debug("Rollout window length: %d", self.rollout)
+        LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
+        LOGGER.debug("Rollout max : %d", self.rollout_max)
+
 
         self.log_to_wandb = log_to_wandb
         self.log_to_neptune = log_to_neptune
@@ -139,8 +146,32 @@ class GraphForecaster(pl.LightningModule):
                 batch_size=batch.shape[0],
                 sync_dist=True,
             )
-
         return train_loss
+
+    # Learning rate warm-up
+    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_closure):
+        # update params
+        optimizer.step(closure=optimizer_closure)
+
+        # manually warm up lr without a scheduler
+        if self.trainer.global_step < 1000:
+            lr_scale = min(1.0, float(self.trainer.global_step + 1) / 1000.0)
+            for pg in optimizer.param_groups:
+                pg["lr"] = lr_scale * self.learning_rate
+
+    def on_train_epoch_end(self):
+        self.log("rollout",
+            float(self.rollout),
+            logger=True,
+            sync_dist=True,
+        )
+        if (
+            self.rollout_epoch_increment > 0 and 
+            self.current_epoch % self.rollout_epoch_increment == 0
+        ):
+            self.rollout += 1 
+            LOGGER.debug("Rollout window length: %d", self.rollout)
+        self.rollout = min(self.rollout,self.rollout_max)
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         val_loss, persist_loss, metrics = self._shared_eval_step(batch, batch_idx)
