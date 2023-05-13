@@ -122,7 +122,8 @@ def train(config: YAMLConfig) -> None:
             save_on_train_epoch_end=False,
             every_n_epochs=1,
         ),
-        LearningRateMonitor(logging_interval='step',
+        LearningRateMonitor(
+            logging_interval="step",
             log_momentum=True,
         ),
     ]
