@@ -34,7 +34,9 @@ class ERA5DataModule(pl.LightningDataModule):
         ds_tmp = None
 
     def _get_dataset(self, stage: str) -> ERA5NativeGridDataset:
-        rollout = self.config["model:rollout_max"] if self.config["model:rollout_epoch_increment"] > 0 else self.config["model:rollout"]
+        rollout = (
+            self.config["model:rollout_max"] if self.config["model:rollout_epoch_increment"] > 0 else self.config["model:rollout"]
+        )
         return ERA5NativeGridDataset(
             fname=self._get_data_filename(stage),
             era_data_reader=read_era_data,

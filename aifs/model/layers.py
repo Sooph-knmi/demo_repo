@@ -165,7 +165,7 @@ class MessagePassingMLP(nn.Module):
         out_channels: int,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
-        final_activation: bool =True,
+        final_activation: bool = True,
         layer_norm: bool = True,
         checkpoints: bool = True,
     ) -> None:
@@ -252,7 +252,6 @@ class MessagePassingProcessor(nn.Module):
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
         for i in range(self.hidden_layers):
-
             if self.act_checkpoints:
                 x, edge_attr = checkpoint(self.proc[i], x, edge_index, edge_attr, size=None, use_reentrant=False)
             else:
@@ -288,7 +287,6 @@ class MessagePassingSubProc(nn.Module):
         self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor, size=None
     ) -> Union[Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]:
         for i in range(self.hidden_layers):
-
             x, edge_attr = self.proc[i](x, edge_index, edge_attr, size=size)
 
         return x, edge_attr

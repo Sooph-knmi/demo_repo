@@ -90,7 +90,6 @@ class GraphForecaster(pl.LightningModule):
         LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
         LOGGER.debug("Rollout max : %d", self.rollout_max)
 
-
         self.log_to_wandb = log_to_wandb
         self.log_to_neptune = log_to_neptune
         self.save_basedir = save_basedir
@@ -159,18 +158,16 @@ class GraphForecaster(pl.LightningModule):
                 pg["lr"] = lr_scale * self.learning_rate
 
     def on_train_epoch_end(self):
-        self.log("rollout",
+        self.log(
+            "rollout",
             float(self.rollout),
             logger=True,
             sync_dist=True,
         )
-        if (
-            self.rollout_epoch_increment > 0 and 
-            self.current_epoch % self.rollout_epoch_increment == 0
-        ):
-            self.rollout += 1 
+        if self.rollout_epoch_increment > 0 and self.current_epoch % self.rollout_epoch_increment == 0:
+            self.rollout += 1
             LOGGER.debug("Rollout window length: %d", self.rollout)
-        self.rollout = min(self.rollout,self.rollout_max)
+        self.rollout = min(self.rollout, self.rollout_max)
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         val_loss, persist_loss, metrics = self._shared_eval_step(batch, batch_idx)

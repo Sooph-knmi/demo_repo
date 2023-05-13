@@ -199,9 +199,7 @@ class GraphMSG(nn.Module):
             edge_attr=edge_era_to_h_latent,
         )
 
-        edge_h_to_h_latent = self.edge_h_to_h_embedder(
-            einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs)
-        )
+        edge_h_to_h_latent = self.edge_h_to_h_embedder(einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs))
         x_latent_proc = self.h_processor(  # has skipped connections
             x=x_latent,
             edge_index=torch.cat(
