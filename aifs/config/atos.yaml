@@ -197,6 +197,10 @@ model:
 
   # length of the "rollout" window (see Keisler's paper)
   rollout: 1
+  #Increase rollout every n epochs
+  rollout_epoch_increment: 0
+  #Maximum rollout to use
+  rollout_max: 1
 
   # Keisler's three training rounds were:
   # Round 1. ~960,000 batches @ ~0.3 seconds per batch (4-step rollout)

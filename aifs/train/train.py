@@ -7,6 +7,7 @@ import pytorch_lightning as pl
 import torch
 
 # from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAveraging
 
@@ -82,6 +83,8 @@ def train(config: YAMLConfig) -> None:
         loss_scaling=loss_scaling,
         pl_names=config["input:pl:names"],
         metric_names=config["metrics"],
+        rollout_epoch_increment=config["model:rollout_epoch_increment"],
+        rollout_max=config["model:rollout_max"],
     )
 
     if config["model:compile"]:
@@ -119,6 +122,9 @@ def train(config: YAMLConfig) -> None:
             # save after every validation epoch, if we've improved
             save_on_train_epoch_end=False,
             every_n_epochs=1,
+        ),
+        LearningRateMonitor(logging_interval='step',
+            log_momentum=True,
         ),
     ]
 
