@@ -7,6 +7,8 @@ import pytorch_lightning as pl
 import torch
 from torch_geometric.data import HeteroData
 
+from torch.autograd.graph import save_on_cpu
+
 import wandb
 from aifs.model.losses import WeightedMSELoss
 from aifs.data.era_normalizers import InputNormalizer
@@ -36,7 +38,6 @@ class GraphForecaster(pl.LightningModule):
         lr: float = 1e-4,
         rollout: int = 1,
         save_basedir: Optional[str] = None,
-        act_checkpoints: bool = True,
         log_to_wandb: bool = False,
         log_to_neptune: bool = False,
         log_persistence: bool = False,
@@ -58,7 +59,6 @@ class GraphForecaster(pl.LightningModule):
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             encoder_mapper_num_layers=encoder_mapper_num_layers,
-            act_checkpoints=act_checkpoints,
         )
 
         self.normalizer = InputNormalizer(metadata)
@@ -109,19 +109,20 @@ class GraphForecaster(pl.LightningModule):
         batch = self.normalizer(batch)  # normalized in-place
         # start rollout
         x = batch[:, 0, ...]
-        for rstep in range(self.rollout):
-            y_hat = self(x)  # prediction at rollout step rstep
-            y = batch[:, rstep + 1, ...]  # target
-            # y includes the auxiliary variables, so we must leave those out when computing the loss
-            train_loss += self.loss(y_hat, y[..., : self.feature_dim])
-            persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
-            # autoregressive predictions - we re-init the "variable" part of x
-            x[..., : self.feature_dim] = y_hat
-            # get new "constants" needed for time-varying fields
-            x[..., self.feature_dim :] = y[..., self.feature_dim :]
-        # scale loss
-        train_loss *= 1.0 / self.rollout
-        persist_loss *= 1.0 / self.rollout
+        with save_on_cpu(pin_memory=True):
+            for rstep in range(self.rollout):
+                y_hat = self(x)  # prediction at rollout step rstep
+                y = batch[:, rstep + 1, ...]  # target
+                # y includes the auxiliary variables, so we must leave those out when computing the loss
+                train_loss += self.loss(y_hat, y[..., : self.feature_dim])
+                persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
+                # autoregressive predictions - we re-init the "variable" part of x
+                x[..., : self.feature_dim] = y_hat
+                # get new "constants" needed for time-varying fields
+                x[..., self.feature_dim :] = y[..., self.feature_dim :]
+            # scale loss
+            train_loss *= 1.0 / self.rollout
+            persist_loss *= 1.0 / self.rollout
 
         self.log(
             "train_wmse",

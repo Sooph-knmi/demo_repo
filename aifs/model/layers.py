@@ -2,11 +2,22 @@ from typing import Optional, Tuple, Union
 
 import einops
 import torch
+from torch import Tensor
 import torch.nn as nn
 import torch_geometric.nn as tgnn
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import scatter
+
+from torch_geometric.typing import (
+    Adj,
+    OptPairTensor,
+    Size,
+)
+
+from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+    offload_wrapper,
+)
 
 from aifs.utils.logger import get_logger
 
@@ -55,12 +66,12 @@ class TransformerMapper(MessagePassing):
 
     def forward(
         self,
-        x: torch.Tensor,
-        edge_index: torch.Tensor,
-        edge_attr: Optional[torch.Tensor] = None,
-        dynamic_context: Optional[torch.Tensor] = None,
+        x: Tensor,
+        edge_index: Adj,
+        edge_attr: Optional[Tensor] = None,
+        dynamic_context: Optional[Tensor] = None,
         batch_size: int = 1,
-    ) -> torch.Tensor:
+    ) -> Tensor:
         context = self.trainable_context
 
         if dynamic_context is not None:
@@ -122,7 +133,7 @@ class GATEncoder(nn.Module):
             edge_dim=edge_dim,
         )
 
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Optional[Tensor] = None) -> Tensor:
         return self.encoder(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
 
@@ -134,7 +145,7 @@ def gen_mlp(
     activation_func: str = "SiLU",
     final_activation: bool = True,
     layer_norm: bool = True,
-    checkpoints: bool = True,
+    checkpoints: bool = False,
 ) -> nn.Module:
     try:
         act_func = getattr(nn, activation_func)
@@ -155,6 +166,7 @@ def gen_mlp(
         mlp1.append(nn.LayerNorm(out_features))
 
     return CheckpointWrapper(mlp1) if checkpoints else mlp1
+    # return mlp1
 
 
 class MessagePassingMLP(nn.Module):
@@ -170,7 +182,7 @@ class MessagePassingMLP(nn.Module):
         checkpoints: bool = True,
     ) -> None:
         super().__init__()
-        self.node_emb = gen_mlp(
+        self.mlp = gen_mlp(
             in_features=in_channels,
             hidden_dim=latent_dim,
             out_features=out_channels,
@@ -181,49 +193,8 @@ class MessagePassingMLP(nn.Module):
             checkpoints=checkpoints,
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.node_emb(x)
-
-
-class MessagePassingMapper(nn.Module):
-    def __init__(
-        self,
-        hidden_dim: int,
-        hidden_layers: int,
-        hidden_layers_block: int = 1,
-        mlp_extra_layers: int = 0,
-        activation: str = "SiLU",
-        checkpoints: bool = True,
-    ) -> None:
-        super().__init__()
-
-        self.hidden_layers = int(hidden_layers / hidden_layers_block)
-        self.act_checkpoints = checkpoints
-
-        self.proc = nn.ModuleList(
-            [
-                MessagePassingSubProc(
-                    hidden_dim, hidden_layers=hidden_layers_block, mlp_extra_layers=mlp_extra_layers, activation=activation
-                )
-                for _ in range(self.hidden_layers)
-            ]
-        )
-
-    def forward(
-        self, x: Tuple[torch.Tensor, torch.Tensor], edge_index: torch.Tensor, edge_attr: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        x_src, x_dst = x
-        for i in range(self.hidden_layers):
-            if self.act_checkpoints:
-                (x_src, x_dst), edge_attr = checkpoint(
-                    self.proc[i], (x_src, x_dst), edge_index, edge_attr, size=(x_src.shape[0], x_dst.shape[0]), use_reentrant=False
-                )
-            else:
-                (x_src, x_dst), edge_attr = self.proc[i](
-                    (x_src, x_dst), edge_index, edge_attr, size=(x_src.shape[0], x_dst.shape[0])
-                )
-
-        return (x_src, x_dst)
+    def forward(self, x: Tensor) -> Tensor:
+        return self.mlp(x)
 
 
 class MessagePassingProcessor(nn.Module):
@@ -231,61 +202,80 @@ class MessagePassingProcessor(nn.Module):
         self,
         hidden_dim: int,
         hidden_layers: int,
-        hidden_layers_block: int = 4,
+        chunks: int = 4,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
-        checkpoints: bool = True,
+        cpu_offload: bool = False,
     ) -> None:
         super().__init__()
 
-        self.hidden_layers = int(hidden_layers / hidden_layers_block)
-        self.act_checkpoints = checkpoints
+        self.hidden_layers = chunks
+        chunk_size = int(hidden_layers / chunks)
+
+        assert hidden_layers % chunks == 0
 
         self.proc = nn.ModuleList(
             [
-                MessagePassingSubProc(
-                    hidden_dim, hidden_layers=hidden_layers_block, mlp_extra_layers=mlp_extra_layers, activation=activation
+                MessagePassingProcessorChunk(
+                    hidden_dim, hidden_layers=chunk_size, mlp_extra_layers=mlp_extra_layers, activation=activation
                 )
                 for _ in range(self.hidden_layers)
             ]
         )
+        if cpu_offload:
+            self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
 
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor) -> Tensor:
         for i in range(self.hidden_layers):
-            if self.act_checkpoints:
-                x, edge_attr = checkpoint(self.proc[i], x, edge_index, edge_attr, size=None, use_reentrant=False)
-            else:
-                x, edge_attr = self.proc[i](x, edge_index, edge_attr, size=None)
+            x, edge_attr = checkpoint(self.proc[i], x, edge_index, edge_attr, size=None, use_reentrant=False)
 
         return x
 
 
-class MessagePassingSubProc(nn.Module):
+class MessagePassingMapper(MessagePassingProcessor):
+    def __init__(
+        self,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+
+    def forward(self, x: Tuple[Tensor, Tensor], edge_index: Adj, edge_attr: Tensor) -> Tuple[Tensor, Tensor]:
+        x_src, x_dst = x
+        for i in range(self.hidden_layers):
+            (x_src, x_dst), edge_attr = checkpoint(
+                self.proc[i], (x_src, x_dst), edge_index, edge_attr, size=(x_src.shape[0], x_dst.shape[0]), use_reentrant=False
+            )
+
+        return x_src, x_dst
+
+
+class MessagePassingProcessorChunk(nn.Module):
+    """Wraps X message passing blocks for checkpointing in Processor / Mapper"""
+
     def __init__(
         self,
         hidden_dim: int,
         hidden_layers: int,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
-        checkpoints: bool = False,
     ) -> None:
         super().__init__()
 
         self.hidden_layers = hidden_layers
-        self.act_checkpoints = checkpoints
 
         self.proc = nn.ModuleList(
             [
                 MessagePassingBlock(
-                    hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation, checkpoints=checkpoints
+                    hidden_dim,
+                    hidden_dim,
+                    mlp_extra_layers=mlp_extra_layers,
+                    activation=activation,
                 )
                 for _ in range(self.hidden_layers)
             ]
         )
 
-    def forward(
-        self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor, size=None
-    ) -> Union[Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]:
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, size: Size = None):
         for i in range(self.hidden_layers):
             x, edge_attr = self.proc[i](x, edge_index, edge_attr, size=size)
 
@@ -299,12 +289,9 @@ class MessagePassingBlock(MessagePassing):
         out_channels: int,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
-        checkpoints: bool = False,  # memory consumption goes up when already checkpointed in processor / mapper
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-
-        self.act_checkpoints = checkpoints
 
         self.node_mlp = gen_mlp(
             2 * in_channels,
@@ -312,7 +299,6 @@ class MessagePassingBlock(MessagePassing):
             out_channels,
             n_extra_layers=mlp_extra_layers,
             activation_func=activation,
-            checkpoints=checkpoints,
         )
         self.edge_mlp = gen_mlp(
             3 * in_channels,
@@ -320,15 +306,12 @@ class MessagePassingBlock(MessagePassing):
             out_channels,
             n_extra_layers=mlp_extra_layers,
             activation_func=activation,
-            checkpoints=checkpoints,
         )
 
-    def forward(
-        self, x, edge_index, edge_attr, size=None
-    ) -> Union[Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]:
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, size: Size = None):
         out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size)
 
-        if isinstance(x, torch.Tensor):
+        if isinstance(x, Tensor):
             nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x
         else:
             nodes_new_dst = self.node_mlp(torch.cat([x[1], out], dim=1)) + x[1]
@@ -337,13 +320,12 @@ class MessagePassingBlock(MessagePassing):
 
         return nodes_new, edges_new
 
-    def message(self, x_i, x_j, edge_attr) -> torch.Tensor:
-        edges_new = torch.cat([x_i, x_j, edge_attr], dim=1)
-        edges_new = self.edge_mlp(edges_new) + edge_attr
+    def message(self, x_i: Tensor, x_j: Tensor, edge_attr: Tensor) -> Tensor:
+        edges_new = self.edge_mlp(torch.cat([x_i, x_j, edge_attr], dim=1)) + edge_attr
 
         return edges_new
 
-    def aggregate(self, edges_new, edge_index, dim_size: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def aggregate(self, edges_new: Tensor, edge_index: Adj, dim_size: Optional[int] = None) -> Tuple[Tensor, Tensor]:
         out = scatter(edges_new, edge_index[1], dim=0, reduce="sum")
 
         return out, edges_new
@@ -362,9 +344,9 @@ if __name__ == "__main__":
     bs, nlatlon, nfeat = 8, 1024, 64
     hdim, ofeat = 128, 36
     x_in = torch.randn((bs, nlatlon, nfeat), dtype=torch.float32, requires_grad=True)
-    mlp_1 = gen_mlp(nfeat, hdim, hdim, layer_norm=True, checkpoints=True)
-    mlp_2 = gen_mlp(hdim, hdim, hdim, layer_norm=True, checkpoints=False)
-    mlp_3 = gen_mlp(hdim, hdim, ofeat, layer_norm=True, checkpoints=True)
+    mlp_1 = gen_mlp(nfeat, hdim, hdim, layer_norm=True)
+    mlp_2 = gen_mlp(hdim, hdim, hdim, layer_norm=True)
+    mlp_3 = gen_mlp(hdim, hdim, ofeat, layer_norm=True)
     y = mlp_1(x_in)
     LOGGER.debug("mlp_1(x).shape = %s", y.shape)
     y = mlp_2(y)

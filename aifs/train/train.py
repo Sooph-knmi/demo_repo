@@ -76,7 +76,6 @@ def train(config: YAMLConfig) -> None:
         save_basedir=os.path.join(
             config["output:basedir"].format(resolution=config["input:resolution"]), config["output:plots:plot-dir"], timestamp
         ),
-        act_checkpoints=config["model:act-checkpoints"],
         log_to_wandb=config["model:wandb:enabled"],
         log_to_neptune=config["model:neptune:enabled"],
         log_persistence=False,
@@ -167,6 +166,8 @@ def train(config: YAMLConfig) -> None:
         limit_val_batches=config["model:limit-batches:validation"],
         num_sanity_val_steps=0,
         accumulate_grad_batches=config["model:accum-grad-batches"],
+        gradient_clip_val=config["model:gradient-clip-val"],
+        gradient_clip_algorithm=config["model:gradient-clip-algorithm"],
         # we have our own DDP-compliant sampler logic baked into the dataset
         # I'm running with lightning 2.0, if you use an older version comment out the following line
         # and use `replace_sampler_ddp=False` instead
@@ -175,7 +176,6 @@ def train(config: YAMLConfig) -> None:
     )
 
     trainer.fit(model, datamodule=dmod, ckpt_path=ckpt_path)
-    LOGGER.debug(f"max memory alloc: {torch.cuda.max_memory_allocated(torch.device(0))/(1000.*1024)}")
     LOGGER.debug("---- DONE. ----")
 
 
