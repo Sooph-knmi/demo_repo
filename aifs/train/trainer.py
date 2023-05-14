@@ -155,7 +155,7 @@ class GraphForecaster(pl.LightningModule):
         if self.trainer.global_step < 1000:
             lr_scale = min(1.0, float(self.trainer.global_step + 1) / 1000.0)
             for pg in optimizer.param_groups:
-                pg["lr"] = lr_scale * self.learning_rate
+                pg["lr"] = lr_scale * self.lr
 
     def on_train_epoch_end(self):
         self.log(
