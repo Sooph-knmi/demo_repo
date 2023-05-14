@@ -90,7 +90,7 @@ output:
   basedir: /ec/res4/scratch/pamc/GNN/ERA5/{resolution}/
   logging:
     log-dir: logs
-    log-interval: 250
+    log-interval: 100
   checkpoints:
     # model checkpoints: used to resume training or do inference
     ckpt-dir: checkpoints
@@ -123,8 +123,8 @@ model:
     enabled: False
   dataloader:
     num-workers:
-      training: 16
-      validation: 16
+      training: 8
+      validation: 8
       test: 8
       predict: 8
     batch-size:
@@ -134,8 +134,8 @@ model:
       predict: 4
 
   # logger options (these probably come with some overhead)
-  log-gradients: True
-  log-parameters: True
+  log-gradients: False
+  log-parameters: False
 
   # resume training from a checkpoint
   warm-restart:
@@ -163,7 +163,7 @@ model:
 
   # number of GPUs per node and number of nodes (for DDP)
   num-gpus: 4
-  num-nodes: 2
+  num-nodes: 1
 
   # training settings
   lead-time: 6
