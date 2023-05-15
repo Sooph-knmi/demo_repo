@@ -148,7 +148,7 @@ class GraphForecaster(pl.LightningModule):
             prog_bar=True,
             logger=True,
             batch_size=batch.shape[0],
-            sync_dist=False,
+            sync_dist=True,
         )
         return train_loss
 
@@ -163,7 +163,7 @@ class GraphForecaster(pl.LightningModule):
             prog_bar=True,
             logger=True,
             batch_size=batch.shape[0],
-            sync_dist=False,
+            sync_dist=True,
         )
         for mname, mvalue in metrics.items():
             self.log(
@@ -174,7 +174,7 @@ class GraphForecaster(pl.LightningModule):
                 prog_bar=False,
                 logger=True,
                 batch_size=batch.shape[0],
-                sync_dist=False,
+                sync_dist=True,
             )
 
     def _plot_loss(self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int) -> None:

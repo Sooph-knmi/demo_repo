@@ -84,8 +84,6 @@ class GraphMSG(nn.Module):
             persistent=True,
         )
 
-        LOGGER.debug(f"----> {self.h_latlons.shape[1]}, f{self.e2h_edge_attr.shape[1]}")
-
         # latent nodes:
         self.node_era_embedder = MessagePassingMLP(
             in_channels=self.mstep * (in_channels + aux_in_channels) + self.era_latlons.shape[1],
@@ -164,6 +162,19 @@ class GraphMSG(nn.Module):
             chunks=1,
             activation=activation,
         )
+
+        self._init_weights()
+
+    def _init_weights(self) -> None:
+        """Initializes the weights"""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight)
+                if m.bias is not None:
+                    m.bias.data.zero_()
+            elif isinstance(m, nn.LayerNorm):
+                m.bias.data.zero_()
+                m.weight.data.fill_(1.0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         bs = x.shape[0]

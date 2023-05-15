@@ -1,23 +1,15 @@
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union  # , List
 
 import einops
 import torch
+from torch import nn
 from torch import Tensor
-import torch.nn as nn
-import torch_geometric.nn as tgnn
+from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import offload_wrapper
 from torch.utils.checkpoint import checkpoint
+import torch_geometric.nn as tgnn
 from torch_geometric.nn.conv import MessagePassing
+from torch_geometric.typing import Adj, OptPairTensor, Size, PairTensor
 from torch_geometric.utils import scatter
-
-from torch_geometric.typing import (
-    Adj,
-    OptPairTensor,
-    Size,
-)
-
-from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
-    offload_wrapper,
-)
 
 from aifs.utils.logger import get_logger
 
@@ -154,7 +146,7 @@ def gen_mlp(
         raise RuntimeError from ae
 
     mlp1 = nn.Sequential(nn.Linear(in_features, hidden_dim), act_func())
-    for i in range(n_extra_layers):
+    for _ in range(n_extra_layers):
         mlp1.append(nn.Linear(hidden_dim, hidden_dim))
         mlp1.append(act_func())
     mlp1.append(nn.Linear(hidden_dim, out_features))
@@ -166,7 +158,6 @@ def gen_mlp(
         mlp1.append(nn.LayerNorm(out_features))
 
     return CheckpointWrapper(mlp1) if checkpoints else mlp1
-    # return mlp1
 
 
 class MessagePassingMLP(nn.Module):
@@ -222,6 +213,7 @@ class MessagePassingProcessor(nn.Module):
                 for _ in range(self.hidden_layers)
             ]
         )
+
         if cpu_offload:
             self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
 
@@ -239,7 +231,7 @@ class MessagePassingMapper(MessagePassingProcessor):
     ) -> None:
         super().__init__(**kwargs)
 
-    def forward(self, x: Tuple[Tensor, Tensor], edge_index: Adj, edge_attr: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, x: PairTensor, edge_index: Adj, edge_attr: Tensor) -> PairTensor:
         x_src, x_dst = x
         for i in range(self.hidden_layers):
             (x_src, x_dst), edge_attr = checkpoint(
@@ -275,7 +267,7 @@ class MessagePassingProcessorChunk(nn.Module):
             ]
         )
 
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, size: Size = None):
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, size: Size = None) -> PairTensor:
         for i in range(self.hidden_layers):
             x, edge_attr = self.proc[i](x, edge_index, edge_attr, size=size)
 
@@ -341,7 +333,7 @@ class CheckpointWrapper(nn.Module):
 
 
 if __name__ == "__main__":
-    bs, nlatlon, nfeat = 8, 1024, 64
+    bs, nlatlon, nfeat = 1, 1024, 64
     hdim, ofeat = 128, 36
     x_in = torch.randn((bs, nlatlon, nfeat), dtype=torch.float32, requires_grad=True)
     mlp_1 = gen_mlp(nfeat, hdim, hdim, layer_norm=True)
