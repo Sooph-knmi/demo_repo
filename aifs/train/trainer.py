@@ -133,6 +133,13 @@ class GraphForecaster(pl.LightningModule):
             batch_size=batch.shape[0],
             sync_dist=True,
         )
+        self.log(
+            "rollout",
+            float(self.rollout),
+            on_step=True,
+            logger=True,
+            sync_dist=True,
+        )
         if self.log_persistence:
             self.log(
                 "train_persist_wmse",
@@ -149,21 +156,21 @@ class GraphForecaster(pl.LightningModule):
     # Learning rate warm-up
     def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_closure):
         # update params
-        optimizer.step(closure=optimizer_closure)
-
         # manually warm up lr without a scheduler
         if self.trainer.global_step < 1000:
             lr_scale = min(1.0, float(self.trainer.global_step + 1) / 1000.0)
             for pg in optimizer.param_groups:
                 pg["lr"] = lr_scale * self.lr
+        elif self.trainer.global_step < 300000 + 1000:
+            lr_scale = ( self.lr - 0.3 * 10**-7 ) * 0.5 * ( 1 + np.cos(np.pi * (self.trainer.global_step-1000)/300000) )
+            for pg in optimizer.param_groups:
+                pg["lr"] = 0.3 * 10**-7 + lr_scale * self.lr
+        else:
+            for pg in optimizer.param_groups:
+                pg["lr"] = 0.3 * 10**-7
+        optimizer.step(closure=optimizer_closure)
 
     def on_train_epoch_end(self):
-        self.log(
-            "rollout",
-            float(self.rollout),
-            logger=True,
-            sync_dist=True,
-        )
         if self.rollout_epoch_increment > 0 and self.current_epoch % self.rollout_epoch_increment == 0:
             self.rollout += 1
             LOGGER.debug("Rollout window length: %d", self.rollout)
@@ -321,15 +328,15 @@ class GraphForecaster(pl.LightningModule):
         # TODO: revisit the choice of optimizer (switch to something fancier, like FusedAdam/LAMB?)
         # TODO: Using a momentum-free optimizer (SGD) may reduce memory usage (but degrade convergence?) - to test
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr, fused=True)
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=180, eta_min=5.0e-7)
+#        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=180, eta_min=5.0e-7)
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": lr_scheduler,
-                "monitor": "val_wmse",
-                "interval": "epoch",
-                "frequency": 1,
-                "strict": True,
-                "name": "gnn_lr_sched",
-            },
+#            "lr_scheduler": {
+#                "scheduler": lr_scheduler,
+#                "monitor": "val_wmse",
+#                "interval": "epoch",
+#                "frequency": 1,
+#                "strict": True,
+#                "name": "gnn_lr_sched",
+#            },
         }
