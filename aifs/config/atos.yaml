@@ -155,7 +155,6 @@ model:
   # parallel strategy
   # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
   strategy: auto
-
   # number of GPUs per node and number of nodes (for DDP)
   num-gpus: 4
   num-nodes: 1
@@ -192,7 +191,6 @@ model:
   encoder:
     num-layers: 16
     mapper-num-layers: 1
-    num-heads: 8
     activation: SiLU
     num-hidden-channels: 512
     num-out-channels: 512
