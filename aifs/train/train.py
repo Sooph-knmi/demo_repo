@@ -72,6 +72,7 @@ def train(config: YAMLConfig) -> None:
         mlp_extra_layers=config["model:encoder:mlp-extra-layers"],
         activation=config["model:encoder:activation"],
         lr=total_gpu_count * config["model:learn-rate"],
+        lr_iterations = config["model:lr-iterations"],
         rollout=config["model:rollout"],
         save_basedir=os.path.join(
             config["output:basedir"].format(resolution=config["input:resolution"]), config["output:plots:plot-dir"], timestamp

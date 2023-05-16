@@ -34,6 +34,7 @@ class GraphForecaster(pl.LightningModule):
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
         lr: float = 1e-4,
+        lr_iterations: int = 300000,
         rollout: int = 1,
         save_basedir: Optional[str] = None,
         act_checkpoints: bool = True,
@@ -83,6 +84,7 @@ class GraphForecaster(pl.LightningModule):
 
         self.feature_dim = fc_dim
         self.lr = lr
+        self.lr_iterations = lr_iterations
         self.rollout = rollout
         self.rollout_epoch_increment = rollout_epoch_increment
         self.rollout_max = rollout_max
@@ -161,8 +163,8 @@ class GraphForecaster(pl.LightningModule):
             lr_scale = min(1.0, float(self.trainer.global_step + 1) / 1000.0)
             for pg in optimizer.param_groups:
                 pg["lr"] = lr_scale * self.lr
-        elif self.trainer.global_step < 300000 + 1000:
-            lr_scale = ( self.lr - 0.3 * 10**-7 ) * 0.5 * ( 1 + np.cos(np.pi * (self.trainer.global_step-1000)/300000) )
+        elif self.trainer.global_step < self.lr_iterations + 1000:
+            lr_scale = ( self.lr - 0.3 * 10**-7 ) * 0.5 * ( 1 + np.cos(np.pi * (self.trainer.global_step-1000)/self.lr_iterations) )
             for pg in optimizer.param_groups:
                 pg["lr"] = 0.3 * 10**-7 + lr_scale * self.lr
         else:

@@ -171,8 +171,9 @@ model:
 
   # training settings
   lead-time: 6
-  max-epochs: 100 #50
+  max-epochs: 50 #50
   learn-rate: 0.000125 #0.625e-4
+  lr-iterations: 300000
 
   # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
   # the effective batch size becomes num-devices * batch-size * k
