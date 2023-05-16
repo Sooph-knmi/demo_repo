@@ -7,15 +7,12 @@ import pytorch_lightning as pl
 import torch
 
 from pytorch_lightning.profilers import AdvancedProfiler
-from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
-from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAveraging
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.train.trainer import GraphForecaster
-from aifs.train.utils import get_args, setup_wandb_logger, pl_scaling
+from aifs.train.utils import get_args, setup_wandb_logger, pl_scaling, setup_callbacks
 from aifs.utils.config import YAMLConfig
 from aifs.utils.logger import get_logger
-from aifs.train.callbacks import RolloutEval
 
 LOGGER = get_logger(__name__)
 
@@ -98,41 +95,7 @@ def train(config: YAMLConfig) -> None:
         )
         LOGGER.debug("Training will resume from %s ...", ckpt_path)
 
-    trainer_callbacks = [
-        # EarlyStopping(monitor="val_wmse", min_delta=0.0, patience=7, verbose=False, mode="min"),
-        ModelCheckpoint(
-            dirpath=os.path.join(
-                config["output:basedir"].format(resolution=config["input:resolution"]),
-                config["output:checkpoints:ckpt-dir"],
-                timestamp,
-            ),
-            filename=config["output:model:checkpoint-filename"],
-            monitor="val_wmse",
-            verbose=False,
-            save_top_k=config["output:model:save-top-k"],
-            # save weights, optimizer states, LR-schedule states, hyperparameters etc.
-            # https://pytorch-lightning.readthedocs.io/en/stable/common/checkpointing_basic.html#contents-of-a-checkpoint
-            save_weights_only=False,
-            mode="min",
-            auto_insert_metric_name=True,
-            # save after every validation epoch, if we've improved
-            save_on_train_epoch_end=False,
-            every_n_epochs=1,
-        ),
-        RolloutEval(rollout=config["diagnostics:eval:rollout"], frequency=config["diagnostics:eval:frequency"]),
-    ]
-
-    if config["model:swa:enabled"]:
-        trainer_callbacks.append(
-            StochasticWeightAveraging(
-                swa_lrs=config["model:swa:lr"],
-                swa_epoch_start=min(int(0.75 * config["model:max-epochs"]), config["model:max-epochs"] - 1),
-                annealing_epochs=max(int(0.25 * config["model:max-epochs"]), 1),
-                annealing_strategy="cos",
-                # TODO: do we want the averaging to happen on the CPU, to save memory?
-                device=None,
-            )
-        )
+    trainer_callbacks = setup_callbacks(config, timestamp)
 
     if config["model:profile"]:
         profiler = AdvancedProfiler(
