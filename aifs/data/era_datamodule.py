@@ -1,3 +1,4 @@
+from typing import Optional
 import os
 
 import pytorch_lightning as pl
@@ -27,18 +28,23 @@ class ERA5DataModule(pl.LightningDataModule):
         self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
         self.ds_train = self._get_dataset("training")
-        self.ds_valid = self._get_dataset("validation")
+
+        r = self.config["model:rollout"]
+        if config["diagnostics:eval:enabled"]:
+            r = max(r, self.config["diagnostics:eval:rollout"])
+        self.ds_valid = self._get_dataset("validation", rollout=r)
 
         ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
         self.input_metadata = ds_tmp.attrs["climetlab"]
         ds_tmp = None
 
-    def _get_dataset(self, stage: str) -> ERA5NativeGridDataset:
+    def _get_dataset(self, stage: str, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
+        r = rollout if rollout is not None else self.config["model:rollout"]
         return ERA5NativeGridDataset(
             fname=self._get_data_filename(stage),
             era_data_reader=read_era_data,
             lead_time=self.config["model:lead-time"],
-            rollout=self.config["model:rollout"],
+            rollout=r,
             multistep=self.config["model:multistep-input"],
             rank=self.local_rank,
             world_size=self.config["model:num-gpus"] * self.config["model:num-nodes"],

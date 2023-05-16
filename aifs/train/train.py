@@ -15,6 +15,7 @@ from aifs.train.trainer import GraphForecaster
 from aifs.train.utils import get_args, setup_wandb_logger, pl_scaling
 from aifs.utils.config import YAMLConfig
 from aifs.utils.logger import get_logger
+from aifs.train.callbacks import RolloutEval
 
 LOGGER = get_logger(__name__)
 
@@ -118,6 +119,7 @@ def train(config: YAMLConfig) -> None:
             save_on_train_epoch_end=False,
             every_n_epochs=1,
         ),
+        RolloutEval(rollout=config["diagnostics:eval:rollout"], frequency=config["diagnostics:eval:frequency"]),
     ]
 
     if config["model:swa:enabled"]:
