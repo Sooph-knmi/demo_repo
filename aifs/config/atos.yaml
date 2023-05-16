@@ -143,10 +143,6 @@ model:
     # path should be relative to the output:checkpoints:chkpt-dir, as defined above
     ckpt-path: 202304_1014/aifs-resolution=0-ckpt-epoch=49-val_wmse=0.010.ckpt
   
-  # enable checkpointing of GNN activations? T/F
-  # saves GPU memory at the expense of additional compute
-  act-checkpoints: True
-
   # miscellaneous
   precision: 16-mixed  # "16" with Lightning < 2.0
 
@@ -178,6 +174,10 @@ model:
   # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
   # the effective batch size becomes num-devices * batch-size * k
   accum-grad-batches: 1
+
+  # clipp gradients, 0 : don't clip, default algorithm: norm, alternative: value
+  gradient-clip-val: 0
+  gradient-clip-algorithm: value
 
   # stochastic weight averaging
   # https://pytorch.org/blog/stochastic-weight-averaging-in-pytorch/
