@@ -36,6 +36,7 @@ class GraphForecaster(pl.LightningModule):
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
         lr: float = 1e-4,
+        lr_iterations: int = 300000,
         rollout: int = 1,
         save_basedir: Optional[str] = None,
         log_to_wandb: bool = False,
@@ -83,6 +84,7 @@ class GraphForecaster(pl.LightningModule):
 
         self.feature_dim = fc_dim
         self.lr = lr
+        self.lr_iterations = lr_iterations
         self.rollout = rollout
         self.rollout_epoch_increment = rollout_epoch_increment
         self.rollout_max = rollout_max
@@ -134,6 +136,13 @@ class GraphForecaster(pl.LightningModule):
             batch_size=batch.shape[0],
             sync_dist=True,
         )
+        self.log(
+            "rollout",
+            float(self.rollout),
+            on_step=True,
+            logger=True,
+            sync_dist=True,
+        )
         if self.log_persistence:
             self.log(
                 "train_persist_wmse",
@@ -150,21 +159,23 @@ class GraphForecaster(pl.LightningModule):
     # Learning rate warm-up
     def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_closure):
         # update params
-        optimizer.step(closure=optimizer_closure)
-
         # manually warm up lr without a scheduler
         if self.trainer.global_step < 1000:
             lr_scale = min(1.0, float(self.trainer.global_step + 1) / 1000.0)
             for pg in optimizer.param_groups:
                 pg["lr"] = lr_scale * self.lr
+        elif self.trainer.global_step < self.lr_iterations + 1000:
+            lr_scale = (
+                (self.lr - 0.3 * 10**-7) * 0.5 * (1 + np.cos(np.pi * (self.trainer.global_step - 1000) / self.lr_iterations))
+            )
+            for pg in optimizer.param_groups:
+                pg["lr"] = 0.3 * 10**-7 + lr_scale * self.lr
+        else:
+            for pg in optimizer.param_groups:
+                pg["lr"] = 0.3 * 10**-7
+        optimizer.step(closure=optimizer_closure)
 
     def on_train_epoch_end(self):
-        self.log(
-            "rollout",
-            float(self.rollout),
-            logger=True,
-            sync_dist=True,
-        )
         if self.rollout_epoch_increment > 0 and self.current_epoch % self.rollout_epoch_increment == 0:
             self.rollout += 1
             LOGGER.debug("Rollout window length: %d", self.rollout)
@@ -322,22 +333,6 @@ class GraphForecaster(pl.LightningModule):
         # TODO: revisit the choice of optimizer (switch to something fancier, like FusedAdam/LAMB?)
         # TODO: Using a momentum-free optimizer (SGD) may reduce memory usage (but degrade convergence?) - to test
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr, fused=True)
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=180, eta_min=5.0e-7)
-        #lr_scheduler = pl_bolts.optimizers.lr_scheduler.LinearWarmupCosineAnnealingLR(
-        #    optimizer,
-        #    max_epochs = 3000,
-        #    warmup_start_lr = 0,
-        #    warmup_epochs = 10,
-        #    eta_min=5.0e-7
-        #)
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": lr_scheduler,
-                "monitor": "val_wmse",
-                "interval": "epoch",
-                "frequency": 1,
-                "strict": True,
-                "name": "gnn_lr_sched",
-            },
         }
