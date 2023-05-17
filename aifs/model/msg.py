@@ -4,10 +4,13 @@ import torch
 from torch import nn
 from torch_geometric.data import HeteroData
 
+from torch.utils.checkpoint import checkpoint
+
+from torch.autograd.graph import save_on_cpu
+
 from aifs.model.layers import (
     MessagePassingProcessor,
     MessagePassingMapper,
-    MessagePassingMLP,
 )
 from aifs.utils.logger import get_logger
 
@@ -84,81 +87,38 @@ class GraphMSG(nn.Module):
             persistent=True,
         )
 
-        # latent nodes:
-        self.node_era_embedder = MessagePassingMLP(
-            in_channels=self.mstep * (in_channels + aux_in_channels) + self.era_latlons.shape[1],
-            latent_dim=encoder_out_channels,
-            out_channels=encoder_out_channels,
-            mlp_extra_layers=mlp_extra_layers,
-            activation=activation,
-        )
-
-        self.node_h_embedder = MessagePassingMLP(
-            in_channels=self.h_latlons.shape[1],
-            latent_dim=encoder_out_channels,
-            out_channels=encoder_out_channels,
-            mlp_extra_layers=mlp_extra_layers,
-            activation=activation,
-        )  # position channels only
-
-        self.edge_era_to_h_embedder = MessagePassingMLP(
-            in_channels=self.e2h_edge_attr.shape[1],
-            latent_dim=encoder_out_channels,
-            out_channels=encoder_out_channels,
-            mlp_extra_layers=mlp_extra_layers,
-            activation=activation,
-        )
-
-        self.edge_h_to_h_embedder = MessagePassingMLP(
-            in_channels=self.h2h_edge_attr.shape[1],
-            latent_dim=encoder_out_channels,
-            out_channels=encoder_out_channels,
-            mlp_extra_layers=mlp_extra_layers,
-            activation=activation,
-        )
-
-        self.edge_h_to_era_embedder = MessagePassingMLP(
-            in_channels=self.h2e_edge_attr.shape[1],
-            latent_dim=encoder_out_channels,
-            out_channels=encoder_out_channels,
-            mlp_extra_layers=mlp_extra_layers,
-            activation=activation,
-        )
-
-        # extract features:
-        self.node_era_extractor = MessagePassingMLP(
-            in_channels=encoder_out_channels,
-            latent_dim=encoder_out_channels,
-            out_channels=in_channels,
-            mlp_extra_layers=mlp_extra_layers + 1,  # add decoder head
-            activation=activation,
-            layer_norm=False,
-            final_activation=False,
-        )
-
         # ERA -> H
         self.forward_mapper = MessagePassingMapper(
+            in_channels_src=self.mstep * (in_channels + aux_in_channels) + self.era_latlons.shape[1],
+            in_channels_dst=self.h_latlons.shape[1],
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             mlp_extra_layers=mlp_extra_layers,
+            edge_dim=self.e2h_edge_attr.shape[1],
             chunks=1,
             activation=activation,
         )
 
         # H -> H
         self.h_processor = MessagePassingProcessor(
-            hidden_dim=encoder_hidden_channels,
+            hidden_dim=encoder_out_channels,
             hidden_layers=encoder_num_layers,
             mlp_extra_layers=mlp_extra_layers,
+            edge_dim=self.h2h_edge_attr.shape[1],
             chunks=2,
             activation=activation,
         )
 
         # H -> ERA5
         self.backward_mapper = MessagePassingMapper(
+            in_channels_src=encoder_out_channels,
+            in_channels_dst=encoder_out_channels,
+            out_channels_dst=in_channels,
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             mlp_extra_layers=mlp_extra_layers,
+            edge_dim=self.h2e_edge_attr.shape[1],
+            backward_mapper=True,
             chunks=1,
             activation=activation,
         )
@@ -178,58 +138,51 @@ class GraphMSG(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         bs = x.shape[0]
-        x_in = einops.rearrange(x, "b m n f -> (b n) (m f)")
 
-        # add ERA positional info (lat/lon)
+        # reshape and add ERA positional info (lat/lon)
         x_in = torch.cat(
             [
-                x_in,
+                einops.rearrange(x, "b m n f -> (b n) (m f)"),
                 einops.repeat(self.era_latlons, "n f -> (repeat n) f", repeat=bs),
             ],
             dim=-1,  # feature dimension
         )
 
-        x_era_latent = self.node_era_embedder(x_in)
-        x_h_latent = self.node_h_embedder(einops.repeat(self.h_latlons, "n f -> (repeat n) f", repeat=bs))
-
-        edge_era_to_h_latent = self.edge_era_to_h_embedder(
-            einops.repeat(self.e2h_edge_attr, "e f -> (repeat e) f", repeat=bs)
-        )  # copy edge attributes bs times
-        (x_era_latent, x_latent) = self.forward_mapper(
-            (x_era_latent, x_h_latent),
+        x_era_latent, x_latent = checkpoint(
+            self.forward_mapper,
+            (x_in, einops.repeat(self.h_latlons, "n f -> (repeat n) f", repeat=bs)),
             # expand edge index correct number of times while adding the proper number to the edge index
             edge_index=torch.cat(
                 [self.e2h_edge_index + i * self._e2h_edge_inc for i in range(bs)],
                 dim=1,
             ),
-            edge_attr=edge_era_to_h_latent,
+            edge_attr=einops.repeat(self.e2h_edge_attr, "e f -> (repeat e) f", repeat=bs),
+            use_reentrant=False,
         )
 
-        edge_h_to_h_latent = self.edge_h_to_h_embedder(einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs))
-        x_latent_proc = self.h_processor(  # has skipped connections
+        x_latent_proc = self.h_processor(  # has skipped connections and checkpoints inside
             x=x_latent,
             edge_index=torch.cat(
                 [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bs)],
                 dim=1,
             ),
-            edge_attr=edge_h_to_h_latent,
+            edge_attr=einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs),
         )
 
-        # added skip connection (H -> H)
+        # add skip connection (H -> H)
         x_latent_proc = x_latent_proc + x_latent
 
-        edge_h_to_e_latent = self.edge_h_to_era_embedder(einops.repeat(self.h2e_edge_attr, "e f -> (repeat e) f", repeat=bs))
-
-        _, x_out = self.backward_mapper(
+        _, x_out = checkpoint(
+            self.backward_mapper,
             x=(x_latent_proc, x_era_latent),
             edge_index=torch.cat(
                 [self.h2e_edge_index + i * self._h2e_edge_inc for i in range(bs)],
                 dim=1,
             ),
-            edge_attr=edge_h_to_e_latent,
+            edge_attr=einops.repeat(self.h2e_edge_attr, "e f -> (repeat e) f", repeat=bs),
+            use_reentrant=False,
         )
 
-        x_out = self.node_era_extractor(x_out)
         x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=bs)
 
         # residual connection (just for the predicted variables)
