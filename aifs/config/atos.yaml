@@ -152,8 +152,8 @@ model:
   # runs only N training batches [N = integer | null]
   # if null then we run through all the batches
   limit-batches:
-    training: null
-    validation: null
+    training: 20 #null
+    validation: 20 #null
     test: 20
     predict: 20
 
@@ -167,7 +167,7 @@ model:
 
   # training settings
   lead-time: 6
-  max-epochs: 50 #50
+  max-epochs: 2 #50 #50
   learn-rate: 0.000125 #0.625e-4
   lr-iterations: 300000
 
@@ -195,7 +195,11 @@ model:
     num-out-channels: 512
     mlp-extra-layers: 0
     dropout: 0.
-
+    era_trainable_size: 8
+    h3_trainable_size: 8
+    e2h_trainable_size: 8
+    h2e_trainable_size: 8
+    h2h_trainable_size: 8
   # length of the "rollout" window (see Keisler's paper)
   rollout: 1
   #Increase rollout every n epochs

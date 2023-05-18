@@ -34,6 +34,11 @@ class GraphForecaster(pl.LightningModule):
         encoder_hidden_channels: int = 128,
         encoder_out_channels: int = 128,
         mlp_extra_layers: int = 0,
+        era_trainable_size: int = 8,
+        h3_trainable_size: int = 8,
+        e2h_trainable_size: int = 8,
+        h2e_trainable_size: int = 8,
+        h2h_trainable_size: int = 0, 
         activation: str = "SiLU",
         lr: float = 1e-4,
         lr_iterations: int = 300000,
@@ -60,6 +65,11 @@ class GraphForecaster(pl.LightningModule):
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             encoder_mapper_num_layers=encoder_mapper_num_layers,
+            era_trainable_size=era_trainable_size,
+            h3_trainable_size=h3_trainable_size,
+            e2h_trainable_size=e2h_trainable_size,
+            h2e_trainable_size=h2e_trainable_size,
+            h2h_trainable_size=h2h_trainable_size,
         )
 
         self.normalizer = InputNormalizer(metadata)
