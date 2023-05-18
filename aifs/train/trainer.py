@@ -38,7 +38,7 @@ class GraphForecaster(pl.LightningModule):
         h3_trainable_size: int = 8,
         e2h_trainable_size: int = 8,
         h2e_trainable_size: int = 8,
-        h2h_trainable_size: int = 0, 
+        h2h_trainable_size: int = 0,
         activation: str = "SiLU",
         lr: float = 1e-4,
         lr_iterations: int = 300000,
@@ -179,7 +179,7 @@ class GraphForecaster(pl.LightningModule):
                 (self.lr - 0.3 * 10**-7) * 0.5 * (1 + np.cos(np.pi * (self.trainer.global_step - 1000) / self.lr_iterations))
             )
             for pg in optimizer.param_groups:
-                pg["lr"] = 0.3 * 10**-7 + lr_scale #* self.lr
+                pg["lr"] = 0.3 * 10**-7 + lr_scale  # * self.lr
         else:
             for pg in optimizer.param_groups:
                 pg["lr"] = 0.3 * 10**-7
@@ -342,7 +342,7 @@ class GraphForecaster(pl.LightningModule):
     def configure_optimizers(self):
         # TODO: revisit the choice of optimizer (switch to something fancier, like FusedAdam/LAMB?)
         # TODO: Using a momentum-free optimizer (SGD) may reduce memory usage (but degrade convergence?) - to test
-        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)#, fused=True)
+        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
         return {
             "optimizer": optimizer,
         }

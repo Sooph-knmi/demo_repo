@@ -215,10 +215,11 @@ class GraphMSG(nn.Module):
         ]
         if self.era_trainable is not None:
             x_in.append(einops.repeat(self.era_trainable, "e f -> (repeat e) f", repeat=bs))
-        x_era_latent = self.node_era_embedder(torch.cat(
-            x_in,
-            dim=-1,  # feature dimension
-        )
+        x_era_latent = self.node_era_embedder(
+            torch.cat(
+                x_in,
+                dim=-1,  # feature dimension
+            )
         )
 
         x_h_latent = [einops.repeat(self.h_latlons, "e f -> (repeat e) f", repeat=bs)]
@@ -258,7 +259,7 @@ class GraphMSG(nn.Module):
                 edge_h_to_h_latent,
                 dim=-1,  # feature dimension
             )
-            )
+        )
         x_latent_proc = self.h_processor(  # has skipped connections
             x=x_latent,
             edge_index=torch.cat(
