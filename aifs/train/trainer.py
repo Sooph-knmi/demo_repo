@@ -8,6 +8,7 @@ import torch
 from torch_geometric.data import HeteroData
 
 from torch.autograd.graph import save_on_cpu
+from timm.scheduler import CosineLRScheduler
 
 import wandb
 from aifs.model.losses import WeightedMSELoss
@@ -166,24 +167,8 @@ class GraphForecaster(pl.LightningModule):
             )
         return train_loss
 
-    # Learning rate warm-up
-    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_closure):
-        # update params
-        # manually warm up lr without a scheduler
-        if self.trainer.global_step < 1000:
-            lr_scale = min(1.0, float(self.trainer.global_step + 1) / 1000.0)
-            for pg in optimizer.param_groups:
-                pg["lr"] = lr_scale * self.lr
-        elif self.trainer.global_step < self.lr_iterations + 1000:
-            lr_scale = (
-                (self.lr - 0.3 * 10**-7) * 0.5 * (1 + np.cos(np.pi * (self.trainer.global_step - 1000) / self.lr_iterations))
-            )
-            for pg in optimizer.param_groups:
-                pg["lr"] = 0.3 * 10**-7 + lr_scale  # * self.lr
-        else:
-            for pg in optimizer.param_groups:
-                pg["lr"] = 0.3 * 10**-7
-        optimizer.step(closure=optimizer_closure)
+    def lr_scheduler_step(self, scheduler, metric):
+        scheduler.step(epoch=self.trainer.global_step)
 
     def on_train_epoch_end(self):
         if self.rollout_epoch_increment > 0 and self.current_epoch % self.rollout_epoch_increment == 0:
@@ -346,3 +331,13 @@ class GraphForecaster(pl.LightningModule):
         return {
             "optimizer": optimizer,
         }
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
+        scheduler = CosineLRScheduler(
+            optimizer,
+            lr_min=0.3 * 10**-7,
+            t_initial=self.lr_iterations,
+            warmup_t=1000,
+            )
+        return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
+
