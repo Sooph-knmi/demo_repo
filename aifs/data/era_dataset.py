@@ -6,6 +6,7 @@ import torch
 from einops import rearrange
 from torch.utils.data import IterableDataset, get_worker_info
 from zarr.core import Array
+import re
 
 from aifs.utils.constants import _DL_PREFETCH_FACTOR, _ERA_PLEV
 from aifs.utils.logger import get_logger
@@ -44,10 +45,14 @@ class ERA5NativeGridDataset(IterableDataset):
         self.ds: Optional[Array] = None
 
         self.lead_time = lead_time
-        assert self.lead_time > 0 and self.lead_time % 6 == 0, "Lead time must be multiple of 6 hours"
-        self.lead_step = lead_time // 6
+        #Data_step should be stored in meta-data of file
+        self.data_step = int(re.findall("\d+", self.fname)[-1])
+        assert self.data_step == 6 or self.data_step == 1, f"Data step detected as {self.data_step}, only 1 and 6 are supported"
+        assert self.lead_time > 0 and self.lead_time % self.data_step == 0, f"Lead time must be multiple of {self.data_step} hours"
+        self.lead_step = lead_time // self.data_step
 
-        LOGGER.debug("Dataset lead_time = %d, lead_step = %d ...", self.lead_time, self.lead_step)
+        LOGGER.debug("Dataset lead_time = %d, lead_step = %d ..., date_step = %d",
+             self.lead_time, self.lead_step, self.data_step)
 
         self.rollout = rollout
 
