@@ -77,10 +77,11 @@ class ERA5NativeGridDataset(IterableDataset):
         if self.ds is None:
             self.ds = self._read_era(self.fname)
 
-        shard_size = int(np.floor(self.ds.shape[0] / self.world_size))
-        shard_start, shard_end = self.rank * shard_size, min((self.rank + 1) * shard_size, self.ds.shape[0])
+        shard_size = int(np.floor((self.ds.shape[0] - self.rollout * self.lead_step) / self.world_size))
+        shard_start, shard_end = self.rank * shard_size, min((self.rank + 1) * shard_size, 
+                                                            self.ds.shape[0] - self.rollout * self.lead_step)
 
-        ds_len = shard_end - shard_start - self.rollout
+        ds_len = shard_end - shard_start #- self.rollout
         self.n_samples_per_worker = ds_len // n_workers
 
         low = shard_start + worker_id * self.n_samples_per_worker
