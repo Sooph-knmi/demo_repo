@@ -187,7 +187,8 @@ class GraphForecaster(pl.LightningModule):
         self.rollout = min(self.rollout, self.rollout_max)
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        val_loss, persist_loss, metrics = self._shared_eval_step(batch, batch_idx)
+        plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
+        val_loss, metrics = self._step(batch, batch_idx, compute_metrics=True, plot=plot_sample)
         self.log(
             "val_wmse",
             val_loss,

@@ -126,11 +126,7 @@ class GraphMSG(nn.Module):
 
         # latent nodes:
         self.node_era_embedder = MessagePassingMLP(
-<<<<<<< HEAD
-            in_channels=in_channels + aux_in_channels + self.era_latlons.shape[1] + self.era_trainable_size,
-=======
-            in_channels=self.mstep * (in_channels + aux_in_channels) + self.era_latlons.shape[1],
->>>>>>> master
+            in_channels=self.mstep * (in_channels + aux_in_channels) + self.era_latlons.shape[1] + self.era_trainable_size,
             latent_dim=encoder_out_channels,
             out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
