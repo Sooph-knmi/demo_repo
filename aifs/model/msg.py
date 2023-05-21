@@ -1,7 +1,7 @@
 import einops
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 from torch_geometric.data import HeteroData
 
 from aifs.model.layers import (
@@ -20,6 +20,7 @@ class GraphMSG(nn.Module):
         graph_data: HeteroData,
         in_channels: int,
         aux_in_channels: int,
+        multistep: int,
         encoder_num_layers: int,
         encoder_hidden_channels: int,
         encoder_out_channels: int,
@@ -39,6 +40,7 @@ class GraphMSG(nn.Module):
         # create mappings
         self._graph_data = graph_data
         self.in_channels = in_channels
+        self.mstep = multistep
 
         self.register_buffer("e2e_edge_index", self._graph_data[("era", "to", "era")].edge_index, persistent=False)
         self.register_buffer("h2e_edge_index", self._graph_data[("h", "to", "era")].edge_index, persistent=False)
@@ -122,11 +124,13 @@ class GraphMSG(nn.Module):
             persistent=True,
         )
 
-        LOGGER.debug(f"----> {self.h_latlons.shape[1]}, f{self.e2h_edge_attr.shape[1]}")
-
         # latent nodes:
         self.node_era_embedder = MessagePassingMLP(
+<<<<<<< HEAD
             in_channels=in_channels + aux_in_channels + self.era_latlons.shape[1] + self.era_trainable_size,
+=======
+            in_channels=self.mstep * (in_channels + aux_in_channels) + self.era_latlons.shape[1],
+>>>>>>> master
             latent_dim=encoder_out_channels,
             out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
@@ -203,10 +207,22 @@ class GraphMSG(nn.Module):
             activation=activation,
         )
 
+        self._init_weights()
+
+    def _init_weights(self) -> None:
+        """Initializes the weights"""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight)
+                if m.bias is not None:
+                    m.bias.data.zero_()
+            elif isinstance(m, nn.LayerNorm):
+                m.bias.data.zero_()
+                m.weight.data.fill_(1.0)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         bs = x.shape[0]
-
-        x_in = einops.rearrange(x, "b n f -> (b n) f")
+        x_in = einops.rearrange(x, "b m n f -> (b n) (m f)")
 
         # add ERA positional info (lat/lon)
         x_in = [
@@ -281,7 +297,7 @@ class GraphMSG(nn.Module):
                 dim=-1,  # feature dimension
             )
         )
-        (_, x_out) = self.backward_mapper(
+        _, x_out = self.backward_mapper(
             x=(x_latent_proc, x_era_latent),
             edge_index=torch.cat(
                 [self.h2e_edge_index + i * self._h2e_edge_inc for i in range(bs)],
@@ -294,4 +310,4 @@ class GraphMSG(nn.Module):
         x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=bs)
 
         # residual connection (just for the predicted variables)
-        return x_out + x[..., : self.in_channels]
+        return x_out + x[:, -1, :, : self.in_channels]

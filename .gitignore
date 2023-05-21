@@ -147,3 +147,10 @@ job_out.*
 *.out.*
 *.log.*
 .nfs*
+
+# lightning
+lightning_logs
+checkpoints
+
+# scratch dir
+scratch

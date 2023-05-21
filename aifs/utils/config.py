@@ -24,3 +24,7 @@ class YAMLConfig:
         except KeyError as e:
             LOGGER.error("Invalid config key: %s", key)
             raise KeyError from e
+
+    @property
+    def cfg(self) -> Mapping[str, Any]:
+        return self._cfg

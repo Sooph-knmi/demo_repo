@@ -42,6 +42,7 @@ class ERA5DataModule(pl.LightningDataModule):
             era_data_reader=read_era_data,
             lead_time=self.config["model:lead-time"],
             rollout=rollout,
+            multistep=self.config["model:multistep-input"],
             rank=self.local_rank,
             world_size=self.config["model:num-gpus"] * self.config["model:num-nodes"],
         )
@@ -100,6 +101,7 @@ class ERA5TestDataModule(pl.LightningDataModule):
             era_data_reader=read_era_data,
             lead_time=self.config["model:lead-time"],
             rollout=self.config["model:rollout"],
+            multistep=self.config["model:multistep-input"],
             rank=self.local_rank,
             world_size=self.config["model:num-gpus"] * self.config["model:num-nodes"],
             shuffle=False,

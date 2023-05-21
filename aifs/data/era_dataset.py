@@ -24,6 +24,7 @@ class ERA5NativeGridDataset(IterableDataset):
         era_data_reader: Callable,
         lead_time: int = 6,
         rollout: int = 4,
+        multistep: int = 1,
         rank: int = 0,
         world_size: int = 1,
         shuffle: bool = True,
@@ -35,6 +36,7 @@ class ERA5NativeGridDataset(IterableDataset):
             era_[2d|3d]_data_reader: user function that opens and returns the zarr array data
             lead_time: lead time (multiple of 6 hours!)
             rollout: length of rollout window (Keisler, 2021)
+            multistep: collate (t-1, ... t - multistep) into the input state vector,
             rank: process rank in the torch.distributed context (important when running on multiple GPUs)
             world_size: total number of processes (nodes * GPUs_per_node) in the torch.distributed context
         """
@@ -67,6 +69,11 @@ class ERA5NativeGridDataset(IterableDataset):
         self.chunk_index_range: Optional[np.ndarray] = None
         self.shuffle = shuffle
 
+        self.mstep = multistep
+        if self.mstep <= 0:
+            LOGGER.error("Multistep value invalid %d - check your configuration file!", self.mstep)
+            raise RuntimeError
+
     def per_worker_init(self, n_workers: int, worker_id: int) -> None:
         """Called by worker_init_func on each copy of WeatherBenchDataset after the worker process has been spawned."""
         if self.ds is None:
@@ -75,6 +82,9 @@ class ERA5NativeGridDataset(IterableDataset):
         shard_size = int(np.floor(self.ds.shape[0] / self.world_size))
         shard_start, shard_end = self.rank * shard_size, min((self.rank + 1) * shard_size, self.ds.shape[0])
 
+        if self.rank == 0:
+            # shift start position to have sufficient samples for multistep input
+            shard_start = (self.mstep - 1) * self.lead_step
         ds_len = shard_end - shard_start - self.rollout
         self.n_samples_per_worker = ds_len // n_workers
 
@@ -84,12 +94,13 @@ class ERA5NativeGridDataset(IterableDataset):
         self.chunk_index_range = np.arange(low, high, dtype=np.uint32)
 
         LOGGER.debug(
-            "Worker PID %d has access to shard (%i to %i), with ds_len = %i, n_chunks_per_worker = %i ",
+            "Worker PID %d has access to shard (%i to %i), with ds_len = %i, n_chunks_per_worker = %i, multistep = %d",
             os.getpid(),
             shard_start,
             shard_end,
             ds_len,
             self.n_samples_per_worker,
+            self.mstep,
         )
 
         # each worker must have a different seed for its random number generator,
@@ -104,7 +115,7 @@ class ERA5NativeGridDataset(IterableDataset):
             shuffled_chunk_indices = self.chunk_index_range
 
         for i in shuffled_chunk_indices:
-            start, end = i, i + (self.rollout + 1) * self.lead_step
+            start, end = i - (self.mstep - 1) * self.lead_step, i + (self.rollout + 1) * self.lead_step
             LOGGER.debug(
                 "Worker PID %d selected start-end range [%i, %i] with stride lead_step = %i",
                 os.getpid(),
@@ -124,6 +135,7 @@ class ERA5NativeGridDataset(IterableDataset):
             Filename: {str(self.fname)}
             Lead time: {self.lead_time}
             Rollout: {self.rollout}
+            Multistep: {self.mstep}
         """
 
 
@@ -147,7 +159,8 @@ if __name__ == "__main__":
     from aifs.utils.config import YAMLConfig
 
     _ROLLOUT = 2
-    config = YAMLConfig("/config/atos.yaml")
+    _MULTISTEP = 2
+    config = YAMLConfig("aifs/config/atos.yaml")
 
     def _get_data_filename(stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation]
@@ -161,6 +174,7 @@ if __name__ == "__main__":
         era_data_reader=read_era_data,
         lead_time=config["model:lead-time"],
         rollout=_ROLLOUT,
+        multistep=_MULTISTEP,
         rank=int(os.environ.get("LOCAL_RANK", "0")),
         world_size=config["model:num-gpus"] * config["model:num-nodes"],
     )
@@ -177,7 +191,7 @@ if __name__ == "__main__":
     # simple dataloader speed test
     for idx_batch, batch in enumerate(era5_dl):
         LOGGER.info("Batch index: %d - shape: %s", idx_batch, batch.shape)
-        assert batch.shape[1] == (_ROLLOUT + 1)
+        assert batch.shape[1] == (_ROLLOUT + _MULTISTEP)
         for r in range(batch.shape[1]):
             LOGGER.debug("Rollout step %d: batch.shape = %s", r, batch[:, r, ...].shape)
         if idx_batch > 4:

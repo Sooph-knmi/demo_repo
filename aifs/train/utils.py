@@ -2,9 +2,6 @@ import os
 import argparse
 import numpy as np
 
-from torch.optim.lr_scheduler import LRScheduler
-
-# import mlflow
 from aifs.utils.config import YAMLConfig
 from aifs.utils.logger import get_logger
 
@@ -15,7 +12,7 @@ def pl_scaling(plev):
     return np.array(plev) / 1000
 
 
-def setup_exp_logger(config: YAMLConfig):
+def setup_wandb_logger(config: YAMLConfig):
     if config["model:wandb:enabled"]:
         from pytorch_lightning.loggers.wandb import WandbLogger
 
@@ -27,16 +24,7 @@ def setup_exp_logger(config: YAMLConfig):
                 config["output:logging:log-dir"],
             ),
         )
-        logger.log_hyperparams(config._cfg)
-        return logger
-    if config["model:neptune:enabled"]:
-        from pytorch_lightning.loggers.neptune import NeptuneLogger
-
-        logger = NeptuneLogger(
-            project="ecmwf/aifs",
-            log_model_checkpoints=False,
-        )
-        logger.log_hyperparams(config._cfg)
+        logger.log_hyperparams(config.cfg)
         return logger
 
     LOGGER.warning("You did not set up an experiment logger ...")
