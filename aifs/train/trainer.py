@@ -97,7 +97,7 @@ class GraphForecaster(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.gnn(x)
 
-    def _update_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
+    def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         x = x.roll(-1, dims=1)
         # autoregressive predictions - we re-init the "variable" part of x
         x[:, self.mstep - 1, :, : self.fcdim] = y_pred
@@ -115,7 +115,7 @@ class GraphForecaster(pl.LightningModule):
         # start rollout
         x = batch[:, 0 : self.mstep, ...]  # (bs, mstep, latlon, nvar)
 
-        #         with save_on_cpu(pin_memory=True):
+        # with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
             y = batch[:, self.mstep + rstep, ...]  # target, shape = (bs, latlon, nvar)
@@ -126,7 +126,7 @@ class GraphForecaster(pl.LightningModule):
                 self._plot_loss(y_pred, y[..., : self.fcdim], rollout_step=rstep)
                 self._plot_sample(batch_idx, rstep, x[:, -1, :, : self.fcdim], y[..., : self.fcdim], y_pred)
 
-            x = self._update_input(x, y, y_pred)
+            x = self.advance_input(x, y, y_pred)
 
             if compute_metrics:
                 for mkey, (low, high) in self.metric_ranges.items():
