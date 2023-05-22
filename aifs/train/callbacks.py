@@ -42,12 +42,8 @@ class RolloutEval(Callback):
 
                 for mkey, (low, high) in pl_module.metric_ranges.items():
                     y_denorm = pl_module.normalizer.denormalize(y.clone())
-                    y_hat_denorm = pl_module.normalizer.denormalize(x[:, -1, ...].clone())
-                    # accumulate the metrics, then average in the log call (see below)
-                    if mkey not in metrics:
-                        metrics[mkey] = pl_module.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
-                    else:
-                        metrics[mkey] += pl_module.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
+                    y_pred_denorm = pl_module.normalizer.denormalize(x[:, -1, ...].clone())
+                    metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
 
             # scale loss
             loss *= 1.0 / self.rollout
@@ -66,9 +62,8 @@ class RolloutEval(Callback):
         )
         for mname, mvalue in metrics.items():
             pl_module.log(
-                f"val_r{self.rollout}_" + mname + "_avg",
-                # we average the metric over all rollout steps
-                mvalue / self.rollout,
+                f"val_r{self.rollout}_" + mname,
+                mvalue,
                 on_epoch=True,
                 on_step=False,
                 prog_bar=False,
