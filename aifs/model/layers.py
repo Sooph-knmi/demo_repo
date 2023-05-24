@@ -190,14 +190,19 @@ class MessagePassingProcessor(nn.Module):
             activation_func=activation,
         )
 
-        self.proc = nn.ModuleList(
-            [
-                MessagePassingProcessorChunk(
+        # self.proc = nn.ModuleList(
+        #     [
+        #         MessagePassingProcessorChunk(
+        #             hidden_dim, hidden_layers=chunk_size, mlp_extra_layers=mlp_extra_layers, activation=activation
+        #         )
+        #         for _ in range(self.hidden_layers)
+        #     ]
+        # )
+        self.proc1 = MessagePassingProcessorChunk(
                     hidden_dim, hidden_layers=chunk_size, mlp_extra_layers=mlp_extra_layers, activation=activation
                 )
-                for _ in range(self.hidden_layers)
-            ]
-        )
+
+        self.proc = nn.ModuleList([self.proc1 for _ in range(self.hidden_layers)])
 
         if cpu_offload:
             self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
@@ -283,16 +288,17 @@ class MessagePassingProcessorChunk(nn.Module):
 
         self.hidden_layers = hidden_layers
 
-        self.proc = nn.ModuleList(
-            [
-                MessagePassingBlock(hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation)
-                for _ in range(self.hidden_layers)
-            ]
-        )
+        # self.proc = nn.ModuleList(
+        #     [
+        #         MessagePassingBlock(hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation)
+        #         for _ in range(self.hidden_layers)
+        #     ]
+        # )
+        self.proc = MessagePassingBlock(hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation)
 
     def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, size: Size = None):
-        for i in range(self.hidden_layers):
-            x, edge_attr = self.proc[i](x, edge_index, edge_attr, size=size)
+        for _ in range(self.hidden_layers):
+            x, edge_attr = self.proc(x, edge_index, edge_attr, size=size)
 
         return x, edge_attr
 
