@@ -149,10 +149,9 @@ class GraphForecaster(pl.LightningModule):
         )
         self.log(
             "rollout",
-            float(self.rollout),
+            self.rollout,
             on_step=True,
             logger=True,
-            sync_dist=True,
         )
         if self.log_persistence:
             self.log(
@@ -325,19 +324,11 @@ class GraphForecaster(pl.LightningModule):
         plt.close(fig)  # cleanup
 
     def configure_optimizers(self):
-        # TODO: revisit the choice of optimizer (switch to something fancier, like FusedAdam/LAMB?)
-        # TODO: Using a momentum-free optimizer (SGD) may reduce memory usage (but degrade convergence?) - to test
-        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
-        return {
-            "optimizer": optimizer,
-        }
-    def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
         scheduler = CosineLRScheduler(
             optimizer,
             lr_min=0.3 * 10**-7,
             t_initial=self.lr_iterations,
             warmup_t=1000,
-            )
+        )
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
-

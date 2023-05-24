@@ -2,8 +2,6 @@ import os
 import argparse
 import numpy as np
 
-from torch.optim.lr_scheduler import LRScheduler
-
 # import mlflow
 from aifs.utils.config import YAMLConfig
 from aifs.utils.logger import get_logger
