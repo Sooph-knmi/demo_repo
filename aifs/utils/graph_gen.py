@@ -42,7 +42,7 @@ def to_unit_sphere_xyz(loc):
 def direction_vec(v1, v2, epsilon=10e-11):
     v = np.cross(v1, v2)
     vnorm1 = np.dot(v, v)
-    if (vnorm1 - 0.0) < epsilon:
+    if vnorm1 < epsilon:
         v1 = v1 + epsilon
         v = np.cross(v1, v2)
         vnorm1 = np.dot(v, v)
@@ -72,7 +72,7 @@ def directional_edge_features_rotated(loc1, loc2):
     return compute_directions(loc1, loc2)[0:2]  # discard last component -> zero if rotated to north pole
 
 
-def add_edge(G, idx1, idx2, allow_self_loop=False, add_edge_attrib=True):
+def add_edge(G, idx1, idx2, allow_self_loop=False, add_edge_attrib=False):
     loc1 = np.deg2rad(h3.h3_to_geo(idx1))
     loc2 = np.deg2rad(h3.h3_to_geo(idx2))
     if allow_self_loop or idx1 != idx2:
@@ -85,7 +85,7 @@ def add_edge(G, idx1, idx2, allow_self_loop=False, add_edge_attrib=True):
             # G.add_edge(idx1, idx2, weight = h3.point_dist(loc1, loc2, unit='rads'))
 
 
-def add_nodes(G, resolution, self_loop=True):
+def add_nodes(G, resolution, self_loop=False):
     for idx in h3.uncompact(h3.get_res0_indexes(), resolution):
         G.add_node(idx, hcoords_rad=np.deg2rad(h3.h3_to_geo(idx)))
         if self_loop:
@@ -189,9 +189,13 @@ def multi_mesh2(resolutions):
         G.add_node(ii, hcoords_rad=sp1_rad[ii])
 
     for ii in range(len(sp1.vertices)):
-        for neighb in one_rings[ii]:
-            if neighb != ii:
-                G.add_edge(ii, neighb)
+        for ineighb in one_rings[ii]:
+            if ineighb != ii:
+                loc_self = sp1_rad[ii]
+                loc_neigh = sp1_rad[ineighb]
+                # direction = directional_edge_features_rotated(loc_neigh, loc_self)
+                # G.add_edge(ineighb, ii, edge_attr=(haversine_distances([loc_neigh, loc_self])[0][1], *direction))
+                G.add_edge(ineighb, ii, weight=haversine_distances([loc_neigh, loc_self])[0][1])
 
     tree = BallTree(sp1_rad, metric="haversine")
 
@@ -200,14 +204,15 @@ def multi_mesh2(resolutions):
         sp2_rad = to_rad(sp2.vertices)
         one_rings = get_one_ring(sp2)
 
-        dist, ind_src = tree.query(sp2_rad, k=1)
+        dist, ind1 = tree.query(sp2_rad, k=1)
         for ii in range(len(sp2.vertices)):
-            for neighb in one_rings[ii]:
-                if neighb != ii:
-                    loc1 = sp2_rad[ii]
-                    loc2 = sp2_rad[neighb]
-                    direction = directional_edge_features_rotated(loc1, loc2)
-                    G.add_edge(ind_src[ii][0], ind_src[neighb][0], edge_attr=(haversine_distances([loc1, loc2])[0][1], *direction))
+            for ineighb in one_rings[ii]:
+                if ineighb != ii:
+                    loc_dst = sp2_rad[ii]
+                    loc_neigh = sp2_rad[ineighb]
+                    # direction = directional_edge_features_rotated(loc_neigh, loc_dst)
+                    # G.add_edge(ind1[ineighb][0], ind1[ii][0], edge_attr=(haversine_distances([loc_neigh, loc_dst])[0][1], *direction))
+                    G.add_edge(ind1[ineighb][0], ind1[ii][0], weight=haversine_distances([loc_neigh, loc_dst])[0][1])
 
     return G, sp1_rad
 
