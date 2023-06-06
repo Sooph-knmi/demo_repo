@@ -1,4 +1,4 @@
-from typing import Optional
+# from typing import Optional
 import os
 
 import pytorch_lightning as pl
@@ -28,24 +28,19 @@ class ERA5DataModule(pl.LightningDataModule):
         self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
         self.ds_train = self._get_dataset("training")
-
-        r = self.config["model:rollout"]
-        if config["diagnostics:eval:enabled"]:
-            r = max(r, self.config["diagnostics:eval:rollout"])
-        self.ds_valid = self._get_dataset("validation", rollout=r)
+        self.ds_valid = self._get_dataset("validation")
 
         ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
         self.input_metadata = ds_tmp.attrs["climetlab"]
         ds_tmp = None
 
-    def _get_dataset(self, stage: str, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
-        r = rollout if rollout is not None else self.config["model:rollout"]
+    def _get_dataset(self, stage: str) -> ERA5NativeGridDataset:
         return ERA5NativeGridDataset(
             fname=self._get_data_filename(stage),
             era_data_reader=read_era_data,
             lead_time=self.config["model:lead-time"],
-            rollout=r,
-            multistep=self.config["model:multistep-input"],
+            rollout=1,
+            multistep=1,
             rank=self.local_rank,
             world_size=self.config["model:num-gpus"] * self.config["model:num-nodes"],
         )
@@ -53,7 +48,7 @@ class ERA5DataModule(pl.LightningDataModule):
     def _get_data_filename(self, stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation]
         return os.path.join(
-            self.config[f"input:{stage}:basedir"].format(resolution=self.config["input:resolution"]),
+            self.config[f"input:{stage}:basedir"],  # UGLY HACK .format(resolution=self.config["input:resolution"]),
             self.config[f"input:{stage}:filename"].format(resolution=self.config["input:resolution"]),
         )
 
@@ -80,62 +75,62 @@ class ERA5DataModule(pl.LightningDataModule):
         return self._get_dataloader(self.ds_valid, self.num_workers_val, self.bs_val)
 
 
-class ERA5TestDataModule(pl.LightningDataModule):
-    def __init__(self, config: YAMLConfig) -> None:
-        super().__init__()
-        self.bs_test = config["model:dataloader:batch-size:test"]
-        self.num_workers_test = config["model:dataloader:num-workers:test"]
-        self.config = config
+# class ERA5TestDataModule(pl.LightningDataModule):
+#     def __init__(self, config: YAMLConfig) -> None:
+#         super().__init__()
+#         self.bs_test = config["model:dataloader:batch-size:test"]
+#         self.num_workers_test = config["model:dataloader:num-workers:test"]
+#         self.config = config
 
-        # TODO: will this work correctly in multi-node runs?
-        self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
+#         # TODO: will this work correctly in multi-node runs?
+#         self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
-        # load data used to transform input
-        ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
-        self.input_metadata = ds_tmp.attrs["climetlab"]
-        ds_tmp = None
+#         # load data used to transform input
+#         ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
+#         self.input_metadata = ds_tmp.attrs["climetlab"]
+#         ds_tmp = None
 
-        self.ds_test = self._get_dataset("test")
-        self.ds_predict = self._get_dataset("predict")
+#         self.ds_test = self._get_dataset("test")
+#         self.ds_predict = self._get_dataset("predict")
 
-    def _get_dataset(self, stage: str) -> ERA5NativeGridDataset:
-        return ERA5NativeGridDataset(
-            fname=self._get_data_filename(stage),
-            era_data_reader=read_era_data,
-            lead_time=self.config["model:lead-time"],
-            rollout=self.config["model:rollout"],
-            multistep=self.config["model:multistep-input"],
-            rank=self.local_rank,
-            world_size=self.config["model:num-gpus"] * self.config["model:num-nodes"],
-            shuffle=False,
-        )
+#     def _get_dataset(self, stage: str) -> ERA5NativeGridDataset:
+#         return ERA5NativeGridDataset(
+#             fname=self._get_data_filename(stage),
+#             era_data_reader=read_era_data,
+#             lead_time=self.config["model:lead-time"],
+#             rollout=self.config["model:rollout"],
+#             multistep=self.config["model:multistep-input"],
+#             rank=self.local_rank,
+#             world_size=self.config["model:num-gpus"] * self.config["model:num-nodes"],
+#             shuffle=False,
+#         )
 
-    def _get_data_filename(self, stage: str) -> str:
-        # field_type == [pl | sfc], stage == [training | validation | test]
-        return os.path.join(
-            self.config[f"input:{stage}:basedir"].format(resolution=self.config["input:resolution"]),
-            self.config[f"input:{stage}:filename"].format(resolution=self.config["input:resolution"]),
-        )
+#     def _get_data_filename(self, stage: str) -> str:
+#         # field_type == [pl | sfc], stage == [training | validation | test]
+#         return os.path.join(
+#             self.config[f"input:{stage}:basedir"].format(resolution=self.config["input:resolution"]),
+#             self.config[f"input:{stage}:filename"].format(resolution=self.config["input:resolution"]),
+#         )
 
-    def _get_dataloader(self, ds: ERA5NativeGridDataset, num_workers: int, batch_size: int) -> DataLoader:
-        return DataLoader(
-            ds,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            pin_memory=True,
-            worker_init_fn=worker_init_func,
-            prefetch_factor=_DL_PREFETCH_FACTOR,
-            persistent_workers=True,
-        )
+#     def _get_dataloader(self, ds: ERA5NativeGridDataset, num_workers: int, batch_size: int) -> DataLoader:
+#         return DataLoader(
+#             ds,
+#             batch_size=batch_size,
+#             num_workers=num_workers,
+#             pin_memory=True,
+#             worker_init_fn=worker_init_func,
+#             prefetch_factor=_DL_PREFETCH_FACTOR,
+#             persistent_workers=True,
+#         )
 
-    def train_dataloader(self) -> DataLoader:
-        raise NotImplementedError("The ERA5TestDataModule should be used for inference (test-mode) only!")
+#     def train_dataloader(self) -> DataLoader:
+#         raise NotImplementedError("The ERA5TestDataModule should be used for inference (test-mode) only!")
 
-    def val_dataloader(self) -> DataLoader:
-        raise NotImplementedError("The ERA5TestDataModule should be used for inference (test-mode) only!")
+#     def val_dataloader(self) -> DataLoader:
+#         raise NotImplementedError("The ERA5TestDataModule should be used for inference (test-mode) only!")
 
-    def test_dataloader(self) -> DataLoader:
-        return self._get_dataloader(self.ds_test, self.num_workers_test, self.bs_test)
+#     def test_dataloader(self) -> DataLoader:
+#         return self._get_dataloader(self.ds_test, self.num_workers_test, self.bs_test)
 
-    def predict_dataloader(self) -> DataLoader:
-        return self._get_dataloader(self.ds_predict, self.num_workers_test, self.bs_test)
+#     def predict_dataloader(self) -> DataLoader:
+#         return self._get_dataloader(self.ds_predict, self.num_workers_test, self.bs_test)

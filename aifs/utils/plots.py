@@ -6,7 +6,13 @@ from matplotlib import cm
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.figure import Figure
 
-from aifs.utils.constants import _IDXVARS_TO_PLOT, _NAM_VARS_TO_PLOT, _NUM_PLOTS_PER_SAMPLE, _NUM_VARS_TO_PLOT
+from aifs.utils.constants import (
+    _IDXVARS_TO_PLOT,
+    _NAM_VARS_TO_PLOT,
+    _NUM_PLOTS_PER_REC_SAMPLE,
+    _NUM_VARS_TO_PLOT,
+    _NUM_PLOTS_PER_PRED_SAMPLE,
+)
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -125,20 +131,20 @@ def plot_loss(
 # NB: this can be very slow for large data arrays
 # call it as infrequently as possible!
 # ---------------------------------------------------------------
-def plot_predicted_multilevel_flat_sample(
+def plot_predicted_sample(
     latlons: np.ndarray,
     x: np.ndarray,
     y_true: np.ndarray,
     y_pred: np.ndarray,
 ) -> Figure:
-    """Plots data for one multilevel latlon-"flat" sample.
+    """Plots data for one multilevel latlon-"flat" predicted sample.
     Args:
         latlons: lat/lon coordinates array, shape (lat*lon, 2)
         x, y_true, y_pred: arrays of shape (lat*lon, nvar*level)
     Returns:
         The figure object handle.
     """
-    n_plots_x, n_plots_y = _NUM_VARS_TO_PLOT, _NUM_PLOTS_PER_SAMPLE
+    n_plots_x, n_plots_y = _NUM_VARS_TO_PLOT, _NUM_PLOTS_PER_PRED_SAMPLE
 
     figsize = (n_plots_y * 4, n_plots_x * 3)
     fig, ax = plt.subplots(n_plots_x, n_plots_y, figsize=figsize, subplot_kw={"projection": ccrs.PlateCarree()})
@@ -150,13 +156,13 @@ def plot_predicted_multilevel_flat_sample(
         yt = y_true[..., idx].squeeze()
         yp = y_pred[..., idx].squeeze()
         if n_plots_x > 1:
-            plot_flat_sample(fig, ax[vix, :], pc, latlons, xt, yt, yp, vname)
+            plot_flat_pred_sample(fig, ax[vix, :], pc, latlons, xt, yt, yp, vname)
         else:
-            plot_flat_sample(fig, ax, pc, latlons, xt, yt, yp, vname)
+            plot_flat_pred_sample(fig, ax, pc, latlons, xt, yt, yp, vname)
     return fig
 
 
-def plot_flat_sample(
+def plot_flat_pred_sample(
     fig,
     ax,
     pc,
@@ -176,6 +182,53 @@ def plot_flat_sample(
     scatter_plot(fig, ax[3], pc, lat, lon, truth - pred, cmap="bwr", title=f"{vname} pred err")
     scatter_plot(fig, ax[4], pc, lat, lon, pred - input_, cmap="bwr", title=f"{vname} increment [pred - input]")
     scatter_plot(fig, ax[5], pc, lat, lon, truth - input_, cmap="bwr", title=f"{vname} persist err")
+
+
+def plot_reconstructed_sample(
+    latlons: np.ndarray,
+    x_true: np.ndarray,
+    x_rec: np.ndarray,
+) -> Figure:
+    """Plots data for one multilevel latlon-"flat" sample.
+    Args:
+        latlons: lat/lon coordinates array, shape (lat*lon, 2)
+        x_true, x_rec: arrays of shape (lat*lon, nvar*level)
+    Returns:
+        The figure object handle.
+    """
+    n_plots_x, n_plots_y = _NUM_VARS_TO_PLOT, _NUM_PLOTS_PER_REC_SAMPLE
+
+    figsize = (n_plots_y * 4, n_plots_x * 3)
+    fig, ax = plt.subplots(n_plots_x, n_plots_y, figsize=figsize, subplot_kw={"projection": ccrs.PlateCarree()})
+    pc = ccrs.PlateCarree()
+
+    for vix, idx in enumerate(_IDXVARS_TO_PLOT):
+        vname = _NAM_VARS_TO_PLOT[vix]
+        xt = x_true[..., idx].squeeze()
+        xr = x_rec[..., idx].squeeze()
+        if n_plots_x > 1:
+            plot_flat_rec_sample(fig, ax[vix, :], pc, latlons, xt, xr, vname)
+        else:
+            plot_flat_rec_sample(fig, ax, pc, latlons, xt, xr, vname)
+    return fig
+
+
+def plot_flat_rec_sample(
+    fig,
+    ax,
+    pc,
+    latlons: np.ndarray,
+    input_: np.ndarray,
+    recon: np.ndarray,
+    vname: str,
+) -> None:
+    """Use this with `flat` (1D) samples, e.g. data on non-rectangular (reduced Gaussian) grids."""
+
+    lat, lon = latlons[:, 0], latlons[:, 1]
+
+    scatter_plot(fig, ax[0], pc, lat, lon, input_, title=f"{vname} input")
+    scatter_plot(fig, ax[1], pc, lat, lon, recon, title=f"{vname} reconstruction")
+    scatter_plot(fig, ax[2], pc, lat, lon, input_ - recon, cmap="bwr", title=f"{vname} reconstruction error")
 
 
 def scatter_plot(fig, ax, pc, lat, lon, x, cmap="viridis", title=None) -> None:

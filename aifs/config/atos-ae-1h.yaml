@@ -4,17 +4,17 @@ input:
   format: zarr
   resolution: o96
   training: 
-    basedir: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-{resolution}
-    filename: panguweather-{resolution}-1979-2015-6h.zarr
+    basedir: /lus/h2resw01/fws4/lb/project/ai-ml/zarrs/
+    filename: aifs-era5-{resolution}-1979-2015-1h.zarr
   validation:
-    basedir: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-{resolution}
-    filename: panguweather-{resolution}-2016-2017-6h.zarr
+    basedir: /lus/h2resw01/fws4/lb/project/ai-ml/zarrs/
+    filename: aifs-era5-{resolution}-2016-2017-1h.zarr
   test:
-    basedir: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-{resolution}
-    filename: panguweather-{resolution}-2016-2017-6h.zarr
+    basedir: /lus/h2resw01/fws4/lb/project/ai-ml/zarrs/
+    filename: aifs-era5-{resolution}-2016-2017-1h.zarr
   predict:
-    basedir: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-{resolution}
-    filename: panguweather-{resolution}-2016-2017-6h.zarr
+    basedir: /lus/h2resw01/fws4/lb/project/ai-ml/zarrs/
+    filename: aifs-era5-{resolution}-2016-2017-1h.zarr
   pl:
       names:
       # not used!
@@ -49,12 +49,12 @@ input:
   num-features: 98
   num-aux-features: 13  # all 2D fields
   loss-scaling-pl:
-    - 0.6 #1
-    - 6 #1
-    - 0.8 #0.5
-    - 0.5 #0.33
-    - 0.01
-    - 12 #1
+    - 0.6
+    - 6
+    - 0.8
+    - 0.5
+    - 0.02
+    - 12
   loss-scaling-sfc:
     - 0.1
     - 1
@@ -83,18 +83,11 @@ plot:
   - msl
   - 2t
 
-diagnostics:
-  eval:
-    enabled: True
-    # use this to evaluate the model over longer rollouts, every so many validation batches
-    rollout: 12
-    frequency: 75
-
 ###################
 #  OUTPUT BLOCK
 ###################
 output:
-  basedir: /ec/res4/scratch/syma/GNN/ERA5/{resolution}/
+  basedir: /ec/res4/scratch/syma/GNN-AE/ERA5/{resolution}/
   logging:
     log-dir: logs
     log-interval: 250
@@ -102,8 +95,8 @@ output:
     # model checkpoints: used to resume training or do inference
     ckpt-dir: checkpoints
   model:
-    save-top-k: 5
-    checkpoint-filename: aifs-ckpt-{epoch:02d}-{val_wmse:.4f}
+    save-top-k: 10
+    checkpoint-filename: aifs-ae-1h-ckpt-{epoch:02d}-{val_ae_wmse:.3e}
   plots:
     plot-dir: plots
 
@@ -111,16 +104,13 @@ output:
 #  GRAPH BLOCK
 ###################
 graph:
-  data-basedir: /ec/res4/hpcperm/pamc/gnn/
-  data-file: graph_mappings_normed_edge_attrs_rot_{resolution}_h3_0_1_2.pt
-  #graph_mappings_normed_edge_attrs_{resolution}_h3_2.pt 
+  data-basedir: /ec/res4/hpcperm/nesl/gnn/
+  data-file: graph_mappings_normed_edge_attrs1_fixed_weights_{resolution}_h_0_1_2_3_4_5.pt
 
 ###################
 #  MODEL BLOCK
 ###################
 model:
-  # torch.compile is not working (yet), set this option to False 
-  compile: False
   debug:
     # this will detect and trace back NaNs / Infs etc. but will slow down training
     anomaly-detection: False
@@ -128,8 +118,8 @@ model:
     enabled: True
   dataloader:
     num-workers:
-      training: 16
-      validation: 16
+      training: 8
+      validation: 8
       test: 8
       predict: 8
     batch-size:
@@ -146,7 +136,7 @@ model:
   warm-restart:
     enabled: False
     # path should be relative to the output:checkpoints:chkpt-dir, as defined above
-    ckpt-path: 202304_1014/aifs-resolution=0-ckpt-epoch=49-val_wmse=0.010.ckpt
+    ckpt-path: 
   
   # miscellaneous
   precision: 16-mixed  # "16" with Lightning < 2.0
@@ -162,20 +152,15 @@ model:
   # parallel strategy
   # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
   strategy: auto
+
   # number of GPUs per node and number of nodes (for DDP)
   num-gpus: 4
   num-nodes: 1
 
   # training settings
   lead-time: 6
-  max-epochs: 100
-  learn-rate: 0.000125
-
-  # multistep input
-  # 1 = single step scheme, X(t-1) used to predict X(t)
-  # k > 1: multistep scheme, uses [X(t-k), X(t-k+1), ... X(t-1)] to predict X(t)
-  # Deepmind use k = 2 in their model
-  multistep-input: 2
+  max-epochs: 50
+  learn-rate: 0.00025
 
   # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
   # the effective batch size becomes num-devices * batch-size * k
@@ -196,19 +181,8 @@ model:
 
   # specific GNN encoder settings
   encoder:
-    num-layers: 16
-    mapper-num-layers: 1
+    mapper-num-layers: 2
     activation: SiLU
-    num-hidden-channels: 512
     num-out-channels: 512
     mlp-extra-layers: 0
     dropout: 0.
-
-  # length of the "rollout" window (see Keisler's paper)
-  rollout: 1
-
-  # Keisler's three training rounds were:
-  # Round 1. ~960,000 batches @ ~0.3 seconds per batch (4-step rollout)
-  # Round 2. ~90,000 batches @ ~1.0 seconds per batch (8-step rollout)
-  # Round 3. ~70,000 batches @ ~1.5 seconds per batch (12-step rollout)
-  # Each batch is an N-step rollout, with batch_size=1

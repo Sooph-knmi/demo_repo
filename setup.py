@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="aifs",
-    version="0.6",
+    version="0.7",
     url="https://github.com/ecmwf-lab/aifs-model",
     license="Apache Lincense Version 2.0",
     author="European Centre for Medium-Range Weather Forecasts (ECMWF)",
@@ -34,8 +34,8 @@ setup(
     packages=find_packages(),
     entry_points={
         "console_scripts": [
-            "aifs-train=aifs.train.train:main",
-            "aifs-predict=aifs.predict.predict:main",
+            "aifs-ae-train=aifs.train.ae_train:main",
+            "aifs-fc-train=aifs.train.fc_train:main",
         ]
     },
 )

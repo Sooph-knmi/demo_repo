@@ -8,7 +8,7 @@
 #SBATCH --mem=256G
 #SBATCH --time=48:00:00
 #SBATCH --account=ecaifs
-#SBATCH --output=outputs/o160-h3_3-msg-torch-swa.out.%j
+#SBATCH --output=o96-frozen-encoder-1h.out.%j
 
 # debugging flags (optional)
 # export NCCL_DEBUG=INFO
@@ -19,16 +19,15 @@
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-# export WANDB_NAME="o160-h3_3-gpu4-bs2-acc2-r1-swa"
-# export WANDB_NOTES="TEST: SWA + gradient accumulation"
+export WANDB_NAME="o96-frozen-encoder-1h"
+export WANDB_NOTES="o96 w/ frozen encoder; rollout = 1"
 
 # generic settings
 CONDA_ENV=gnn-pyg-2.3
-GITDIR=/perm/pamc/software/aifs
+GITDIR=/home/syma/GNN/gnn-era5.git
 WORKDIR=$GITDIR
 
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-#srun aifs-train --config $GITDIR/aifs/config/atos.yaml
-srun aifs-train --config $GITDIR/aifs/config/atosh32.yaml
+srun aifs-fc-train --config $GITDIR/aifs/config/atos-fc.yaml

@@ -1,5 +1,5 @@
 import os
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict, List, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,13 +8,11 @@ import torch
 import wandb
 from torch_geometric.data import HeteroData
 
-# from torch.autograd.graph import save_on_cpu
-
 from aifs.data.era_normalizers import InputNormalizer
 from aifs.model.losses import WeightedMSELoss
 from aifs.model.msg import GraphMSG
 from aifs.utils.logger import get_logger
-from aifs.utils.plots import init_plot_settings, plot_loss, plot_predicted_multilevel_flat_sample
+from aifs.utils.plots import init_plot_settings, plot_loss, plot_predicted_sample
 
 LOGGER = get_logger(__name__)
 
@@ -31,8 +29,7 @@ class GraphForecaster(pl.LightningModule):
         num_levels: int,
         encoder_num_layers: int = 4,
         encoder_mapper_num_layers: int = 1,
-        encoder_hidden_channels: int = 128,
-        encoder_out_channels: int = 128,
+        encoder_out_channels: int = 512,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
         lr: float = 1e-4,
@@ -46,13 +43,12 @@ class GraphForecaster(pl.LightningModule):
     ) -> None:
         super().__init__()
 
-        self.gnn = GraphMSG(
+        self.forecaster = GraphMSG(
             graph_data=graph_data,
             in_channels=fc_dim,
             aux_in_channels=aux_dim,
             multistep=multistep,
             encoder_num_layers=encoder_num_layers,
-            encoder_hidden_channels=encoder_hidden_channels,
             encoder_out_channels=encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
@@ -62,6 +58,9 @@ class GraphForecaster(pl.LightningModule):
         self.save_hyperparameters()
 
         self.normalizer = InputNormalizer(metadata)
+
+        # we drive stick!
+        self.automatic_optimization = False
 
         self.era_latlons = graph_data[("era", "to", "era")].ecoords_rad
         self.era_weights = graph_data[("era", "to", "era")].area_weights
@@ -94,8 +93,28 @@ class GraphForecaster(pl.LightningModule):
 
         init_plot_settings()
 
+    def load_and_freeze_encoder_weights(self, weights_dict: Dict, prefix: str) -> None:
+        with torch.no_grad():
+            for name, param in self.forecaster.encoder.named_parameters():
+                # init from AE state
+                param.copy_(weights_dict[f"{prefix}.{name}"])
+        for param in self.forecaster.encoder.parameters():
+            # freeze (don't optimize further)
+            param.requires_grad = False
+        self.forecaster.encoder.eval()
+
+    def load_and_freeze_decoder_weights(self, weights_dict: Dict, prefix: str) -> None:
+        with torch.no_grad():
+            for name, param in self.forecaster.decoder.named_parameters():
+                # init from AE state
+                param.copy_(weights_dict[f"{prefix}.{name}"])
+        for param in self.forecaster.decoder.parameters():
+            # freeze (don't optimize further)
+            param.requires_grad = False
+        self.forecaster.decoder.eval()
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.gnn(x)
+        return self.forecaster(x)
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         x = x.roll(-1, dims=1)
@@ -105,44 +124,37 @@ class GraphForecaster(pl.LightningModule):
         x[:, self.mstep - 1, :, self.fcdim :] = y[..., self.fcdim :]
         return x
 
-    def _step(
-        self, batch: torch.Tensor, batch_idx: int, compute_metrics: bool = False, plot: bool = False
-    ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
+    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+        del batch_idx  # not used
+        opt = self.optimizers()
+
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
         batch = self.normalizer(batch)  # normalized in-place
-        metrics = {}
-
         # start rollout
         x = batch[:, 0 : self.mstep, ...]  # (bs, mstep, latlon, nvar)
 
-        # with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
             y = batch[:, self.mstep + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
             loss += self.loss(y_pred, y[..., : self.fcdim])
-
-            if plot and self.global_rank == 0:
-                self._plot_loss(y_pred, y[..., : self.fcdim], rollout_step=rstep)
-                self._plot_sample(batch_idx, rstep, x[:, -1, :, : self.fcdim], y[..., : self.fcdim], y_pred)
-
             x = self.advance_input(x, y, y_pred)
-
-            if compute_metrics:
-                for mkey, (low, high) in self.metric_ranges.items():
-                    y_denorm = self.normalizer.denormalize(y.clone())
-                    y_hat_denorm = self.normalizer.denormalize(x[:, -1, ...].clone())
-                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
 
         # scale loss
         loss *= 1.0 / self.rollout
-        return loss, metrics
 
-    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        train_loss, _ = self._step(batch, batch_idx)
+        # TODO: add gradient accumulation
+        opt.zero_grad()
+        self.manual_backward(loss)
+        self.clip_gradients(opt, gradient_clip_val=32.0, gradient_clip_algorithm="value")
+        opt.step()
+
+        sched = self.lr_schedulers()
+        sched.step()
+
         self.log(
             "train_wmse",
-            train_loss,
+            loss,
             on_epoch=True,
             on_step=True,
             prog_bar=True,
@@ -150,32 +162,59 @@ class GraphForecaster(pl.LightningModule):
             batch_size=batch.shape[0],
             sync_dist=True,
         )
-        return train_loss
+        return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
-        plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
-        val_loss, metrics = self._step(batch, batch_idx, compute_metrics=True, plot=plot_sample)
-        self.log(
-            "val_wmse",
-            val_loss,
-            on_epoch=True,
-            on_step=True,
-            prog_bar=True,
-            logger=True,
-            batch_size=batch.shape[0],
-            sync_dist=True,
-        )
-        for mname, mvalue in metrics.items():
+        with torch.no_grad():
+            plot = batch_idx % self._VAL_PLOT_FREQ == 3
+            val_loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
+            batch = self.normalizer(batch)
+            metrics = {}
+
+            # start rollout
+            x = batch[:, 0 : self.mstep, ...]
+
+            for rstep in range(self.rollout):
+                y_pred = self(x)
+                y = batch[:, self.mstep + rstep, ...]
+                val_loss += self.loss(y_pred, y[..., : self.fcdim])
+
+                if plot and self.global_rank == 0:
+                    self._plot_loss(y_pred, y[..., : self.fcdim], rollout_step=rstep)
+                    self._plot_sample(batch_idx, rstep, x[:, -1, :, : self.fcdim], y[..., : self.fcdim], y_pred.float())
+
+                x = self.advance_input(x, y, y_pred)
+
+                for mkey, (low, high) in self.metric_ranges.items():
+                    y_denorm = self.normalizer.denormalize(y.clone())
+                    y_hat_denorm = self.normalizer.denormalize(x[:, -1, ...].float().clone())
+                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
+
+            # scale loss
+            val_loss *= 1.0 / self.rollout
+
             self.log(
-                "val_" + mname,
-                mvalue,
+                "val_wmse",
+                val_loss,
                 on_epoch=True,
-                on_step=False,
-                prog_bar=False,
+                on_step=True,
+                prog_bar=True,
                 logger=True,
                 batch_size=batch.shape[0],
                 sync_dist=True,
             )
+
+            for mname, mvalue in metrics.items():
+                self.log(
+                    "val_" + mname,
+                    mvalue,
+                    on_epoch=True,
+                    on_step=False,
+                    prog_bar=False,
+                    logger=True,
+                    batch_size=batch.shape[0],
+                    sync_dist=True,
+                )
 
     def _plot_loss(self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int) -> None:
         loss = self.loss(y_true, y_pred, squash=False).cpu().numpy()
@@ -194,7 +233,7 @@ class GraphForecaster(pl.LightningModule):
         y_true_ = self.normalizer.denormalize(y_true.clone()).cpu().numpy()
         y_pred_ = self.normalizer.denormalize(y_pred.clone()).cpu().numpy()
 
-        fig = plot_predicted_multilevel_flat_sample(
+        fig = plot_predicted_sample(
             np.rad2deg(self.era_latlons.numpy()),
             x_[sample_idx, ...].squeeze(),
             y_true_[sample_idx, ...].squeeze(),
@@ -218,16 +257,7 @@ class GraphForecaster(pl.LightningModule):
         plt.close(fig)  # cleanup
 
     def configure_optimizers(self) -> Dict:
-        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr, fused=True)
+        p2opt = list(self.forecaster.processor.parameters()) + list(self.forecaster.decoder.parameters())
+        optimizer = torch.optim.AdamW(p2opt, betas=(0.9, 0.95), lr=self.lr, fused=False)
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=180, eta_min=5.0e-7)
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": lr_scheduler,
-                "monitor": "val_wmse",
-                "interval": "epoch",
-                "frequency": 1,
-                "strict": True,
-                "name": "gnn_lr_sched",
-            },
-        }
+        return [optimizer], [lr_scheduler]
