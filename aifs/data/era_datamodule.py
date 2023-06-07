@@ -32,13 +32,13 @@ class ERA5DataModule(pl.LightningDataModule):
         r = self.config["model:rollout"]
         if config["diagnostics:eval:enabled"]:
             r = max(r, self.config["diagnostics:eval:rollout"])
-        self.ds_valid = self._get_dataset("validation", rollout=r)
+        self.ds_valid = self._get_dataset("validation", rollout=r, debug=True)
 
         ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
         self.input_metadata = ds_tmp.attrs["climetlab"]
         ds_tmp = None
 
-    def _get_dataset(self, stage: str, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
+    def _get_dataset(self, stage: str, rollout: Optional[int] = None, debug: bool = False) -> ERA5NativeGridDataset:
         r = rollout if rollout is not None else self.config["model:rollout"]
         return ERA5NativeGridDataset(
             fname=self._get_data_filename(stage),
@@ -48,6 +48,7 @@ class ERA5DataModule(pl.LightningDataModule):
             multistep=self.config["model:multistep-input"],
             rank=self.local_rank,
             world_size=self.config["model:num-gpus"] * self.config["model:num-nodes"],
+            debug=debug,
         )
 
     def _get_data_filename(self, stage: str) -> str:
@@ -70,7 +71,7 @@ class ERA5DataModule(pl.LightningDataModule):
             worker_init_fn=worker_init_func,
             # prefetch batches (default prefetch_factor == 2)
             prefetch_factor=_DL_PREFETCH_FACTOR,
-            persistent_workers=True,
+            persistent_workers=False,
         )
 
     def train_dataloader(self) -> DataLoader:
@@ -125,7 +126,7 @@ class ERA5TestDataModule(pl.LightningDataModule):
             pin_memory=True,
             worker_init_fn=worker_init_func,
             prefetch_factor=_DL_PREFETCH_FACTOR,
-            persistent_workers=True,
+            persistent_workers=False,
         )
 
     def train_dataloader(self) -> DataLoader:

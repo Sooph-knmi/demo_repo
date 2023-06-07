@@ -108,8 +108,11 @@ class GraphForecaster(pl.LightningModule):
     def _step(
         self, batch: torch.Tensor, batch_idx: int, compute_metrics: bool = False, plot: bool = False
     ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
+        slurm_pid = int(os.environ.get("SLURM_PROCID", "0"))
+        LOGGER.debug("SLURM_PROCID %d / GPU %d at batch-index %d entered _step ...", slurm_pid, self.global_rank, batch_idx)
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
         batch = self.normalizer(batch)  # normalized in-place
+        LOGGER.debug("SLURM_PROCID %d / GPU %d at batch-index %d normalized the batch ...", slurm_pid, self.global_rank, batch_idx)
         metrics = {}
 
         # start rollout
@@ -117,16 +120,51 @@ class GraphForecaster(pl.LightningModule):
 
         # with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
+            LOGGER.debug(
+                "SLURM_PROCID %d / GPU %d at batch-index %d begins rollout step %d ...",
+                slurm_pid,
+                self.global_rank,
+                batch_idx,
+                rstep,
+            )
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+            LOGGER.debug(
+                "SLURM_PROCID %d / GPU %d at batch-index %d at rollout step %d calculated forecast ...",
+                slurm_pid,
+                self.global_rank,
+                batch_idx,
+                rstep,
+            )
             y = batch[:, self.mstep + rstep, ...]  # target, shape = (bs, latlon, nvar)
+            LOGGER.debug(
+                "SLURM_PROCID %d / GPU %d at batch-index %d at rollout step %d got ground truth ...",
+                slurm_pid,
+                self.global_rank,
+                batch_idx,
+                rstep,
+            )
             # y includes the auxiliary variables, so we must leave those out when computing the loss
             loss += self.loss(y_pred, y[..., : self.fcdim])
+            LOGGER.debug(
+                "SLURM_PROCID %d / GPU %d at batch-index %d at rollout step %d calculated loss ...",
+                slurm_pid,
+                self.global_rank,
+                batch_idx,
+                rstep,
+            )
 
             if plot and self.global_rank == 0:
                 self._plot_loss(y_pred, y[..., : self.fcdim], rollout_step=rstep)
                 self._plot_sample(batch_idx, rstep, x[:, -1, :, : self.fcdim], y[..., : self.fcdim], y_pred)
 
             x = self.advance_input(x, y, y_pred)
+            LOGGER.debug(
+                "SLURM_PROCID %d / GPU %d at batch-index %d at rollout step %d advanced input ...",
+                slurm_pid,
+                self.global_rank,
+                batch_idx,
+                rstep,
+            )
 
             if compute_metrics:
                 for mkey, (low, high) in self.metric_ranges.items():
@@ -149,33 +187,50 @@ class GraphForecaster(pl.LightningModule):
             logger=True,
             batch_size=batch.shape[0],
             sync_dist=True,
+            rank_zero_only=True,
         )
         return train_loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
-        plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
-        val_loss, metrics = self._step(batch, batch_idx, compute_metrics=True, plot=plot_sample)
-        self.log(
-            "val_wmse",
-            val_loss,
-            on_epoch=True,
-            on_step=True,
-            prog_bar=True,
-            logger=True,
-            batch_size=batch.shape[0],
-            sync_dist=True,
+        slurm_pid = int(os.environ.get("SLURM_PROCID", "0"))
+        LOGGER.debug(
+            "SLURM_PROCID %d / GPU %d entered validation_step with batch-index %d ...", slurm_pid, self.global_rank, batch_idx
         )
-        for mname, mvalue in metrics.items():
+
+        plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
+        with torch.no_grad():
+            val_loss, metrics = self._step(batch, batch_idx, compute_metrics=True, plot=plot_sample)
+            LOGGER.debug(
+                "SLURM_PROCID %d / GPU %d ran validation_step at batch-index %d ...", slurm_pid, self.global_rank, batch_idx
+            )
             self.log(
-                "val_" + mname,
-                mvalue,
+                "val_wmse",
+                val_loss,
                 on_epoch=True,
-                on_step=False,
-                prog_bar=False,
+                on_step=True,
+                prog_bar=True,
                 logger=True,
                 batch_size=batch.shape[0],
                 sync_dist=True,
+                rank_zero_only=True,
             )
+            LOGGER.debug(
+                "SLURM_PROCID %d / GPU %d logged validation loss at batch-index %d ...", slurm_pid, self.global_rank, batch_idx
+            )
+            for mname, mvalue in metrics.items():
+                self.log(
+                    "val_" + mname,
+                    mvalue,
+                    on_epoch=True,
+                    on_step=False,
+                    prog_bar=False,
+                    logger=True,
+                    batch_size=batch.shape[0],
+                    sync_dist=True,
+                    rank_zero_only=True,
+                )
+            # del val_loss, metrics
+            LOGGER.debug("SLURM_PROCID %d / GPU %d logged metrics at batch-index %d ...", slurm_pid, self.global_rank, batch_idx)
 
     def _plot_loss(self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int) -> None:
         loss = self.loss(y_true, y_pred, squash=False).cpu().numpy()
