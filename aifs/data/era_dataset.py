@@ -82,9 +82,10 @@ class ERA5NativeGridDataset(IterableDataset):
         shard_size = int(np.floor(self.ds.shape[0] / self.world_size))
         shard_start, shard_end = self.rank * shard_size, min((self.rank + 1) * shard_size, self.ds.shape[0])
 
-        if self.rank == 0:
-            # shift start position to have sufficient samples for multistep input
-            shard_start = (self.mstep - 1) * self.lead_step
+        # this must happen on ALL ranks
+        # shift start position to have sufficient samples for multistep input
+        shard_start = shard_start + (self.mstep - 1) * self.lead_step
+
         ds_len = shard_end - shard_start - self.rollout
         self.n_samples_per_worker = ds_len // n_workers
 
@@ -92,16 +93,6 @@ class ERA5NativeGridDataset(IterableDataset):
         high = min(shard_start + (worker_id + 1) * self.n_samples_per_worker, shard_end)
 
         self.chunk_index_range = np.arange(low, high, dtype=np.uint32)
-
-        LOGGER.debug(
-            "Worker PID %d has access to shard (%i to %i), with ds_len = %i, n_chunks_per_worker = %i, multistep = %d",
-            os.getpid(),
-            shard_start,
-            shard_end,
-            ds_len,
-            self.n_samples_per_worker,
-            self.mstep,
-        )
 
         # each worker must have a different seed for its random number generator,
         # otherwise all the workers will output exactly the same data

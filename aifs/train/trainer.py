@@ -8,8 +8,6 @@ import torch
 import wandb
 from torch_geometric.data import HeteroData
 
-# from torch.autograd.graph import save_on_cpu
-
 from aifs.data.era_normalizers import InputNormalizer
 from aifs.model.losses import WeightedMSELoss
 from aifs.model.msg import GraphMSG
@@ -71,8 +69,7 @@ class GraphForecaster(pl.LightningModule):
 
         self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
 
-        # TODO: what if pl_names is None? either guard against that or make it a required arg
-        # or, better yet, can we replace `pl_names` with the level names from the input metadata?
+        # TODO: extract the level names from the input metadata
         self.metric_ranges = {}
         for i, key in enumerate(pl_names):
             self.metric_ranges[key] = [i * num_levels, (i + 1) * num_levels]
