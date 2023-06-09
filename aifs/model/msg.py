@@ -56,39 +56,33 @@ class GraphMSG(nn.Module):
         self._h_size = self._graph_data[("h", "to", "h")].hcoords_rad.shape[0]
 
         self.era_trainable_size = era_trainable_size
-        if self.era_trainable_size > 0:
-            self.era_trainable = nn.Parameter(torch.zeros(self._era_size, self.era_trainable_size))
-        else:
-            self.era_trainable = None
+        self.era_trainable = (
+            nn.Parameter(torch.zeros(self._era_size, self.era_trainable_size)) if self.era_trainable_size > 0 else None
+        )
+
         self.h3_trainable_size = h3_trainable_size
-        if self.h3_trainable_size > 0:
-            self.h3_trainable = nn.Parameter(torch.zeros(self._h_size, self.h3_trainable_size))
-        else:
-            self.h3_trainable = None
+        self.h3_trainable = nn.Parameter(torch.zeros(self._h_size, self.h3_trainable_size)) if self.h3_trainable_size > 0 else None
 
         self.e2h_trainable_size = e2h_trainable_size
-        if self.e2h_trainable_size > 0:
-            self.e2h_trainable = nn.Parameter(
-                torch.zeros(self._graph_data[("era", "to", "h")].edge_attr.shape[0], self.e2h_trainable_size)
-            )
-        else:
-            self.e2h_trainable = None
+        self.e2h_trainable = (
+            nn.Parameter(torch.zeros(self._graph_data[("era", "to", "h")].edge_attr.shape[0], self.e2h_trainable_size))
+            if self.e2h_trainable_size > 0
+            else None
+        )
 
         self.h2e_trainable_size = h2e_trainable_size
-        if self.h2e_trainable_size > 0:
-            self.h2e_trainable = nn.Parameter(
-                torch.zeros(self._graph_data[("h", "to", "era")].edge_attr.shape[0], self.h2e_trainable_size)
-            )
-        else:
-            self.h2e_trainable = None
+        self.h2e_trainable = (
+            nn.Parameter(torch.zeros(self._graph_data[("h", "to", "era")].edge_attr.shape[0], self.h2e_trainable_size))
+            if self.h2e_trainable_size > 0
+            else None
+        )
 
         self.h2h_trainable_size = h2h_trainable_size
-        if self.h2h_trainable_size > 0:
-            self.h2h_trainable = nn.Parameter(
-                torch.zeros(self._graph_data[("h", "to", "h")].edge_attr.shape[0], self.h2h_trainable_size)
-            )
-        else:
-            self.h2h_trainable = None
+        self.h2h_trainable = (
+            nn.Parameter(torch.zeros(self._graph_data[("h", "to", "h")].edge_attr.shape[0], self.h2h_trainable_size))
+            if self.h2h_trainable_size > 0
+            else None
+        )
 
         self.register_buffer(
             "_e2h_edge_inc", torch.from_numpy(np.asarray([[self._era_size], [self._h_size]], dtype=np.int64)), persistent=False

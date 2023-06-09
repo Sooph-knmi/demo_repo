@@ -170,10 +170,9 @@ class GraphForecaster(pl.LightningModule):
         )
         self.log(
             "rollout",
-            float(self.rollout),
+            self.rollout,
             on_step=True,
             logger=True,
-            sync_dist=True,
         )
         return train_loss
 
@@ -258,6 +257,5 @@ class GraphForecaster(pl.LightningModule):
             lr_min=0.3 * 10**-7,
             t_initial=self.lr_iterations,
             warmup_t=1000,
-            )
+        )
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
-
