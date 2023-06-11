@@ -30,14 +30,12 @@ setup(
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
         "License :: OSI Approved :: Apache Software License",
         "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
     ],
     packages=find_packages(),
     entry_points={
         "console_scripts": [
             "aifs-train=aifs.train.train:main",
             "aifs-predict=aifs.predict.predict:main",
-            "aifs-dltest=aifs.data.dltest:main",
         ]
     },
 )

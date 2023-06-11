@@ -7,6 +7,7 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256G
 #SBATCH --time=48:00:00
+#SBATCH --account=ecaifs
 #SBATCH --output=outputs/o160-h3_3-msg-torch-swa.out.%j
 
 # debugging flags (optional)

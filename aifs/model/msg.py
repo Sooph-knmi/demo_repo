@@ -1,13 +1,16 @@
 import einops
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 from torch_geometric.data import HeteroData
+
+from torch.utils.checkpoint import checkpoint
+
+from torch.autograd.graph import save_on_cpu
 
 from aifs.model.layers import (
     MessagePassingProcessor,
     MessagePassingMapper,
-    MessagePassingMLP,
 )
 from aifs.utils.logger import get_logger
 
@@ -20,6 +23,7 @@ class GraphMSG(nn.Module):
         graph_data: HeteroData,
         in_channels: int,
         aux_in_channels: int,
+        multistep: int,
         encoder_num_layers: int,
         encoder_hidden_channels: int,
         encoder_out_channels: int,
@@ -39,6 +43,7 @@ class GraphMSG(nn.Module):
         # create mappings
         self._graph_data = graph_data
         self.in_channels = in_channels
+        self.mstep = multistep
 
         self.register_buffer("e2e_edge_index", self._graph_data[("era", "to", "era")].edge_index, persistent=False)
         self.register_buffer("h2e_edge_index", self._graph_data[("h", "to", "era")].edge_index, persistent=False)
@@ -116,126 +121,88 @@ class GraphMSG(nn.Module):
             persistent=True,
         )
 
-        LOGGER.debug(f"----> {self.h_latlons.shape[1]}, f{self.e2h_edge_attr.shape[1]}")
-
-        # latent nodes:
-        self.node_era_embedder = MessagePassingMLP(
-            in_channels=in_channels + aux_in_channels + self.era_latlons.shape[1] + self.era_trainable_size,
-            latent_dim=encoder_out_channels,
-            out_channels=encoder_out_channels,
-            mlp_extra_layers=mlp_extra_layers,
-            activation=activation,
-        )
-
-        self.node_h_embedder = MessagePassingMLP(
-            in_channels=self.h_latlons.shape[1] + self.h3_trainable_size,
-            latent_dim=encoder_out_channels,
-            out_channels=encoder_out_channels,
-            mlp_extra_layers=mlp_extra_layers,
-            activation=activation,
-        )  # position channels only
-
-        self.edge_era_to_h_embedder = MessagePassingMLP(
-            in_channels=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
-            latent_dim=encoder_out_channels,
-            out_channels=encoder_out_channels,
-            mlp_extra_layers=mlp_extra_layers,
-            activation=activation,
-        )
-
-        self.edge_h_to_h_embedder = MessagePassingMLP(
-            in_channels=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
-            latent_dim=encoder_out_channels,
-            out_channels=encoder_out_channels,
-            mlp_extra_layers=mlp_extra_layers,
-            activation=activation,
-        )
-
-        self.edge_h_to_era_embedder = MessagePassingMLP(
-            in_channels=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
-            latent_dim=encoder_out_channels,
-            out_channels=encoder_out_channels,
-            mlp_extra_layers=mlp_extra_layers,
-            activation=activation,
-        )
-
-        # extract features:
-        self.node_era_extractor = MessagePassingMLP(
-            in_channels=encoder_out_channels,
-            latent_dim=encoder_out_channels,
-            out_channels=in_channels,
-            mlp_extra_layers=mlp_extra_layers + 1,  # add decoder head
-            activation=activation,
-            layer_norm=False,
-            final_activation=False,
-        )
-
         # ERA -> H
         self.forward_mapper = MessagePassingMapper(
+            in_channels_src=self.mstep * (in_channels + aux_in_channels) + self.era_latlons.shape[1] + self.era_trainable_size,
+            in_channels_dst=self.h_latlons.shape[1] + self.h3_trainable_size,
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             mlp_extra_layers=mlp_extra_layers,
+            edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
             chunks=1,
             activation=activation,
         )
 
         # H -> H
         self.h_processor = MessagePassingProcessor(
-            hidden_dim=encoder_hidden_channels,
+            hidden_dim=encoder_out_channels,
             hidden_layers=encoder_num_layers,
             mlp_extra_layers=mlp_extra_layers,
+            edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
             chunks=2,
             activation=activation,
         )
 
         # H -> ERA5
         self.backward_mapper = MessagePassingMapper(
+            in_channels_src=encoder_out_channels,
+            in_channels_dst=encoder_out_channels,
+            out_channels_dst=in_channels,
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             mlp_extra_layers=mlp_extra_layers,
+            edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
+            backward_mapper=True,
             chunks=1,
             activation=activation,
         )
 
+        self._init_weights()
+
+    def _init_weights(self) -> None:
+        """Initializes the weights"""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight)
+                if m.bias is not None:
+                    m.bias.data.zero_()
+            elif isinstance(m, nn.LayerNorm):
+                m.bias.data.zero_()
+                m.weight.data.fill_(1.0)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         bs = x.shape[0]
 
-        x_in = einops.rearrange(x, "b n f -> (b n) f")
-
         # add ERA positional info (lat/lon)
         x_in = [
-            x_in,
+            einops.rearrange(x, "b m n f -> (b n) (m f)"),
             einops.repeat(self.era_latlons, "e f -> (repeat e) f", repeat=bs),
         ]
         if self.era_trainable is not None:
             x_in.append(einops.repeat(self.era_trainable, "e f -> (repeat e) f", repeat=bs))
-        x_era_latent = self.node_era_embedder(
-            torch.cat(
-                x_in,
-                dim=-1,  # feature dimension
-            )
+        x_era_latent = torch.cat(
+            x_in,
+            dim=-1,  # feature dimension
         )
 
         x_h_latent = [einops.repeat(self.h_latlons, "e f -> (repeat e) f", repeat=bs)]
         if self.h3_trainable is not None:
             x_h_latent.append(einops.repeat(self.h3_trainable, "e f -> (repeat e) f", repeat=bs))
-        x_h_latent = self.node_h_embedder(
-            torch.cat(
-                x_h_latent,
-                dim=-1,  # feature dimension
-            )
+        x_h_latent = torch.cat(
+            x_h_latent,
+            dim=-1,  # feature dimension
         )
 
         edge_era_to_h_latent = [einops.repeat(self.e2h_edge_attr, "e f -> (repeat e) f", repeat=bs)]
         if self.e2h_trainable is not None:
             edge_era_to_h_latent.append(einops.repeat(self.e2h_trainable, "e f -> (repeat e) f", repeat=bs))
-        edge_era_to_h_latent = self.edge_era_to_h_embedder(
-            torch.cat(
-                edge_era_to_h_latent,
-                dim=-1,  # feature dimension
-            )
+        edge_era_to_h_latent = torch.cat(
+            edge_era_to_h_latent,
+            dim=-1,  # feature dimension
         )  # copy edge attributes bs times
-        (x_era_latent, x_latent) = self.forward_mapper(
+
+        (x_era_latent, x_latent) = checkpoint(
+            self.forward_mapper,
             (x_era_latent, x_h_latent),
             # expand edge index correct number of times while adding the proper number to the edge index
             edge_index=torch.cat(
@@ -243,18 +210,17 @@ class GraphMSG(nn.Module):
                 dim=1,
             ),
             edge_attr=edge_era_to_h_latent,
+            use_reentrant=False,
         )
 
         edge_h_to_h_latent = [einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs)]
         if self.h2h_trainable is not None:
             edge_h_to_h_latent.append(einops.repeat(self.h2h_trainable, "e f -> (repeat e) f", repeat=bs))
-        edge_h_to_h_latent = self.edge_h_to_h_embedder(
-            torch.cat(
-                edge_h_to_h_latent,
-                dim=-1,  # feature dimension
-            )
+        edge_h_to_h_latent = torch.cat(
+            edge_h_to_h_latent,
+            dim=-1,  # feature dimension
         )
-        x_latent_proc = self.h_processor(  # has skipped connections
+        x_latent_proc = self.h_processor(  # has skipped connections and checkpoints inside
             x=x_latent,
             edge_index=torch.cat(
                 [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bs)],
@@ -263,29 +229,28 @@ class GraphMSG(nn.Module):
             edge_attr=edge_h_to_h_latent,
         )
 
-        # added skip connection (H -> H)
+        # add skip connection (H -> H)
         x_latent_proc = x_latent_proc + x_latent
 
         edge_h_to_e_latent = [einops.repeat(self.h2e_edge_attr, "e f -> (repeat e) f", repeat=bs)]
         if self.h2e_trainable is not None:
             edge_h_to_e_latent.append(einops.repeat(self.h2e_trainable, "e f -> (repeat e) f", repeat=bs))
-        edge_h_to_e_latent = self.edge_h_to_era_embedder(
-            torch.cat(
-                edge_h_to_e_latent,
-                dim=-1,  # feature dimension
-            )
+        edge_h_to_e_latent = torch.cat(
+            edge_h_to_e_latent,
+            dim=-1,  # feature dimension
         )
-        (_, x_out) = self.backward_mapper(
+        _, x_out = checkpoint(
+            self.backward_mapper,
             x=(x_latent_proc, x_era_latent),
             edge_index=torch.cat(
                 [self.h2e_edge_index + i * self._h2e_edge_inc for i in range(bs)],
                 dim=1,
             ),
             edge_attr=edge_h_to_e_latent,
+            use_reentrant=False,
         )
 
-        x_out = self.node_era_extractor(x_out)
         x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=bs)
 
         # residual connection (just for the predicted variables)
-        return x_out + x[..., : self.in_channels]
+        return x_out + x[:, -1, :, : self.in_channels]

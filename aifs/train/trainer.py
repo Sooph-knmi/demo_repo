@@ -1,21 +1,21 @@
 import os
-from typing import List, Optional, Tuple, Dict
+from typing import Dict, List, Mapping, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pytorch_lightning as pl
 import torch
+import wandb
 from torch_geometric.data import HeteroData
 
-from torch.autograd.graph import save_on_cpu
+# from torch.autograd.graph import save_on_cpu
 from timm.scheduler import CosineLRScheduler
 
-import wandb
-from aifs.model.losses import WeightedMSELoss
 from aifs.data.era_normalizers import InputNormalizer
+from aifs.model.losses import WeightedMSELoss
 from aifs.model.msg import GraphMSG
 from aifs.utils.logger import get_logger
-from aifs.utils.plots import plot_predicted_multilevel_flat_sample, init_plot_settings, plot_loss
+from aifs.utils.plots import init_plot_settings, plot_loss, plot_predicted_multilevel_flat_sample
 
 LOGGER = get_logger(__name__)
 
@@ -44,10 +44,9 @@ class GraphForecaster(pl.LightningModule):
         lr: float = 1e-4,
         lr_iterations: int = 300000,
         rollout: int = 1,
+        multistep: int = 1,
         save_basedir: Optional[str] = None,
         log_to_wandb: bool = False,
-        log_to_neptune: bool = False,
-        log_persistence: bool = False,
         loss_scaling: Optional[torch.Tensor] = None,
         pl_names: Optional[List] = None,
         metric_names: Optional[List] = None,
@@ -60,6 +59,7 @@ class GraphForecaster(pl.LightningModule):
             graph_data=graph_data,
             in_channels=fc_dim,
             aux_in_channels=aux_dim,
+            multistep=multistep,
             encoder_num_layers=encoder_num_layers,
             encoder_hidden_channels=encoder_hidden_channels,
             encoder_out_channels=encoder_out_channels,
@@ -72,6 +72,8 @@ class GraphForecaster(pl.LightningModule):
             h2e_trainable_size=h2e_trainable_size,
             h2h_trainable_size=h2h_trainable_size,
         )
+
+        self.save_hyperparameters()
 
         self.normalizer = InputNormalizer(metadata)
 
@@ -93,7 +95,8 @@ class GraphForecaster(pl.LightningModule):
             self.metric_ranges[key] = [idx, idx + 1]
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
-        self.feature_dim = fc_dim
+        self.fcdim = fc_dim
+        self.mstep = multistep
         self.lr = lr
         self.lr_iterations = lr_iterations
         self.rollout = rollout
@@ -102,41 +105,59 @@ class GraphForecaster(pl.LightningModule):
         LOGGER.debug("Rollout window length: %d", self.rollout)
         LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
         LOGGER.debug("Rollout max : %d", self.rollout_max)
+        LOGGER.debug("Multistep: %d", self.mstep)
 
         self.log_to_wandb = log_to_wandb
-        self.log_to_neptune = log_to_neptune
         self.save_basedir = save_basedir
 
-        self.log_persistence = log_persistence
-
-        self.save_hyperparameters()
         init_plot_settings()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.gnn(x)
 
-    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        del batch_idx  # not used
-        train_loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
-        persist_loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)  # persistence
-        batch = self.normalizer(batch)  # normalized in-place
-        # start rollout
-        x = batch[:, 0, ...]
-        with save_on_cpu(pin_memory=True):
-            for rstep in range(self.rollout):
-                y_hat = self(x)  # prediction at rollout step rstep
-                y = batch[:, rstep + 1, ...]  # target
-                # y includes the auxiliary variables, so we must leave those out when computing the loss
-                train_loss += self.loss(y_hat, y[..., : self.feature_dim])
-                persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
-                # autoregressive predictions - we re-init the "variable" part of x
-                x[..., : self.feature_dim] = y_hat
-                # get new "constants" needed for time-varying fields
-                x[..., self.feature_dim :] = y[..., self.feature_dim :]
-            # scale loss
-            train_loss *= 1.0 / self.rollout
-            persist_loss *= 1.0 / self.rollout
+    def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
+        x = x.roll(-1, dims=1)
+        # autoregressive predictions - we re-init the "variable" part of x
+        x[:, self.mstep - 1, :, : self.fcdim] = y_pred
+        # get new "constants" needed for time-varying fields
+        x[:, self.mstep - 1, :, self.fcdim :] = y[..., self.fcdim :]
+        return x
 
+    def _step(
+        self, batch: torch.Tensor, batch_idx: int, compute_metrics: bool = False, plot: bool = False
+    ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
+        loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
+        batch = self.normalizer(batch)  # normalized in-place
+        metrics = {}
+
+        # start rollout
+        x = batch[:, 0 : self.mstep, ...]  # (bs, mstep, latlon, nvar)
+
+        # with save_on_cpu(pin_memory=True):
+        for rstep in range(self.rollout):
+            y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+            y = batch[:, self.mstep + rstep, ...]  # target, shape = (bs, latlon, nvar)
+            # y includes the auxiliary variables, so we must leave those out when computing the loss
+            loss += self.loss(y_pred, y[..., : self.fcdim])
+
+            if plot and self.global_rank == 0:
+                self._plot_loss(y_pred, y[..., : self.fcdim], rollout_step=rstep)
+                self._plot_sample(batch_idx, rstep, x[:, -1, :, : self.fcdim], y[..., : self.fcdim], y_pred)
+
+            x = self.advance_input(x, y, y_pred)
+
+            if compute_metrics:
+                for mkey, (low, high) in self.metric_ranges.items():
+                    y_denorm = self.normalizer.denormalize(y.clone())
+                    y_hat_denorm = self.normalizer.denormalize(x[:, -1, ...].clone())
+                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
+
+        # scale loss
+        loss *= 1.0 / self.rollout
+        return loss, metrics
+
+    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+        train_loss, _ = self._step(batch, batch_idx)
         self.log(
             "train_wmse",
             train_loss,
@@ -153,17 +174,6 @@ class GraphForecaster(pl.LightningModule):
             on_step=True,
             logger=True,
         )
-        if self.log_persistence:
-            self.log(
-                "train_persist_wmse",
-                persist_loss,
-                on_epoch=True,
-                on_step=True,
-                prog_bar=False,
-                logger=True,
-                batch_size=batch.shape[0],
-                sync_dist=True,
-            )
         return train_loss
 
     def lr_scheduler_step(self, scheduler, metric):
@@ -175,8 +185,9 @@ class GraphForecaster(pl.LightningModule):
             LOGGER.debug("Rollout window length: %d", self.rollout)
         self.rollout = min(self.rollout, self.rollout_max)
 
-    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        val_loss, persist_loss, metrics = self._shared_eval_step(batch, batch_idx)
+    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
+        plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
+        val_loss, metrics = self._step(batch, batch_idx, compute_metrics=True, plot=plot_sample)
         self.log(
             "val_wmse",
             val_loss,
@@ -187,99 +198,17 @@ class GraphForecaster(pl.LightningModule):
             batch_size=batch.shape[0],
             sync_dist=True,
         )
-        if self.log_persistence:
-            self.log(
-                "val_persist_wmse",
-                persist_loss,
-                on_epoch=True,
-                on_step=True,
-                prog_bar=True,
-                logger=True,
-                batch_size=batch.shape[0],
-                sync_dist=True,
-            )
         for mname, mvalue in metrics.items():
             self.log(
                 "val_" + mname,
                 mvalue,
                 on_epoch=True,
                 on_step=False,
+                prog_bar=False,
                 logger=True,
                 batch_size=batch.shape[0],
                 sync_dist=True,
             )
-        return val_loss
-
-    def test_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        test_loss, persist_loss, _ = self._shared_eval_step(batch, batch_idx)
-        self.log(
-            "test_wmse",
-            test_loss,
-            on_epoch=True,
-            on_step=True,
-            prog_bar=True,
-            logger=True,
-            batch_size=batch.shape[0],
-            sync_dist=True,
-        )
-
-        if self.log_persistence:
-            self.log(
-                "test_persist_wmse",
-                persist_loss,
-                on_epoch=True,
-                on_step=True,
-                prog_bar=True,
-                logger=True,
-                batch_size=batch.shape[0],
-                sync_dist=True,
-            )
-        return test_loss
-
-    def predict_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        del batch_idx  # not used
-        batch = self.normalizer(batch)
-
-        preds: List[torch.Tensor] = []
-        with torch.no_grad():
-            # start rollout
-            x = batch[:, 0, ...]
-            for rstep in range(self.rollout):
-                y_hat = self(x)
-                x[..., : self.feature_dim] = y_hat
-                if rstep + 1 < self.rollout:
-                    # get new "constants" needed for time-varying fields
-                    x[..., self.feature_dim :] = batch[:, rstep + 1, :, self.feature_dim :]
-                preds.append(y_hat)
-        return torch.stack(preds, dim=-1)  # stack along new last dimension, return sample indices too
-
-    def _shared_eval_step(self, batch: torch.Tensor, batch_idx: int) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
-        plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
-        batch = self.normalizer(batch)
-        metrics = {}
-        with torch.no_grad():
-            loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
-            persist_loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)  # persistence loss
-            x = batch[:, 0, ...]
-            for rstep in range(self.rollout):
-                y_hat = self(x)
-                y = batch[:, rstep + 1, ...]
-                loss += self.loss(y_hat, y[..., : self.feature_dim])
-                persist_loss += self.loss(x[..., : self.feature_dim], y[..., : self.feature_dim])
-                if plot_sample and self.global_rank == 0:
-                    self._plot_loss(y_hat, y[..., : self.feature_dim], rollout_step=rstep)
-                    self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)
-                x[..., : self.feature_dim] = y_hat
-                # get new "constants" needed for time-varying fields
-                x[..., self.feature_dim :] = y[..., self.feature_dim :]
-                for mkey, mranges in self.metric_ranges.items():
-                    y_denorm = self.normalizer.denormalize(y.clone())
-                    y_hat_denorm = self.normalizer.denormalize(x.clone())
-                    low, high = mranges
-                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
-            loss *= 1.0 / self.rollout
-            persist_loss *= 1.0 / self.rollout
-        return loss, persist_loss, metrics
 
     def _plot_loss(self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int) -> None:
         loss = self.loss(y_true, y_pred, squash=False).cpu().numpy()
@@ -319,8 +248,6 @@ class GraphForecaster(pl.LightningModule):
             fig.savefig(save_path, dpi=100)
             if self.log_to_wandb:
                 self.logger.experiment.log({exp_log_tag: wandb.Image(save_path)})
-            if self.log_to_neptune:
-                self.logger.experiment[f"val/{tag}_epoch{self.current_epoch:03d}"].upload(save_path)
         plt.close(fig)  # cleanup
 
     def configure_optimizers(self):

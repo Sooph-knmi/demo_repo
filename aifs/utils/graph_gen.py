@@ -1,9 +1,17 @@
 import networkx as nx
+
 import numpy as np
+
 import h3
+
 from sklearn.metrics.pairwise import haversine_distances
 from sklearn.neighbors import NearestNeighbors
 from scipy.spatial.transform import Rotation as R
+import trimesh
+
+from torch_geometric.utils import to_networkx
+from torch_geometric.data import Data
+import plotly.graph_objects as go
 
 
 def graph_normalise_edge_distance(G1):
@@ -28,13 +36,13 @@ def to_unit_sphere_xyz(loc):
     x = R * np.cos(latr) * np.cos(lonr)
     y = R * np.cos(latr) * np.sin(lonr)
     z = R * np.sin(latr)
-    return (x, y, z)
+    return np.array((x, y, z))
 
 
 def direction_vec(v1, v2, epsilon=10e-11):
     v = np.cross(v1, v2)
     vnorm1 = np.dot(v, v)
-    if (vnorm1 - 0.0) < epsilon:
+    if vnorm1 < epsilon:
         v1 = v1 + epsilon
         v = np.cross(v1, v2)
         vnorm1 = np.dot(v, v)
@@ -64,7 +72,7 @@ def directional_edge_features_rotated(loc1, loc2):
     return compute_directions(loc1, loc2)[0:2]  # discard last component -> zero if rotated to north pole
 
 
-def add_edge(G, idx1, idx2, allow_self_loop=False, add_edge_attrib=True):
+def add_edge(G, idx1, idx2, allow_self_loop=False, add_edge_attrib=False):
     loc1 = np.deg2rad(h3.h3_to_geo(idx1))
     loc2 = np.deg2rad(h3.h3_to_geo(idx2))
     if allow_self_loop or idx1 != idx2:
@@ -77,14 +85,14 @@ def add_edge(G, idx1, idx2, allow_self_loop=False, add_edge_attrib=True):
             # G.add_edge(idx1, idx2, weight = h3.point_dist(loc1, loc2, unit='rads'))
 
 
-def add_nodes(G, resolution, self_loop=True):
+def add_nodes(G, resolution, self_loop=False):
     for idx in h3.uncompact(h3.get_res0_indexes(), resolution):
         G.add_node(idx, hcoords_rad=np.deg2rad(h3.h3_to_geo(idx)))
         if self_loop:
             add_edge(G, idx, idx, allow_self_loop=self_loop)
 
 
-def multi_mesh(h3_resolutions, self_loop=True, flat=True, neighbour_children=False, depth=None):
+def multi_mesh1(h3_resolutions, self_loop=True, flat=True, neighbour_children=False, depth=None):
     if depth is None:
         depth = len(h3_resolutions)
 
@@ -142,3 +150,249 @@ def multi_mesh(h3_resolutions, self_loop=True, flat=True, neighbour_children=Fal
                             else:
                                 add_edge(G, idx_parent, idx_child_neighbour)
     return G
+
+
+def create_sphere(subdivisions=0, radius=1.0):
+    return trimesh.creation.icosphere(subdivisions=subdivisions, radius=radius)
+
+
+def to_latlon(xyz, radius=1.0):
+    lat = np.arcsin(xyz[..., 2] / radius) * 180.0 / np.pi
+    lon = np.arctan2(xyz[..., 1], xyz[..., 0]) * 180.0 / np.pi
+    return np.array((lat, lon), dtype=np.float32).transpose()
+
+
+def to_rad(xyz, radius=1.0):
+    lat = np.arcsin(xyz[..., 2] / radius)
+    lon = np.arctan2(xyz[..., 1], xyz[..., 0])
+    return np.array((lat, lon), dtype=np.float32).transpose()
+
+
+from sklearn.neighbors import BallTree
+
+
+def get_one_ring(sp):
+    g = nx.from_edgelist(sp.edges_unique)
+    one_ring = [list(g[i].keys()) for i in range(len(sp.vertices))]
+
+    return one_ring
+
+
+def multi_mesh2(resolutions):
+    G = nx.Graph()
+
+    sp1 = create_sphere(resolutions[-1])
+    sp1_rad = to_rad(sp1.vertices)
+    one_rings = get_one_ring(sp1)
+
+    for ii, coords in enumerate(sp1_rad):
+        G.add_node(ii, hcoords_rad=sp1_rad[ii])
+
+    for ii in range(len(sp1.vertices)):
+        for ineighb in one_rings[ii]:
+            if ineighb != ii:
+                loc_self = sp1_rad[ii]
+                loc_neigh = sp1_rad[ineighb]
+                # direction = directional_edge_features_rotated(loc_neigh, loc_self)
+                # G.add_edge(ineighb, ii, edge_attr=(haversine_distances([loc_neigh, loc_self])[0][1], *direction))
+                G.add_edge(ineighb, ii, weight=haversine_distances([loc_neigh, loc_self])[0][1])
+
+    tree = BallTree(sp1_rad, metric="haversine")
+
+    for resolution in resolutions[:-1]:
+        sp2 = create_sphere(resolution)
+        sp2_rad = to_rad(sp2.vertices)
+        one_rings = get_one_ring(sp2)
+
+        dist, ind1 = tree.query(sp2_rad, k=1)
+        for ii in range(len(sp2.vertices)):
+            for ineighb in one_rings[ii]:
+                if ineighb != ii:
+                    loc_dst = sp2_rad[ii]
+                    loc_neigh = sp2_rad[ineighb]
+                    # direction = directional_edge_features_rotated(loc_neigh, loc_dst)
+                    # G.add_edge(ind1[ineighb][0], ind1[ii][0], edge_attr=(haversine_distances([loc_neigh, loc_dst])[0][1], *direction))
+                    G.add_edge(ind1[ineighb][0], ind1[ii][0], weight=haversine_distances([loc_neigh, loc_dst])[0][1])
+
+    return G, sp1_rad
+
+
+# Plotting
+def node_list(coords):
+    node1_x = []
+    node1_y = []
+    for x, y in coords:
+        node1_x.append(np.rad2deg(x))
+        node1_y.append(np.rad2deg(y))
+    return node1_x, node1_y
+
+
+def edge_list(grph_in, plt_ids):
+    edge_x = []
+    edge_y = []
+    for n in range(grph_in["edge_index"].shape[1]):
+        i, j = grph_in["edge_index"][:, n]
+        ic = grph_in[plt_ids[0]][i, :]
+        jc = grph_in[plt_ids[1]][j, :]
+
+        x0, y0 = np.rad2deg(ic)
+        x1, y1 = np.rad2deg(jc)
+        edge_x.append(x0)
+        edge_x.append(x1)
+        edge_x.append(None)
+        edge_y.append(y0)
+        edge_y.append(y1)
+        edge_y.append(None)
+    return edge_x, edge_y
+
+
+def plot_graph_from_graphdata(title, grph_in, coord_id):
+    # only used for adjacency
+    G1 = to_networkx(Data(x=grph_in[coord_id], edge_index=grph_in["edge_index"], edge_attr=grph_in["edge_attr"]))
+
+    edge_x, edge_y = edge_list(grph_in, (coord_id, coord_id))
+    node_x, node_y = node_list(grph_in[coord_id])
+
+    edge_trace = go.Scattergeo(lat=edge_x, lon=edge_y, line=dict(width=0.5, color="#888"), hoverinfo="none", mode="lines")
+
+    node_trace = go.Scattergeo(
+        lat=node_x,
+        lon=node_y,
+        mode="markers",
+        hoverinfo="text",
+        marker=dict(
+            showscale=True,
+            colorscale="YlGnBu",
+            reversescale=True,
+            color=[],
+            size=10,
+            colorbar=dict(thickness=15, title="Node Connections", xanchor="left", titleside="right"),
+            line_width=2,
+        ),
+    )
+
+    node_adjacencies = []
+    node_text = []
+    for node, adjacencies in enumerate(G1.adjacency()):
+        node_adjacencies.append(len(adjacencies[1]))
+        node_text.append("# of connections: " + str(len(adjacencies[1])))
+
+    node_trace.marker.color = node_adjacencies
+    node_trace.text = node_text
+
+    fig = go.Figure(
+        data=[edge_trace, node_trace],
+        layout=go.Layout(
+            title="<br>" + title,
+            titlefont_size=16,
+            showlegend=False,
+            hovermode="closest",
+            margin=dict(b=20, l=5, r=5, t=40),
+            annotations=[dict(text="", showarrow=False, xref="paper", yref="paper", x=0.005, y=-0.002)],
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        ),
+    )
+    fig.show()
+
+
+def plot_bipartite_from_graphdata(title, colour, grph_in, edges_to_plot, nodes1, nodes2):
+    edge_x, edge_y = edge_list(grph_in, edges_to_plot)
+    node1_x, node1_y = node_list(nodes1)
+    node2_x, node2_y = node_list(nodes2)
+
+    edge_trace = go.Scattergeo(lat=edge_x, lon=edge_y, line=dict(width=0.5, color="#888"), hoverinfo="none", mode="lines")
+
+    node_trace1 = go.Scattergeo(
+        lat=node1_x, lon=node1_y, mode="markers", hoverinfo="text", marker=dict(showscale=True, color="red", size=2, line_width=2)
+    )
+
+    node_trace2 = go.Scattergeo(
+        lat=node2_x, lon=node2_y, mode="markers", hoverinfo="text", marker=dict(color=colour, size=10, line_width=2)
+    )
+
+    fig = go.Figure(
+        data=[edge_trace, node_trace1, node_trace2],
+        layout=go.Layout(
+            title="<br>" + title,
+            titlefont_size=16,
+            showlegend=False,
+            hovermode="closest",
+            margin=dict(b=20, l=5, r=5, t=40),
+            annotations=[dict(text="", showarrow=False, xref="paper", yref="paper", x=0.005, y=-0.002)],
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        ),
+    )
+    fig.show()
+
+
+def plot_graph_from_networkx(title, H3):
+    # largely from https://plotly.com/python/network-graphs/
+    import plotly.graph_objects as go
+
+    edge_x = []
+    edge_y = []
+    for edge in H3.edges():
+        x0, y0 = np.rad2deg(H3.nodes[edge[0]]["hcoords_rad"])
+        x1, y1 = np.rad2deg(H3.nodes[edge[1]]["hcoords_rad"])
+        edge_x.append(x0)
+        edge_x.append(x1)
+        edge_x.append(None)
+        edge_y.append(y0)
+        edge_y.append(y1)
+        edge_y.append(None)
+
+    edge_trace = go.Scattergeo(lat=edge_x, lon=edge_y, line=dict(width=0.5, color="#888"), hoverinfo="none", mode="lines")
+
+    node_x = []
+    node_y = []
+    for node in H3.nodes():
+        x, y = np.rad2deg(H3.nodes[node]["hcoords_rad"])
+        node_x.append(x)
+        node_y.append(y)
+
+    node_trace = go.Scattergeo(
+        lat=node_x,
+        lon=node_y,
+        mode="markers",
+        hoverinfo="text",
+        marker=dict(
+            showscale=True,
+            colorscale="YlGnBu",
+            reversescale=True,
+            color=[],
+            size=10,
+            colorbar=dict(thickness=15, title="Node Connections", xanchor="left", titleside="right"),
+            line_width=2,
+        ),
+    )
+
+    node_adjacencies = []
+    node_text = []
+    for node, adjacencies in enumerate(H3.adjacency()):
+        node_adjacencies.append(len(adjacencies[1]))
+        node_text.append("# of connections: " + str(len(adjacencies[1])))
+
+    node_trace.marker.color = node_adjacencies
+    node_trace.text = node_text
+
+    fig = go.Figure(
+        data=[edge_trace, node_trace],
+        layout=go.Layout(
+            title="<br>" + title,
+            titlefont_size=16,
+            showlegend=False,
+            hovermode="closest",
+            margin=dict(b=20, l=5, r=5, t=40),
+            annotations=[dict(text="", showarrow=False, xref="paper", yref="paper", x=0.005, y=-0.002)],
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        ),
+    )
+    fig.show()
+    n_h3_nodes0 = 122
+    n_h3_nodes1 = 842
+    print(sorted(node_adjacencies, reverse=True)[0:n_h3_nodes0])
+    print(sorted(node_adjacencies, reverse=True)[n_h3_nodes0 : n_h3_nodes0 + n_h3_nodes1])
+    print(sorted(node_adjacencies, reverse=True)[n_h3_nodes0 + n_h3_nodes1 : n_h3_nodes0 + n_h3_nodes1 + 100])
