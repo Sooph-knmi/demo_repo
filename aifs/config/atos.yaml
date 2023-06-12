@@ -168,8 +168,8 @@ model:
 
   # training settings
   lead-time: 6
-  max-epochs: 2 #50 #50
-  learn-rate: 0.000125 #0.625e-4
+  max-epochs: 2 
+  learn-rate: 0.000125 
   lr-iterations: 300000
 
   # multistep input

@@ -85,8 +85,7 @@ class GraphForecaster(pl.LightningModule):
 
         self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
 
-        # TODO: what if pl_names is None? either guard against that or make it a required arg
-        # or, better yet, can we replace `pl_names` with the level names from the input metadata?
+        # TODO: extract the level names from the input metadata
         self.metric_ranges = {}
         for i, key in enumerate(pl_names):
             self.metric_ranges[key] = [i * num_levels, (i + 1) * num_levels]
@@ -196,8 +195,8 @@ class GraphForecaster(pl.LightningModule):
             prog_bar=True,
             logger=True,
             batch_size=batch.shape[0],
+            rank_zero_only=True,
             sync_dist=True,
-        )
         for mname, mvalue in metrics.items():
             self.log(
                 "val_" + mname,
@@ -208,6 +207,7 @@ class GraphForecaster(pl.LightningModule):
                 logger=True,
                 batch_size=batch.shape[0],
                 sync_dist=True,
+                rank_zero_only=True,
             )
 
     def _plot_loss(self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int) -> None:

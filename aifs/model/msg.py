@@ -226,7 +226,7 @@ class GraphMSG(nn.Module):
                 [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bs)],
                 dim=1,
             ),
-            edge_attr=edge_h_to_h_latent,
+            edge_attr=einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs),
         )
 
         # add skip connection (H -> H)
