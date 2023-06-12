@@ -8,8 +8,6 @@ import torch
 import wandb
 from torch_geometric.data import HeteroData
 
-# from torch.autograd.graph import save_on_cpu
-
 from aifs.data.era_normalizers import InputNormalizer
 from aifs.model.losses import WeightedMSELoss
 from aifs.model.msg import GraphMSG
@@ -71,8 +69,7 @@ class GraphForecaster(pl.LightningModule):
 
         self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
 
-        # TODO: what if pl_names is None? either guard against that or make it a required arg
-        # or, better yet, can we replace `pl_names` with the level names from the input metadata?
+        # TODO: extract the level names from the input metadata
         self.metric_ranges = {}
         for i, key in enumerate(pl_names):
             self.metric_ranges[key] = [i * num_levels, (i + 1) * num_levels]
@@ -118,6 +115,7 @@ class GraphForecaster(pl.LightningModule):
         # with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+
             y = batch[:, self.mstep + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
             loss += self.loss(y_pred, y[..., : self.fcdim])
@@ -149,33 +147,37 @@ class GraphForecaster(pl.LightningModule):
             logger=True,
             batch_size=batch.shape[0],
             sync_dist=True,
+            rank_zero_only=True,
         )
         return train_loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
         plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
-        val_loss, metrics = self._step(batch, batch_idx, compute_metrics=True, plot=plot_sample)
-        self.log(
-            "val_wmse",
-            val_loss,
-            on_epoch=True,
-            on_step=True,
-            prog_bar=True,
-            logger=True,
-            batch_size=batch.shape[0],
-            sync_dist=True,
-        )
-        for mname, mvalue in metrics.items():
+        with torch.no_grad():
+            val_loss, metrics = self._step(batch, batch_idx, compute_metrics=True, plot=plot_sample)
             self.log(
-                "val_" + mname,
-                mvalue,
+                "val_wmse",
+                val_loss,
                 on_epoch=True,
-                on_step=False,
-                prog_bar=False,
+                on_step=True,
+                prog_bar=True,
                 logger=True,
                 batch_size=batch.shape[0],
                 sync_dist=True,
+                rank_zero_only=True,
             )
+            for mname, mvalue in metrics.items():
+                self.log(
+                    "val_" + mname,
+                    mvalue,
+                    on_epoch=True,
+                    on_step=False,
+                    prog_bar=False,
+                    logger=True,
+                    batch_size=batch.shape[0],
+                    sync_dist=True,
+                    rank_zero_only=True,
+                )
 
     def _plot_loss(self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int) -> None:
         loss = self.loss(y_true, y_pred, squash=False).cpu().numpy()

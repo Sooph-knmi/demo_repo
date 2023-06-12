@@ -70,7 +70,7 @@ class ERA5DataModule(pl.LightningDataModule):
             worker_init_fn=worker_init_func,
             # prefetch batches (default prefetch_factor == 2)
             prefetch_factor=_DL_PREFETCH_FACTOR,
-            persistent_workers=True,
+            persistent_workers=False,
         )
 
     def train_dataloader(self) -> DataLoader:
@@ -125,7 +125,7 @@ class ERA5TestDataModule(pl.LightningDataModule):
             pin_memory=True,
             worker_init_fn=worker_init_func,
             prefetch_factor=_DL_PREFETCH_FACTOR,
-            persistent_workers=True,
+            persistent_workers=False,
         )
 
     def train_dataloader(self) -> DataLoader:
