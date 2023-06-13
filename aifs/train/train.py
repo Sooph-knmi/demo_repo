@@ -67,8 +67,15 @@ def train(config: YAMLConfig) -> None:
         encoder_num_layers=config["model:encoder:num-layers"],
         encoder_mapper_num_layers=config["model:encoder:mapper-num-layers"],
         mlp_extra_layers=config["model:encoder:mlp-extra-layers"],
+        era_trainable_size=config["model:encoder:era-trainable-size"],
+        h_trainable_size=config["model:encoder:h-trainable-size"],
+        e2h_trainable_size=config["model:encoder:e2h-trainable-size"],
+        h2e_trainable_size=config["model:encoder:h2e-trainable-size"],
+        h2h_trainable_size=config["model:encoder:h2h-trainable-size"],
         activation=config["model:encoder:activation"],
         lr=total_gpu_count * config["model:learn-rate"],
+        lr_iterations=config["model:lr-iterations"],
+        lr_min=config["model:lr-min"],
         rollout=config["model:rollout"],
         multistep=config["model:multistep-input"],
         save_basedir=os.path.join(
@@ -78,6 +85,8 @@ def train(config: YAMLConfig) -> None:
         loss_scaling=loss_scaling,
         pl_names=config["input:pl:names"],
         metric_names=config["metrics"],
+        rollout_epoch_increment=config["model:rollout-epoch-increment"],
+        rollout_max=config["model:rollout-max"],
     )
 
     if config["model:compile"]:

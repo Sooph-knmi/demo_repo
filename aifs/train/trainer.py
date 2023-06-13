@@ -8,6 +8,9 @@ import torch
 import wandb
 from torch_geometric.data import HeteroData
 
+# from torch.autograd.graph import save_on_cpu
+from timm.scheduler import CosineLRScheduler
+
 from aifs.data.era_normalizers import InputNormalizer
 from aifs.model.losses import WeightedMSELoss
 from aifs.model.msg import GraphMSG
@@ -32,8 +35,15 @@ class GraphForecaster(pl.LightningModule):
         encoder_hidden_channels: int = 128,
         encoder_out_channels: int = 128,
         mlp_extra_layers: int = 0,
+        era_trainable_size: int = 8,
+        h_trainable_size: int = 8,
+        e2h_trainable_size: int = 8,
+        h2e_trainable_size: int = 8,
+        h2h_trainable_size: int = 0,
         activation: str = "SiLU",
         lr: float = 1e-4,
+        lr_iterations: int = 300000,
+        lr_min: float = 1.5e-7,
         rollout: int = 1,
         multistep: int = 1,
         save_basedir: Optional[str] = None,
@@ -41,6 +51,8 @@ class GraphForecaster(pl.LightningModule):
         loss_scaling: Optional[torch.Tensor] = None,
         pl_names: Optional[List] = None,
         metric_names: Optional[List] = None,
+        rollout_epoch_increment: int = 0,
+        rollout_max: int = 12,
     ) -> None:
         super().__init__()
 
@@ -55,6 +67,11 @@ class GraphForecaster(pl.LightningModule):
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             encoder_mapper_num_layers=encoder_mapper_num_layers,
+            era_trainable_size=era_trainable_size,
+            h_trainable_size=h_trainable_size,
+            e2h_trainable_size=e2h_trainable_size,
+            h2e_trainable_size=h2e_trainable_size,
+            h2h_trainable_size=h2h_trainable_size,
         )
 
         self.save_hyperparameters()
@@ -81,9 +98,14 @@ class GraphForecaster(pl.LightningModule):
         self.fcdim = fc_dim
         self.mstep = multistep
         self.lr = lr
+        self.lr_iterations = lr_iterations
+        self.lr_min = lr_min
         self.rollout = rollout
-
+        self.rollout_epoch_increment = rollout_epoch_increment
+        self.rollout_max = rollout_max
         LOGGER.debug("Rollout window length: %d", self.rollout)
+        LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
+        LOGGER.debug("Rollout max : %d", self.rollout_max)
         LOGGER.debug("Multistep: %d", self.mstep)
 
         self.log_to_wandb = log_to_wandb
@@ -115,7 +137,6 @@ class GraphForecaster(pl.LightningModule):
         # with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
-
             y = batch[:, self.mstep + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
             loss += self.loss(y_pred, y[..., : self.fcdim])
@@ -147,37 +168,53 @@ class GraphForecaster(pl.LightningModule):
             logger=True,
             batch_size=batch.shape[0],
             sync_dist=True,
+        )
+        self.log(
+            "rollout",
+            self.rollout,
+            on_step=True,
+            logger=True,
             rank_zero_only=True,
+            sync_dist=False,
         )
         return train_loss
+
+    def lr_scheduler_step(self, scheduler, metric):
+        scheduler.step(epoch=self.trainer.global_step)
+
+    def on_train_epoch_end(self):
+        if self.rollout_epoch_increment > 0 and self.current_epoch % self.rollout_epoch_increment == 0:
+            self.rollout += 1
+            LOGGER.debug("Rollout window length: %d", self.rollout)
+        self.rollout = min(self.rollout, self.rollout_max)
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
         plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
         with torch.no_grad():
             val_loss, metrics = self._step(batch, batch_idx, compute_metrics=True, plot=plot_sample)
+        self.log(
+            "val_wmse",
+            val_loss,
+            on_epoch=True,
+            on_step=True,
+            prog_bar=True,
+            logger=True,
+            batch_size=batch.shape[0],
+            rank_zero_only=True,
+            sync_dist=True,
+        )
+        for mname, mvalue in metrics.items():
             self.log(
-                "val_wmse",
-                val_loss,
+                "val_" + mname,
+                mvalue,
                 on_epoch=True,
-                on_step=True,
-                prog_bar=True,
+                on_step=False,
+                prog_bar=False,
                 logger=True,
                 batch_size=batch.shape[0],
                 sync_dist=True,
                 rank_zero_only=True,
             )
-            for mname, mvalue in metrics.items():
-                self.log(
-                    "val_" + mname,
-                    mvalue,
-                    on_epoch=True,
-                    on_step=False,
-                    prog_bar=False,
-                    logger=True,
-                    batch_size=batch.shape[0],
-                    sync_dist=True,
-                    rank_zero_only=True,
-                )
 
     def _plot_loss(self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int) -> None:
         loss = self.loss(y_true, y_pred, squash=False).cpu().numpy()
@@ -219,17 +256,12 @@ class GraphForecaster(pl.LightningModule):
                 self.logger.experiment.log({exp_log_tag: wandb.Image(save_path)})
         plt.close(fig)  # cleanup
 
-    def configure_optimizers(self) -> Dict:
-        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr, fused=True)
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=180, eta_min=5.0e-7)
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": lr_scheduler,
-                "monitor": "val_wmse",
-                "interval": "epoch",
-                "frequency": 1,
-                "strict": True,
-                "name": "gnn_lr_sched",
-            },
-        }
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
+        scheduler = CosineLRScheduler(
+            optimizer,
+            lr_min=self.lr_min,
+            t_initial=self.lr_iterations,
+            warmup_t=1000,
+        )
+        return [optimizer], [{"scheduler": scheduler, "interval": "step"}]

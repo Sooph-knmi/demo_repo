@@ -4,6 +4,7 @@ import os
 from typing import List
 
 import numpy as np
+from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAveraging
 
@@ -66,6 +67,10 @@ def setup_callbacks(config: YAMLConfig, timestamp: dt.datetime) -> List:
             # save after every validation epoch, if we've improved
             save_on_train_epoch_end=False,
             every_n_epochs=1,
+        ),
+        LearningRateMonitor(
+            logging_interval="step",
+            log_momentum=True,
         ),
     ]
 

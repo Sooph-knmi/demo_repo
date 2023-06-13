@@ -30,5 +30,4 @@ WORKDIR=$GITDIR
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-#srun aifs-train --config $GITDIR/aifs/config/atos.yaml
-srun aifs-train --config $GITDIR/aifs/config/atosh32.yaml
+srun aifs-train --config $GITDIR/aifs/config/atos.yaml

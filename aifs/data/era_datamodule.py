@@ -29,7 +29,7 @@ class ERA5DataModule(pl.LightningDataModule):
 
         self.ds_train = self._get_dataset("training")
 
-        r = self.config["model:rollout"]
+        r = self.config["model:rollout-max"]
         if config["diagnostics:eval:enabled"]:
             r = max(r, self.config["diagnostics:eval:rollout"])
         self.ds_valid = self._get_dataset("validation", rollout=r)
@@ -39,7 +39,10 @@ class ERA5DataModule(pl.LightningDataModule):
         ds_tmp = None
 
     def _get_dataset(self, stage: str, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
-        r = rollout if rollout is not None else self.config["model:rollout"]
+        rollout_config = (
+            self.config["model:rollout-max"] if self.config["model:rollout-epoch-increment"] > 0 else self.config["model:rollout"]
+        )
+        r = max(rollout, rollout_config) if rollout is not None else rollout_config
         return ERA5NativeGridDataset(
             fname=self._get_data_filename(stage),
             era_data_reader=read_era_data,

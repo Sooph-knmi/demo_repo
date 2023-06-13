@@ -97,7 +97,7 @@ output:
   basedir: /ec/res4/scratch/syma/GNN/ERA5/{resolution}/
   logging:
     log-dir: logs
-    log-interval: 250
+    log-interval: 100
   checkpoints:
     # model checkpoints: used to resume training or do inference
     ckpt-dir: checkpoints
@@ -128,8 +128,8 @@ model:
     enabled: True
   dataloader:
     num-workers:
-      training: 16
-      validation: 16
+      training: 8
+      validation: 8
       test: 8
       predict: 8
     batch-size:
@@ -169,7 +169,9 @@ model:
   # training settings
   lead-time: 6
   max-epochs: 100
-  learn-rate: 0.000125
+  learn-rate: 0.625e-4
+  lr-iterations: 300000
+  lr-min: 1.5e-7 #Not scaled by #GPU
 
   # multistep input
   # 1 = single step scheme, X(t-1) used to predict X(t)
@@ -203,9 +205,17 @@ model:
     num-out-channels: 512
     mlp-extra-layers: 0
     dropout: 0.
-
+    era-trainable-size: 8
+    h-trainable-size: 8
+    e2h-trainable-size: 8
+    h2e-trainable-size: 8
+    h2h-trainable-size: 8
   # length of the "rollout" window (see Keisler's paper)
   rollout: 1
+  #Increase rollout every n epochs
+  rollout-epoch-increment: 0
+  #Maximum rollout to use
+  rollout-max: 1
 
   # Keisler's three training rounds were:
   # Round 1. ~960,000 batches @ ~0.3 seconds per batch (4-step rollout)
