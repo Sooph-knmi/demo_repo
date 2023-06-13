@@ -40,7 +40,7 @@ class ERA5DataModule(pl.LightningDataModule):
 
     def _get_dataset(self, stage: str, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
         rollout_config = (
-            self.config["model:rollout_max"] if self.config["model:rollout_epoch_increment"] > 0 else self.config["model:rollout"]
+            self.config["model:rollout-max"] if self.config["model:rollout-epoch-increment"] > 0 else self.config["model:rollout"]
         )
         r = max(rollout, rollout_config) if rollout is not None else rollout_config
         return ERA5NativeGridDataset(

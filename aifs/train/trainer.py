@@ -36,13 +36,14 @@ class GraphForecaster(pl.LightningModule):
         encoder_out_channels: int = 128,
         mlp_extra_layers: int = 0,
         era_trainable_size: int = 8,
-        h3_trainable_size: int = 8,
+        h_trainable_size: int = 8,
         e2h_trainable_size: int = 8,
         h2e_trainable_size: int = 8,
         h2h_trainable_size: int = 0,
         activation: str = "SiLU",
         lr: float = 1e-4,
         lr_iterations: int = 300000,
+        lr_min: float = 1.5e-7,
         rollout: int = 1,
         multistep: int = 1,
         save_basedir: Optional[str] = None,
@@ -67,7 +68,7 @@ class GraphForecaster(pl.LightningModule):
             activation=activation,
             encoder_mapper_num_layers=encoder_mapper_num_layers,
             era_trainable_size=era_trainable_size,
-            h3_trainable_size=h3_trainable_size,
+            h_trainable_size=h_trainable_size,
             e2h_trainable_size=e2h_trainable_size,
             h2e_trainable_size=h2e_trainable_size,
             h2h_trainable_size=h2h_trainable_size,
@@ -98,6 +99,7 @@ class GraphForecaster(pl.LightningModule):
         self.mstep = multistep
         self.lr = lr
         self.lr_iterations = lr_iterations
+        self.lr_min = lr_min
         self.rollout = rollout
         self.rollout_epoch_increment = rollout_epoch_increment
         self.rollout_max = rollout_max
@@ -172,6 +174,8 @@ class GraphForecaster(pl.LightningModule):
             self.rollout,
             on_step=True,
             logger=True,
+            rank_zero_only=True,
+            sync_dist=False,
         )
         return train_loss
 
@@ -186,7 +190,8 @@ class GraphForecaster(pl.LightningModule):
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
         plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
-        val_loss, metrics = self._step(batch, batch_idx, compute_metrics=True, plot=plot_sample)
+        with torch.no_grad():
+            val_loss, metrics = self._step(batch, batch_idx, compute_metrics=True, plot=plot_sample)
         self.log(
             "val_wmse",
             val_loss,
@@ -197,6 +202,7 @@ class GraphForecaster(pl.LightningModule):
             batch_size=batch.shape[0],
             rank_zero_only=True,
             sync_dist=True,
+        )
         for mname, mvalue in metrics.items():
             self.log(
                 "val_" + mname,
@@ -254,7 +260,7 @@ class GraphForecaster(pl.LightningModule):
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
         scheduler = CosineLRScheduler(
             optimizer,
-            lr_min=0.3 * 10**-7,
+            lr_min=self.lr_min,
             t_initial=self.lr_iterations,
             warmup_t=1000,
         )

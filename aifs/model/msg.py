@@ -31,7 +31,7 @@ class GraphMSG(nn.Module):
         mlp_extra_layers: int = 0,
         encoder_mapper_num_layers: int = 1,
         era_trainable_size: int = 8,
-        h3_trainable_size: int = 8,
+        h_trainable_size: int = 8,
         e2h_trainable_size: int = 8,
         h2e_trainable_size: int = 8,
         h2h_trainable_size: int = 0,
@@ -63,8 +63,8 @@ class GraphMSG(nn.Module):
             nn.Parameter(torch.zeros(self._era_size, self.era_trainable_size)) if self.era_trainable_size > 0 else None
         )
 
-        self.h3_trainable_size = h3_trainable_size
-        self.h3_trainable = nn.Parameter(torch.zeros(self._h_size, self.h3_trainable_size)) if self.h3_trainable_size > 0 else None
+        self.h_trainable_size = h_trainable_size
+        self.h_trainable = nn.Parameter(torch.zeros(self._h_size, self.h_trainable_size)) if self.h_trainable_size > 0 else None
 
         self.e2h_trainable_size = e2h_trainable_size
         self.e2h_trainable = (
@@ -124,7 +124,7 @@ class GraphMSG(nn.Module):
         # ERA -> H
         self.forward_mapper = MessagePassingMapper(
             in_channels_src=self.mstep * (in_channels + aux_in_channels) + self.era_latlons.shape[1] + self.era_trainable_size,
-            in_channels_dst=self.h_latlons.shape[1] + self.h3_trainable_size,
+            in_channels_dst=self.h_latlons.shape[1] + self.h_trainable_size,
             hidden_dim=encoder_out_channels,
             hidden_layers=encoder_mapper_num_layers,
             mlp_extra_layers=mlp_extra_layers,
@@ -186,8 +186,8 @@ class GraphMSG(nn.Module):
         )
 
         x_h_latent = [einops.repeat(self.h_latlons, "e f -> (repeat e) f", repeat=bs)]
-        if self.h3_trainable is not None:
-            x_h_latent.append(einops.repeat(self.h3_trainable, "e f -> (repeat e) f", repeat=bs))
+        if self.h_trainable is not None:
+            x_h_latent.append(einops.repeat(self.h_trainable, "e f -> (repeat e) f", repeat=bs))
         x_h_latent = torch.cat(
             x_h_latent,
             dim=-1,  # feature dimension
@@ -226,7 +226,7 @@ class GraphMSG(nn.Module):
                 [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bs)],
                 dim=1,
             ),
-            edge_attr=einops.repeat(self.h2h_edge_attr, "e f -> (repeat e) f", repeat=bs),
+            edge_attr=edge_h_to_h_latent,
         )
 
         # add skip connection (H -> H)

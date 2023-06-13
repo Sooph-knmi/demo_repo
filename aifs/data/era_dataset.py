@@ -94,16 +94,6 @@ class ERA5NativeGridDataset(IterableDataset):
 
         self.chunk_index_range = np.arange(low, high, dtype=np.uint32)
 
-        LOGGER.debug(
-            "Worker PID %d has access to shard (%i to %i), with ds_len = %i, n_chunks_per_worker = %i, multistep = %d",
-            os.getpid(),
-            shard_start,
-            shard_end,
-            ds_len,
-            self.n_samples_per_worker,
-            self.mstep,
-        )
-
         # each worker must have a different seed for its random number generator,
         # otherwise all the workers will output exactly the same data
         self.rng = np.random.default_rng(seed=torch.initial_seed())

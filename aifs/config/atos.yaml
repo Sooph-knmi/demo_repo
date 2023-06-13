@@ -154,8 +154,8 @@ model:
   # runs only N training batches [N = integer | null]
   # if null then we run through all the batches
   limit-batches:
-    training: 20 #null
-    validation: 20 #null
+    training: null
+    validation: null
     test: 20
     predict: 20
 
@@ -168,9 +168,10 @@ model:
 
   # training settings
   lead-time: 6
-  max-epochs: 2 
-  learn-rate: 0.000125 
+  max-epochs: 100
+  learn-rate: 0.625e-4
   lr-iterations: 300000
+  lr-min: 1.5e-7 #Not scaled by #GPU
 
   # multistep input
   # 1 = single step scheme, X(t-1) used to predict X(t)
@@ -204,17 +205,17 @@ model:
     num-out-channels: 512
     mlp-extra-layers: 0
     dropout: 0.
-    era_trainable_size: 8
-    h3_trainable_size: 8
-    e2h_trainable_size: 8
-    h2e_trainable_size: 8
-    h2h_trainable_size: 8
+    era-trainable-size: 8
+    h-trainable-size: 8
+    e2h-trainable-size: 8
+    h2e-trainable-size: 8
+    h2h-trainable-size: 8
   # length of the "rollout" window (see Keisler's paper)
   rollout: 1
   #Increase rollout every n epochs
-  rollout_epoch_increment: 0
+  rollout-epoch-increment: 0
   #Maximum rollout to use
-  rollout_max: 1
+  rollout-max: 1
 
   # Keisler's three training rounds were:
   # Round 1. ~960,000 batches @ ~0.3 seconds per batch (4-step rollout)
