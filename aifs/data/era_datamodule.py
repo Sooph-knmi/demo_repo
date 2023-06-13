@@ -29,7 +29,7 @@ class ERA5DataModule(pl.LightningDataModule):
 
         self.ds_train = self._get_dataset("training")
 
-        r = self.config["model:rollout"]
+        r = self.config["model:rollout-max"]
         if config["diagnostics:eval:enabled"]:
             r = max(r, self.config["diagnostics:eval:rollout"])
         self.ds_valid = self._get_dataset("validation", rollout=r)
