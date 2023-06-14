@@ -66,7 +66,7 @@ def setup_callbacks(config: YAMLConfig, timestamp: dt.datetime) -> List:
             save_on_train_epoch_end=False,
             every_n_epochs=1,
         ),
-        LearningRateMonitor(logging_interval="step", log_momentum=False),
+        LearningRateMonitor(logging_interval="step", log_momentum=True),
         ModelSummary(max_depth=3),
     ]
     return trainer_callbacks

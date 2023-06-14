@@ -59,6 +59,7 @@ class RolloutEval(Callback):
             logger=True,
             batch_size=bs,
             sync_dist=False,
+            rank_zero_only=True,
         )
         for mname, mvalue in metrics.items():
             pl_module.log(
@@ -70,6 +71,7 @@ class RolloutEval(Callback):
                 logger=True,
                 batch_size=bs,
                 sync_dist=False,
+                rank_zero_only=True,
             )
 
     def on_validation_batch_end(

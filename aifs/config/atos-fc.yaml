@@ -176,7 +176,9 @@ model:
   # training settings
   lead-time: 6
   max-epochs: 100
-  learn-rate: 0.000125
+  learn-rate: 0.625e-4
+  lr-iterations: 300000
+  lr-min: 1.5e-7 #Not scaled by #GPU
 
   # multistep input
   # 1 = single step scheme, X(t-1) used to predict X(t)
@@ -209,6 +211,20 @@ model:
     num-out-channels: 512
     mlp-extra-layers: 0
     dropout: 0.
-
+    era-trainable-size: 8
+    h-trainable-size: 8
+    e2h-trainable-size: 8
+    h2e-trainable-size: 8
+    h2h-trainable-size: 8
   # length of the "rollout" window (see Keisler's paper)
   rollout: 1
+  #Increase rollout every n epochs
+  rollout-epoch-increment: 0
+  #Maximum rollout to use
+  rollout-max: 1
+
+  # Keisler's three training rounds were:
+  # Round 1. ~960,000 batches @ ~0.3 seconds per batch (4-step rollout)
+  # Round 2. ~90,000 batches @ ~1.0 seconds per batch (8-step rollout)
+  # Round 3. ~70,000 batches @ ~1.5 seconds per batch (12-step rollout)
+  # Each batch is an N-step rollout, with batch_size=1

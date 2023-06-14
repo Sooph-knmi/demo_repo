@@ -8,6 +8,9 @@ import torch
 import wandb
 from torch_geometric.data import HeteroData
 
+# from torch.autograd.graph import save_on_cpu
+from timm.scheduler import CosineLRScheduler
+
 from aifs.data.era_normalizers import InputNormalizer
 from aifs.model.losses import WeightedMSELoss
 from aifs.model.msg import GraphMSG
@@ -31,8 +34,15 @@ class GraphForecaster(pl.LightningModule):
         encoder_mapper_num_layers: int = 1,
         encoder_out_channels: int = 512,
         mlp_extra_layers: int = 0,
+        era_trainable_size: int = 8,
+        h_trainable_size: int = 8,
+        e2h_trainable_size: int = 8,
+        h2e_trainable_size: int = 8,
+        h2h_trainable_size: int = 0,
         activation: str = "SiLU",
         lr: float = 1e-4,
+        lr_iterations: int = 300000,
+        lr_min: float = 1.5e-7,
         rollout: int = 1,
         multistep: int = 1,
         save_basedir: Optional[str] = None,
@@ -40,6 +50,8 @@ class GraphForecaster(pl.LightningModule):
         loss_scaling: Optional[torch.Tensor] = None,
         pl_names: Optional[List] = None,
         metric_names: Optional[List] = None,
+        rollout_epoch_increment: int = 0,
+        rollout_max: int = 12,
     ) -> None:
         super().__init__()
 
@@ -53,6 +65,11 @@ class GraphForecaster(pl.LightningModule):
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             encoder_mapper_num_layers=encoder_mapper_num_layers,
+            era_trainable_size=era_trainable_size,
+            h_trainable_size=h_trainable_size,
+            e2h_trainable_size=e2h_trainable_size,
+            h2e_trainable_size=h2e_trainable_size,
+            h2h_trainable_size=h2h_trainable_size,
         )
 
         self.save_hyperparameters()
@@ -70,8 +87,7 @@ class GraphForecaster(pl.LightningModule):
 
         self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
 
-        # TODO: what if pl_names is None? either guard against that or make it a required arg
-        # or, better yet, can we replace `pl_names` with the level names from the input metadata?
+        # TODO: extract the level names from the input metadata
         self.metric_ranges = {}
         for i, key in enumerate(pl_names):
             self.metric_ranges[key] = [i * num_levels, (i + 1) * num_levels]
@@ -83,9 +99,14 @@ class GraphForecaster(pl.LightningModule):
         self.fcdim = fc_dim
         self.mstep = multistep
         self.lr = lr
+        self.lr_iterations = lr_iterations
+        self.lr_min = lr_min
         self.rollout = rollout
-
+        self.rollout_epoch_increment = rollout_epoch_increment
+        self.rollout_max = rollout_max
         LOGGER.debug("Rollout window length: %d", self.rollout)
+        LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
+        LOGGER.debug("Rollout max : %d", self.rollout_max)
         LOGGER.debug("Multistep: %d", self.mstep)
 
         self.log_to_wandb = log_to_wandb
@@ -162,7 +183,25 @@ class GraphForecaster(pl.LightningModule):
             batch_size=batch.shape[0],
             sync_dist=True,
         )
+        self.log(
+            "rollout",
+            self.rollout,
+            on_step=True,
+            logger=True,
+            rank_zero_only=True,
+            sync_dist=False,
+        )
         return loss
+
+    def lr_scheduler_step(self, scheduler, metric):
+        del metric  # not used
+        scheduler.step(epoch=self.trainer.global_step)
+
+    def on_train_epoch_end(self):
+        if self.rollout_epoch_increment > 0 and self.current_epoch % self.rollout_epoch_increment == 0:
+            self.rollout += 1
+            LOGGER.debug("Rollout window length: %d", self.rollout)
+        self.rollout = min(self.rollout, self.rollout_max)
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
         with torch.no_grad():
@@ -202,6 +241,7 @@ class GraphForecaster(pl.LightningModule):
                 logger=True,
                 batch_size=batch.shape[0],
                 sync_dist=True,
+                rank_zero_only=True,
             )
 
             for mname, mvalue in metrics.items():
@@ -256,8 +296,13 @@ class GraphForecaster(pl.LightningModule):
                 self.logger.experiment.log({exp_log_tag: wandb.Image(save_path)})
         plt.close(fig)  # cleanup
 
-    def configure_optimizers(self) -> Dict:
-        p2opt = list(self.forecaster.processor.parameters()) + list(self.forecaster.decoder.parameters())
-        optimizer = torch.optim.AdamW(p2opt, betas=(0.9, 0.95), lr=self.lr, fused=False)
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=180, eta_min=5.0e-7)
-        return [optimizer], [lr_scheduler]
+    def configure_optimizers(self):
+        params = list(self.forecaster.processor.parameters()) + list(self.forecaster.decoder.parameters())
+        optimizer = torch.optim.AdamW(params, betas=(0.9, 0.99), lr=self.lr, fused=True)
+        scheduler = CosineLRScheduler(
+            optimizer,
+            lr_min=self.lr_min,
+            t_initial=self.lr_iterations,
+            warmup_t=1000,
+        )
+        return [optimizer], [{"scheduler": scheduler, "interval": "step"}]

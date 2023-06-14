@@ -28,13 +28,21 @@ class ERA5DataModule(pl.LightningDataModule):
         self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
         self.ds_train = self._get_dataset("training")
-        self.ds_valid = self._get_dataset("validation")
+
+        r = self.config["model:rollout-max"]
+        if config["diagnostics:eval:enabled"]:
+            r = max(r, self.config["diagnostics:eval:rollout"])
+        self.ds_valid = self._get_dataset("validation", rollout=r)
 
         ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
         self.input_metadata = ds_tmp.attrs["climetlab"]
         ds_tmp = None
 
-    def _get_dataset(self, stage: str) -> ERA5NativeGridDataset:
+    def _get_dataset(self, stage: str, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
+        rollout_config = (
+            self.config["model:rollout-max"] if self.config["model:rollout-epoch-increment"] > 0 else self.config["model:rollout"]
+        )
+        r = max(rollout, rollout_config) if rollout is not None else rollout_config
         return ERA5NativeGridDataset(
             fname=self._get_data_filename(stage),
             era_data_reader=read_era_data,
@@ -65,7 +73,7 @@ class ERA5DataModule(pl.LightningDataModule):
             worker_init_fn=worker_init_func,
             # prefetch batches (default prefetch_factor == 2)
             prefetch_factor=_DL_PREFETCH_FACTOR,
-            persistent_workers=True,
+            persistent_workers=False,
         )
 
     def train_dataloader(self) -> DataLoader:
