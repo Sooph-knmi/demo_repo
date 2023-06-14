@@ -1,4 +1,4 @@
-# from typing import Optional
+from typing import Optional
 import os
 
 import pytorch_lightning as pl
@@ -47,7 +47,7 @@ class ERA5DataModule(pl.LightningDataModule):
             fname=self._get_data_filename(stage),
             era_data_reader=read_era_data,
             lead_time=self.config["model:lead-time"],
-            rollout=1,
+            rollout=r,
             multistep=1,
             rank=self.local_rank,
             world_size=self.config["model:num-gpus"] * self.config["model:num-nodes"],
