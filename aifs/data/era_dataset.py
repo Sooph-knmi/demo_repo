@@ -83,14 +83,14 @@ class ERA5NativeGridDataset(IterableDataset):
         if self.ds is None:
             self.ds = self._read_era(self.fname)
 
-        shard_size = int(np.floor((self.ds.shape[0] - self.rollout * self.lead_step) / self.world_size))
-        shard_start, shard_end = self.rank * shard_size, min(
-            (self.rank + 1) * shard_size, self.ds.shape[0] - self.rollout * self.lead_step
-        )
-
-        # this must happen on ALL ranks
-        # shift start position to have sufficient samples for multistep input
-        shard_start = shard_start + (self.mstep - 1) * self.lead_step
+        # Total number of valid ICs is dataset length
+        # minus rollout
+        # minus additional multistep inputs
+        ds_total_len = self.ds.shape[0] - (self.rollout + (self.mstep - 1)) * self.lead_step
+        # Divide this equally across shards
+        shard_size = int(np.floor(ds_total_len / self.world_size))
+        shard_start = self.rank * shard_size + (self.mstep - 1) * self.lead_step
+        shard_end = min((self.rank + 1) * shard_size, self.ds.shape[0] - self.rollout * self.lead_step)
 
         ds_len = shard_end - shard_start
         self.n_samples_per_worker = ds_len // n_workers
