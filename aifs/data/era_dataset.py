@@ -86,10 +86,10 @@ class ERA5NativeGridDataset(IterableDataset):
         # Total number of valid ICs is dataset length
         # minus rollout
         # minus additional multistep inputs
-        ds_total_len = self.ds.shape[0] - (self.rollout + (self.mstep - 1)) * self.lead_step
+        ds_total_len = self.ds.shape[0] - (self.rollout + (self.multi_step - 1)) * self.lead_step
         # Divide this equally across shards
         shard_size = int(np.floor(ds_total_len / self.world_size))
-        shard_start = self.rank * shard_size + (self.mstep - 1) * self.lead_step
+        shard_start = self.rank * shard_size + (self.multi_step - 1) * self.lead_step
         shard_end = min((self.rank + 1) * shard_size, self.ds.shape[0] - self.rollout * self.lead_step)
 
         ds_len = shard_end - shard_start
