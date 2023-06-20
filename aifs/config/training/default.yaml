@@ -61,11 +61,9 @@ loss_scaling:
     z: 12 #1
   sfc:
     sp: 0.1
-    msl: 1
     sst: 0.1
     10u: 0.1
     10v: 0.1
-    2t: 1
     2d: 0.1
 
 metrics:

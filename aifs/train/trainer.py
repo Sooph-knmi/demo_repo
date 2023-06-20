@@ -58,14 +58,14 @@ class GraphForecaster(pl.LightningModule):
                 scl = config.training.loss_scaling.pl[pl_name]
             else:
                 scl = 1
-                Logger.debug(f"Parameter {pl_name} was not scaled.")
+                LOGGER.debug(f"Parameter {pl_name} was not scaled.")
             loss_scaling = np.append(loss_scaling, [scl] * pl_scaling(config.data.pl.levels))
         for sfc_name in config.data.sfc.parameters:
             if sfc_name in config.training.loss_scaling.sfc:
                 scl = config.training.loss_scaling.sfc[sfc_name]
             else:
                 scl = 1
-                Logger.debug(f"Parameter {sfc_name} was not scaled.")
+                LOGGER.debug(f"Parameter {sfc_name} was not scaled.")
             loss_scaling = np.append(loss_scaling, [scl])
         assert len(loss_scaling) == self.fcdim
         # LOGGER.debug("Loss scaling: %s", loss_scaling)
