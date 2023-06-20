@@ -1,0 +1,32 @@
+eval:
+  enabled: True
+  # use this to evaluate the model over longer rollouts, every so many validation batches
+  rollout: 12
+  frequency: 75
+plot:
+  frequency: 750
+  parameters:
+  #not yet used
+    - q_850
+    - t_850
+    - u_850
+    - v_850
+    - w_850 
+    - z_850
+    - msl
+    - 2t
+
+debug:
+  # this will detect and trace back NaNs / Infs etc. but will slow down training
+  anomaly_detection: False
+
+# activate the pytorch profiler (disable this in production)
+profiler: False
+
+logging:
+  wandb: True
+  # logger options (these probably come with some overhead)
+  gradients: False
+  parameters: False
+  interval: 100
+

@@ -1,0 +1,6 @@
+# parallel strategy
+# if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
+strategy: auto
+# number of GPUs per node and number of nodes (for DDP)
+num_gpus: 4
+num_nodes: 1

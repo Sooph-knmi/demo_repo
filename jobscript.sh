@@ -23,11 +23,11 @@
 # export WANDB_NOTES="TEST: SWA + gradient accumulation"
 
 # generic settings
-CONDA_ENV=gnn-pyg-2.3
-GITDIR=/perm/pamc/software/aifs
+CONDA_ENV=aifs-dev
+GITDIR=/perm/madj/software/aifs-dev
 WORKDIR=$GITDIR
 
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-srun aifs-train --config $GITDIR/aifs/config/atos.yaml
+srun aifs-train

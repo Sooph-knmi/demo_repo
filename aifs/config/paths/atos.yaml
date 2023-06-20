@@ -1,0 +1,10 @@
+training: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
+validation: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
+test: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
+predict: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
+output: ${oc.env:SCRATCH}/aifs/${data.resolution}/
+logs: ${paths.output}/logs
+checkpoints: ${paths.output}/checkpoint
+plots: ${paths.output}/plots
+graph: /home/mlx/data/graphs/
+run_id: ${now:%Y-%m-%d_%H-%M}

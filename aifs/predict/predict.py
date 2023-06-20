@@ -8,7 +8,7 @@ import torch
 from aifs.data.era_datamodule import ERA5TestDataModule
 from aifs.train.trainer import GraphForecaster
 from aifs.train.utils import get_args, setup_wandb_logger
-from aifs.utils.config import YAMLConfig
+# from aifs.utils.config import YAMLConfig
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -34,7 +34,7 @@ LOGGER = get_logger(__name__)
 #         w=_WB_LON,
 #         v=len(config["input:variables:names"]),
 #         l=l,
-#         r=config["model:rollout"],
+#         r=config.training.rollout,
 #     )
 
 
@@ -43,9 +43,9 @@ LOGGER = get_logger(__name__)
 #     sample_idx: torch.Tensor,
 #     config: YAMLConfig,
 # ) -> None:
-#     plevs = config["input:pl:levels"]
+#     plevs = config.data.pl.levels
 #     plevs.reverse()
-#     pl_vars = config["input:pl:names"]
+#     pl_vars = config.data.pl.parameters
 #     for i in range(4):
 #         for j in range(13):
 #             plevs.append
@@ -103,7 +103,7 @@ LOGGER = get_logger(__name__)
 #                     longitude=ds_predict.coords["longitude"],
 #                     level=plevs,
 #                     time=ds_predict.coords["time"].isel(time=sample_idx[0, :]),
-#                     rollout=np.arange(0, config["model:rollout"], dtype=np.int32),
+#                     rollout=np.arange(0, config.training.rollout, dtype=np.int32),
 #                 ),
 #                 attrs=ds_predict[varname].attrs,
 #             )
@@ -139,8 +139,6 @@ def predict(config: YAMLConfig) -> None:
     Predict entry point.
     Args:
         config: job configuration
-        checkpoint_relpath: path to the model checkpoint that you want to restore
-                            should be relative to your config["output:basedir"]/config["output:checkpoints:ckpt-dir"]
     """
     timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
     torch.set_float32_matmul_precision("high")
@@ -149,14 +147,14 @@ def predict(config: YAMLConfig) -> None:
     dmod = ERA5TestDataModule(config)
 
     # number of variables (features)
-    num_features = len(config["input:pl:names"]) * len(config["input:pl:levels"]) + len(config["input:sfc:names"])
-    num_aux_features = config["input:num-aux-features"]
+    num_features = len(config.data.pl.parameters) * len(config.data.pl.levels) + len(config.data.sfc.parameters)
+    num_aux_features = config.data.num_aux_features
     num_fc_features = num_features - num_aux_features
 
     loss_scaling = []
-    for scl in config["input:loss-scaling-pl"]:
-        loss_scaling.extend([scl] * len(config["input:pl:levels"]))
-    for scl in config["input:loss-scaling-sfc"]:
+    for scl in config.training.loss_scaling.pl:
+        loss_scaling.extend([scl] * len(config.data.pl.levels))
+    for scl in config.training.loss_scaling.sfc:
         loss_scaling.append(scl)
     assert len(loss_scaling) == num_fc_features
     LOGGER.debug("Loss scaling: %s", loss_scaling)
@@ -165,50 +163,32 @@ def predict(config: YAMLConfig) -> None:
     LOGGER.debug("Total number of prognostic variables: %d", num_fc_features)
     LOGGER.debug("Total number of auxiliary variables: %d", num_aux_features)
 
-    graph_data = torch.load(os.path.join(config["graph:data-basedir"], config["graph:data-file"]))
+    graph_data = torch.load(os.path.join(config.paths.data, config.files.data))
 
     model = GraphForecaster(
         graph_data=graph_data,
         metadata=dmod.input_metadata,
-        fc_dim=num_fc_features,
-        aux_dim=num_aux_features,
-        num_levels=len(config["input:pl:levels"]),
-        encoder_hidden_channels=config["model:encoder:num-hidden-channels"],
-        encoder_out_channels=config["model:encoder:num-out-channels"],
-        encoder_num_layers=config["model:encoder:num-layers"],
-        encoder_mapper_num_layers=config["model:encoder:mapper-num-layers"],
-        mlp_extra_layers=config["model:encoder:mlp-extra-layers"],
-        activation=config["model:encoder:activation"],
-        rollout=config["model:rollout"],
-        save_basedir=os.path.join(
-            config["output:basedir"].format(resolution=config["input:resolution"]),
-            config["output:plots:plot-dir"],
-            timestamp,
-        ),
-        log_to_wandb=config["model:wandb:enabled"],
-        loss_scaling=loss_scaling,
-        pl_names=config["input:pl:names"],
+        config=config
     )
 
     ckpt_path = os.path.join(
-        config["output:basedir"].format(resolution=config["input:resolution"]),
-        config["output:checkpoints:ckpt-dir"],
-        config["model:warm-restart:ckpt-path"],
+        config.paths.checkpoints,
+        config.files.warm_start,
     )
     LOGGER.debug("Loading checkpoint from %s ...", ckpt_path)
 
     trainer = pl.Trainer(
-        accelerator="gpu" if config["model:num-gpus"] > 0 else "cpu",
-        detect_anomaly=config["model:debug:anomaly-detection"],
-        strategy=config["model:strategy"],
-        devices=config["model:num-gpus"] if config["model:num-gpus"] > 0 else None,
-        num_nodes=config["model:num-nodes"],
-        precision=config["model:precision"],
-        max_epochs=config["model:max-epochs"],
+        accelerator="gpu" if config.hardware.num_gpus > 0 else "cpu",
+        detect_anomaly=config.diagnostics.debug.anomaly_detection,
+        strategy=config.hardware.strategy,
+        devices=config.hardware.num_gpus if config.hardware.num_gpus > 0 else None,
+        num_nodes=config.hardware.num_nodes,
+        precision=config.training.precision,
+        max_epochs=config.training.max_epochs,
         logger=setup_wandb_logger(config),
-        log_every_n_steps=config["output:logging:log-interval"],
-        limit_predict_batches=config["model:limit-batches:predict"],
-        limit_test_batches=config["model:limit-batches:test"],
+        log_every_n_steps=config.diagnostics.logging.interval,
+        limit_predict_batches=config.dataloader.limit_batches.predict,
+        limit_test_batches=config.dataloader.limit_batches.test,
         use_distributed_sampler=False,
     )
 
@@ -221,7 +201,7 @@ def predict(config: YAMLConfig) -> None:
 
     predictions_, sample_idx_ = zip(*predict_output)
 
-    # len(predictions_) = num-predict-batches, predictions_[0].shape = (batch-size, latlon, nvar, rollout)
+    # len(predictions_) = num-predict-batches, predictions_[0].shape = (batch_size, latlon, nvar, rollout)
     # len(sample_idx_) = num-predict-batches, sample_idx_[0].shape = (batch_size, )
     LOGGER.debug("len(predictions_) = %d, predictions_[0].shape = %s", len(predictions_), predictions_[0].shape)
     LOGGER.debug("len(sample_idx_) = %d, sample_idx_[0].shape = %s", len(sample_idx_), sample_idx_[0].shape)

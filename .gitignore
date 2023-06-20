@@ -147,6 +147,7 @@ job_out.*
 *.out.*
 *.log.*
 .nfs*
+slurm-*.out
 
 # lightning
 lightning_logs
@@ -154,3 +155,7 @@ checkpoints
 
 # scratch dir
 scratch
+
+# hydra outputs
+outputs/
+.hydra/

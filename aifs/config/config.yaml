@@ -1,0 +1,17 @@
+defaults:
+  - hardware: atos
+  - paths: atos
+  - files: atos
+  - data: zarr
+  - dataloader: default
+  - model: gnn
+  - training: default
+  - diagnostics: eval_rollout
+  - _self_
+
+### This file is for local experimentation. 
+##  When you commit your changes, assign the new features and keywords
+##  to the correct defaults.
+# For example to change from default GPU count:
+# hardware:
+#   num_gpus: 1
