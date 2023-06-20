@@ -69,9 +69,9 @@ class ERA5NativeGridDataset(IterableDataset):
         self.chunk_index_range: Optional[np.ndarray] = None
         self.shuffle = shuffle
 
-        self.mstep = multistep
-        if self.mstep <= 0:
-            LOGGER.error("Multistep value invalid %d - check your configuration file!", self.mstep)
+        self.multi_step = multistep
+        if self.multi_step <= 0:
+            LOGGER.error("Multistep value invalid %d - check your configuration file!", self.multi_step)
             raise RuntimeError
 
     def per_worker_init(self, n_workers: int, worker_id: int) -> None:
@@ -84,7 +84,7 @@ class ERA5NativeGridDataset(IterableDataset):
 
         # this must happen on ALL ranks
         # shift start position to have sufficient samples for multistep input
-        shard_start = shard_start + (self.mstep - 1) * self.lead_step
+        shard_start = shard_start + (self.multi_step - 1) * self.lead_step
 
         ds_len = shard_end - shard_start - self.rollout
         self.n_samples_per_worker = ds_len // n_workers
@@ -106,7 +106,7 @@ class ERA5NativeGridDataset(IterableDataset):
             shuffled_chunk_indices = self.chunk_index_range
 
         for i in shuffled_chunk_indices:
-            start, end = i - (self.mstep - 1) * self.lead_step, i + (self.rollout + 1) * self.lead_step
+            start, end = i - (self.multi_step - 1) * self.lead_step, i + (self.rollout + 1) * self.lead_step
             LOGGER.debug(
                 "Worker PID %d serving device %d selected start-end range [%i, %i] with stride lead_step = %i",
                 os.getpid(),
@@ -127,7 +127,7 @@ class ERA5NativeGridDataset(IterableDataset):
             Filename: {str(self.fname)}
             Lead time: {self.lead_time}
             Rollout: {self.rollout}
-            Multistep: {self.mstep}
+            Multistep: {self.multi_step}
         """
 
 
@@ -157,18 +157,18 @@ if __name__ == "__main__":
     def _get_data_filename(stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation]
         return os.path.join(
-            config[f"input:{stage}:basedir"].format(resolution=config["input:resolution"]),
-            config[f"input:{stage}:filename"].format(resolution=config["input:resolution"]),
+            self.config.paths[stage],
+            self.config.files[stage],
         )
 
     era5_ds = ERA5NativeGridDataset(
         fname=_get_data_filename("validation"),
         era_data_reader=read_era_data,
-        lead_time=config["model:lead-time"],
+        lead_time=config.training.lead_time,
         rollout=_ROLLOUT,
         multistep=_MULTISTEP,
         rank=int(os.environ.get("LOCAL_RANK", "0")),
-        world_size=config["model:num-gpus"] * config["model:num-nodes"],
+        world_size=config.hardware.num_gpus * config.hardware.num_nodes,
     )
 
     era5_dl = DataLoader(

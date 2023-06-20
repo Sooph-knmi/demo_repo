@@ -7,21 +7,25 @@ from torch.utils.data import DataLoader
 
 from aifs.data.era_dataset import ERA5NativeGridDataset, worker_init_func
 from aifs.data.era_readers import read_era_data
-from aifs.utils.config import YAMLConfig
+# from aifs.utils.config import DictConfig
 from aifs.utils.constants import _DL_PREFETCH_FACTOR
 from aifs.utils.logger import get_logger
+
+
+from omegaconf import DictConfig
+import hydra
 
 LOGGER = get_logger(__name__)
 
 
 class ERA5DataModule(pl.LightningDataModule):
-    def __init__(self, config: YAMLConfig) -> None:
+    def __init__(self, config: DictConfig) -> None:
         super().__init__()
-        self.bs_train = config["model:dataloader:batch-size:training"]
-        self.bs_val = config["model:dataloader:batch-size:validation"]
+        self.bs_train = config.dataloader.batch_size.training
+        self.bs_val = config.dataloader.batch_size.validation
 
-        self.num_workers_train = config["model:dataloader:num-workers:training"]
-        self.num_workers_val = config["model:dataloader:num-workers:validation"]
+        self.num_workers_train = config.dataloader.num_workers.training
+        self.num_workers_val = config.dataloader.num_workers.validation
         self.config = config
 
         # TODO: will this work correctly in multi-node runs?
@@ -29,9 +33,9 @@ class ERA5DataModule(pl.LightningDataModule):
 
         self.ds_train = self._get_dataset("training")
 
-        r = self.config["model:rollout-max"]
-        if config["diagnostics:eval:enabled"]:
-            r = max(r, self.config["diagnostics:eval:rollout"])
+        r = self.config.training.rollout.max
+        if config.diagnostics.eval.enabled:
+            r = max(r, config.diagnostics.eval.rollout)
         self.ds_valid = self._get_dataset("validation", rollout=r)
 
         ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
@@ -40,26 +44,25 @@ class ERA5DataModule(pl.LightningDataModule):
 
     def _get_dataset(self, stage: str, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
         rollout_config = (
-            self.config["model:rollout-max"] if self.config["model:rollout-epoch-increment"] > 0 else self.config["model:rollout"]
+            self.config.training.rollout.max if self.config.training.rollout.epoch_increment > 0 else self.config.training.rollout.start
         )
         r = max(rollout, rollout_config) if rollout is not None else rollout_config
         return ERA5NativeGridDataset(
             fname=self._get_data_filename(stage),
             era_data_reader=read_era_data,
-            lead_time=self.config["model:lead-time"],
+            lead_time=self.config.training.lead_time,
             rollout=r,
-            multistep=self.config["model:multistep-input"],
+            multistep=self.config.training.multistep_input,
             rank=self.local_rank,
-            world_size=self.config["model:num-gpus"] * self.config["model:num-nodes"],
+            world_size=self.config.hardware.num_gpus * self.config.hardware.num_nodes,
         )
 
     def _get_data_filename(self, stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation]
         return os.path.join(
-            self.config[f"input:{stage}:basedir"].format(resolution=self.config["input:resolution"]),
-            self.config[f"input:{stage}:filename"].format(resolution=self.config["input:resolution"]),
+            self.config.paths[stage],
+            self.config.files[stage],
         )
-
     def _get_dataloader(self, ds: ERA5NativeGridDataset, num_workers: int, batch_size: int) -> DataLoader:
         return DataLoader(
             ds,
@@ -84,10 +87,10 @@ class ERA5DataModule(pl.LightningDataModule):
 
 
 class ERA5TestDataModule(pl.LightningDataModule):
-    def __init__(self, config: YAMLConfig) -> None:
+    def __init__(self, config: DictConfig) -> None:
         super().__init__()
-        self.bs_test = config["model:dataloader:batch-size:test"]
-        self.num_workers_test = config["model:dataloader:num-workers:test"]
+        self.bs_test = config.dataloader.batch_size.test
+        self.num_workers_test = config.dataloader.num_workers.test
         self.config = config
 
         # TODO: will this work correctly in multi-node runs?
@@ -105,19 +108,19 @@ class ERA5TestDataModule(pl.LightningDataModule):
         return ERA5NativeGridDataset(
             fname=self._get_data_filename(stage),
             era_data_reader=read_era_data,
-            lead_time=self.config["model:lead-time"],
-            rollout=self.config["model:rollout"],
-            multistep=self.config["model:multistep-input"],
+            lead_time=self.config.training.lead_time,
+            rollout=self.config.training.rollout.start,
+            multistep=self.config.training.multistep_input,
             rank=self.local_rank,
-            world_size=self.config["model:num-gpus"] * self.config["model:num-nodes"],
+            world_size=self.config.hardware.num_gpus * self.config.hardware.num_nodes,
             shuffle=False,
         )
 
     def _get_data_filename(self, stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation | test]
         return os.path.join(
-            self.config[f"input:{stage}:basedir"].format(resolution=self.config["input:resolution"]),
-            self.config[f"input:{stage}:filename"].format(resolution=self.config["input:resolution"]),
+            self.config.paths[stage],
+            self.config.files[stage],
         )
 
     def _get_dataloader(self, ds: ERA5NativeGridDataset, num_workers: int, batch_size: int) -> DataLoader:

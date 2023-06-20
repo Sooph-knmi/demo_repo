@@ -27,14 +27,14 @@ class RolloutEval(Callback):
         metrics = {}
 
         # start rollout
-        x = batch[:, 0 : pl_module.mstep, ...]  # (bs, mstep, latlon, nvar)
+        x = batch[:, 0 : pl_module.multi_step, ...]  # (bs, multi_step, latlon, nvar)
 
-        assert batch.shape[1] >= self.rollout + pl_module.mstep, "Batch length not sufficient for requested rollout length!"
+        assert batch.shape[1] >= self.rollout + pl_module.multi_step, "Batch length not sufficient for requested rollout length!"
 
         with torch.no_grad():
             for rstep in range(self.rollout):
                 y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
-                y = batch[:, pl_module.mstep + rstep, ...]  # target, shape = (bs, latlon, nvar)
+                y = batch[:, pl_module.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
                 # y includes the auxiliary variables, so we must leave those out when computing the loss
                 loss += pl_module.loss(y_pred, y[..., : pl_module.fcdim])
 

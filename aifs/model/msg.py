@@ -4,6 +4,9 @@ import torch
 from torch import nn
 from torch_geometric.data import HeteroData
 
+from omegaconf import DictConfig
+import hydra
+
 from torch.utils.checkpoint import checkpoint
 
 from torch.autograd.graph import save_on_cpu
@@ -20,30 +23,27 @@ LOGGER = get_logger(__name__)
 class GraphMSG(nn.Module):
     def __init__(
         self,
-        graph_data: HeteroData,
-        in_channels: int,
-        aux_in_channels: int,
-        multistep: int,
-        encoder_num_layers: int,
-        encoder_hidden_channels: int,
-        encoder_out_channels: int,
-        activation: str,
-        mlp_extra_layers: int = 0,
-        encoder_mapper_num_layers: int = 1,
-        era_trainable_size: int = 8,
-        h_trainable_size: int = 8,
-        e2h_trainable_size: int = 8,
-        h2e_trainable_size: int = 8,
-        h2h_trainable_size: int = 0,
+        config: DictConfig,
+        graph_data: HeteroData = None,
     ) -> None:
         super().__init__()
 
-        LOGGER.debug("self.in_channels + self.aux_channels == %d", in_channels + aux_in_channels)
 
         # create mappings
-        self._graph_data = graph_data
-        self.in_channels = in_channels
-        self.mstep = multistep
+        if graph_data is None:
+            self.graph_data = torch.load(
+                os.path.join(config.paths.graph, config.files.graph)
+            )
+        else:
+            self._graph_data = graph_data
+
+        self.in_channels = config.data.num_features - config.data.num_aux_features
+        self.multi_step = config.training.multistep_input
+        self.aux_in_channels = config.data.num_aux_features
+        
+        LOGGER.debug("self.in_channels + self.aux_channels == %d", self.in_channels + self.aux_in_channels)
+
+        self.activation = config.model.activation
 
         self.register_buffer("e2e_edge_index", self._graph_data[("era", "to", "era")].edge_index, persistent=False)
         self.register_buffer("h2e_edge_index", self._graph_data[("h", "to", "era")].edge_index, persistent=False)
@@ -58,29 +58,29 @@ class GraphMSG(nn.Module):
         self._era_size = self._graph_data[("era", "to", "era")].ecoords_rad.shape[0]
         self._h_size = self._graph_data[("h", "to", "h")].hcoords_rad.shape[0]
 
-        self.era_trainable_size = era_trainable_size
+        self.era_trainable_size = config.model.trainable_parameters.era
         self.era_trainable = (
             nn.Parameter(torch.zeros(self._era_size, self.era_trainable_size)) if self.era_trainable_size > 0 else None
         )
 
-        self.h_trainable_size = h_trainable_size
+        self.h_trainable_size = config.model.trainable_parameters.hidden
         self.h_trainable = nn.Parameter(torch.zeros(self._h_size, self.h_trainable_size)) if self.h_trainable_size > 0 else None
 
-        self.e2h_trainable_size = e2h_trainable_size
+        self.e2h_trainable_size = config.model.trainable_parameters.era2hidden
         self.e2h_trainable = (
             nn.Parameter(torch.zeros(self._graph_data[("era", "to", "h")].edge_attr.shape[0], self.e2h_trainable_size))
             if self.e2h_trainable_size > 0
             else None
         )
 
-        self.h2e_trainable_size = h2e_trainable_size
+        self.h2e_trainable_size = config.model.trainable_parameters.hidden2era
         self.h2e_trainable = (
             nn.Parameter(torch.zeros(self._graph_data[("h", "to", "era")].edge_attr.shape[0], self.h2e_trainable_size))
             if self.h2e_trainable_size > 0
             else None
         )
 
-        self.h2h_trainable_size = h2h_trainable_size
+        self.h2h_trainable_size = config.model.trainable_parameters.hidden2hidden
         self.h2h_trainable = (
             nn.Parameter(torch.zeros(self._graph_data[("h", "to", "h")].edge_attr.shape[0], self.h2h_trainable_size))
             if self.h2h_trainable_size > 0
@@ -121,40 +121,43 @@ class GraphMSG(nn.Module):
             persistent=True,
         )
 
-        # ERA -> H
+        encoder_out_channels=config.model.num_channels
+        mlp_extra_layers=config.model.mlp.extra_layers
+
+        # Encoder from ERA -> H
         self.forward_mapper = MessagePassingMapper(
-            in_channels_src=self.mstep * (in_channels + aux_in_channels) + self.era_latlons.shape[1] + self.era_trainable_size,
+            in_channels_src=self.multi_step * (self.in_channels + self.aux_in_channels) + self.era_latlons.shape[1] + self.era_trainable_size,
             in_channels_dst=self.h_latlons.shape[1] + self.h_trainable_size,
             hidden_dim=encoder_out_channels,
-            hidden_layers=encoder_mapper_num_layers,
+            hidden_layers=config.model.encoder.num_layers,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
             chunks=1,
-            activation=activation,
+            activation=self.activation,
         )
 
-        # H -> H
+        # Processor H -> H
         self.h_processor = MessagePassingProcessor(
             hidden_dim=encoder_out_channels,
-            hidden_layers=encoder_num_layers,
+            hidden_layers=config.model.hidden.num_layers,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
             chunks=2,
-            activation=activation,
+            activation=self.activation,
         )
 
-        # H -> ERA5
+        # Decoder H -> ERA5
         self.backward_mapper = MessagePassingMapper(
             in_channels_src=encoder_out_channels,
             in_channels_dst=encoder_out_channels,
-            out_channels_dst=in_channels,
-            hidden_dim=encoder_out_channels,
-            hidden_layers=encoder_mapper_num_layers,
+            out_channels_dst=self.in_channels,
+            hidden_dim=config.model.num_channels,
+            hidden_layers=config.model.decoder.num_layers,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
             backward_mapper=True,
             chunks=1,
-            activation=activation,
+            activation=self.activation,
         )
 
         self._init_weights()

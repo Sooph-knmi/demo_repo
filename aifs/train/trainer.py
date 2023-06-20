@@ -8,6 +8,9 @@ import torch
 import wandb
 from torch_geometric.data import HeteroData
 
+from omegaconf import DictConfig
+import hydra
+
 # from torch.autograd.graph import save_on_cpu
 from timm.scheduler import CosineLRScheduler
 
@@ -16,101 +19,91 @@ from aifs.model.losses import WeightedMSELoss
 from aifs.model.msg import GraphMSG
 from aifs.utils.logger import get_logger
 from aifs.utils.plots import init_plot_settings, plot_loss, plot_predicted_multilevel_flat_sample
+from aifs.train.utils import pl_scaling
 
 LOGGER = get_logger(__name__)
 
 
 class GraphForecaster(pl.LightningModule):
-    _VAL_PLOT_FREQ = 750
-
     def __init__(
         self,
-        graph_data: HeteroData,
         metadata: Dict,
-        fc_dim: int,
-        aux_dim: int,
-        num_levels: int,
-        encoder_num_layers: int = 4,
-        encoder_mapper_num_layers: int = 1,
-        encoder_hidden_channels: int = 128,
-        encoder_out_channels: int = 128,
-        mlp_extra_layers: int = 0,
-        era_trainable_size: int = 8,
-        h_trainable_size: int = 8,
-        e2h_trainable_size: int = 8,
-        h2e_trainable_size: int = 8,
-        h2h_trainable_size: int = 0,
-        activation: str = "SiLU",
-        lr: float = 1e-4,
-        lr_iterations: int = 300000,
-        lr_min: float = 1.5e-7,
-        rollout: int = 1,
-        multistep: int = 1,
-        save_basedir: Optional[str] = None,
-        log_to_wandb: bool = False,
-        loss_scaling: Optional[torch.Tensor] = None,
-        pl_names: Optional[List] = None,
-        metric_names: Optional[List] = None,
-        rollout_epoch_increment: int = 0,
-        rollout_max: int = 12,
+        config: DictConfig,
     ) -> None:
+
         super().__init__()
+        
+        self.fcdim = config.data.num_features - config.data.num_aux_features
+        num_levels=len(config.data.pl.levels)
+
+        self.graph_data = torch.load(
+                os.path.join(config.paths.graph, config.files.graph)
+            )
 
         self.gnn = GraphMSG(
-            graph_data=graph_data,
-            in_channels=fc_dim,
-            aux_in_channels=aux_dim,
-            multistep=multistep,
-            encoder_num_layers=encoder_num_layers,
-            encoder_hidden_channels=encoder_hidden_channels,
-            encoder_out_channels=encoder_out_channels,
-            mlp_extra_layers=mlp_extra_layers,
-            activation=activation,
-            encoder_mapper_num_layers=encoder_mapper_num_layers,
-            era_trainable_size=era_trainable_size,
-            h_trainable_size=h_trainable_size,
-            e2h_trainable_size=e2h_trainable_size,
-            h2e_trainable_size=h2e_trainable_size,
-            h2h_trainable_size=h2h_trainable_size,
+            config=config,
+            graph_data=self.graph_data,
         )
 
         self.save_hyperparameters()
 
         self.normalizer = InputNormalizer(metadata)
 
-        self.era_latlons = graph_data[("era", "to", "era")].ecoords_rad
-        self.era_weights = graph_data[("era", "to", "era")].area_weights
+        self.era_latlons = self.graph_data[("era", "to", "era")].ecoords_rad
+        self.era_weights = self.graph_data[("era", "to", "era")].area_weights
 
-        if loss_scaling is None:
-            loss_scaling = torch.ones(1, dtype=torch.float32)  # unit weights
-
+        loss_scaling = np.array([], dtype=np.float32)
+        for pl_name in config.data.pl.parameters:
+            if pl_name in config.training.loss_scaling.pl:
+                scl = config.training.loss_scaling.pl[pl_name]
+            else:
+                scl = 1
+                Logger.debug(f"Parameter {pl_name} was not scaled.")
+            loss_scaling = np.append(loss_scaling, [scl] * pl_scaling(config.data.pl.levels))
+        for sfc_name in config.data.sfc.parameters:
+            if sfc_name in config.training.loss_scaling.sfc:
+                scl = config.training.loss_scaling.sfc[sfc_name]
+            else:
+                scl = 1
+                Logger.debug(f"Parameter {sfc_name} was not scaled.")
+            loss_scaling = np.append(loss_scaling, [scl])
+        assert len(loss_scaling) == self.fcdim
+        # LOGGER.debug("Loss scaling: %s", loss_scaling)
+        loss_scaling = torch.from_numpy(loss_scaling)
+        
         self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
 
         # TODO: extract the level names from the input metadata
         self.metric_ranges = {}
-        for i, key in enumerate(pl_names):
+        for i, key in enumerate(config.data.pl.parameters):
             self.metric_ranges[key] = [i * num_levels, (i + 1) * num_levels]
-        for key in metric_names:
+        for key in config.training.metrics:
             idx = metadata["name_to_index"][key]
             self.metric_ranges[key] = [idx, idx + 1]
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
-        self.fcdim = fc_dim
-        self.mstep = multistep
-        self.lr = lr
-        self.lr_iterations = lr_iterations
-        self.lr_min = lr_min
-        self.rollout = rollout
-        self.rollout_epoch_increment = rollout_epoch_increment
-        self.rollout_max = rollout_max
+
+        self.multi_step = config.training.multistep_input
+        self.lr = config.hardware.num_nodes * config.hardware.num_gpus * config.training.lr.rate
+        self.lr_iterations = config.training.lr.iterations
+        self.lr_min = config.training.lr.min
+        self.rollout = config.training.rollout.start
+        self.rollout_epoch_increment = config.training.rollout.epoch_increment
+        self.rollout_max = config.training.rollout.max
+
         LOGGER.debug("Rollout window length: %d", self.rollout)
         LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
         LOGGER.debug("Rollout max : %d", self.rollout_max)
-        LOGGER.debug("Multistep: %d", self.mstep)
+        LOGGER.debug("Multistep: %d", self.multi_step)
 
-        self.log_to_wandb = log_to_wandb
-        self.save_basedir = save_basedir
+        self.log_to_wandb = config.diagnostics.logging.wandb
+        self.plot_frequency = config.diagnostics.plot.frequency
+        self.save_basedir = os.path.join(
+            config.paths.plots, config.paths.run_id
+        )
 
+        
+        
         init_plot_settings()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -119,9 +112,9 @@ class GraphForecaster(pl.LightningModule):
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         x = x.roll(-1, dims=1)
         # autoregressive predictions - we re-init the "variable" part of x
-        x[:, self.mstep - 1, :, : self.fcdim] = y_pred
+        x[:, self.multi_step - 1, :, : self.fcdim] = y_pred
         # get new "constants" needed for time-varying fields
-        x[:, self.mstep - 1, :, self.fcdim :] = y[..., self.fcdim :]
+        x[:, self.multi_step - 1, :, self.fcdim :] = y[..., self.fcdim :]
         return x
 
     def _step(
@@ -132,12 +125,12 @@ class GraphForecaster(pl.LightningModule):
         metrics = {}
 
         # start rollout
-        x = batch[:, 0 : self.mstep, ...]  # (bs, mstep, latlon, nvar)
+        x = batch[:, 0 : self.multi_step, ...]  # (bs, multi_step, latlon, nvar)
 
         # with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
-            y = batch[:, self.mstep + rstep, ...]  # target, shape = (bs, latlon, nvar)
+            y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
             loss += self.loss(y_pred, y[..., : self.fcdim])
 
@@ -189,7 +182,7 @@ class GraphForecaster(pl.LightningModule):
         self.rollout = min(self.rollout, self.rollout_max)
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
-        plot_sample = batch_idx % self._VAL_PLOT_FREQ == 3
+        plot_sample = batch_idx % self.plot_frequency == 3
         with torch.no_grad():
             val_loss, metrics = self._step(batch, batch_idx, compute_metrics=True, plot=plot_sample)
         self.log(

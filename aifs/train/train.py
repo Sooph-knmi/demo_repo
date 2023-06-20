@@ -1,4 +1,3 @@
-import datetime as dt
 import os
 from typing import Optional
 
@@ -6,144 +5,102 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 
+from omegaconf import DictConfig
+import hydra
+
+
 from pytorch_lightning.profilers import AdvancedProfiler
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.train.trainer import GraphForecaster
-from aifs.train.utils import get_args, setup_wandb_logger, pl_scaling, setup_callbacks
-from aifs.utils.config import YAMLConfig
+from aifs.train.utils import setup_wandb_logger, setup_callbacks
+# from aifs.utils.config import YAMLConfig
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
-
-def train(config: YAMLConfig) -> None:
+def train(config: DictConfig) -> None:
     """
     Train entry point.
     Args:
         config: job configuration
     """
-    timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
     torch.set_float32_matmul_precision("high")
 
     # create data module (data loaders and data sets)
     dmod = ERA5DataModule(config)
 
     # number of variables (features)
-    num_features = config["input:num-features"]
-    num_aux_features = config["input:num-aux-features"]
+    num_features = config.data.num_features
+    num_aux_features = config.data.num_aux_features
     num_fc_features = num_features - num_aux_features
-
-    loss_scaling = np.array([], dtype=np.float32)
-    for scl in config["input:loss-scaling-pl"]:
-        loss_scaling = np.append(loss_scaling, [scl] * pl_scaling(config["input:pl:levels"]))
-    for scl in config["input:loss-scaling-sfc"]:
-        loss_scaling = np.append(loss_scaling, [scl])
-    assert len(loss_scaling) == num_fc_features
-    # LOGGER.debug("Loss scaling: %s", loss_scaling)
-    loss_scaling = torch.from_numpy(loss_scaling)
 
     LOGGER.debug("Total number of prognostic variables: %d", num_fc_features)
     LOGGER.debug("Total number of auxiliary variables: %d", num_aux_features)
 
     # learning rate multiplier when running single-node, multi-GPU and/or multi-node
-    total_gpu_count = config["model:num-nodes"] * config["model:num-gpus"]
+    total_gpu_count = config.hardware.num_nodes * config.hardware.num_gpus
     LOGGER.debug("Total GPU count: %d - NB: the learning rate will be scaled by this factor!", total_gpu_count)
-    LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * config["model:learn-rate"])
-    LOGGER.debug("Rollout window length: %d", config["model:rollout"])
-
-    graph_data = torch.load(
-        os.path.join(config["graph:data-basedir"], config["graph:data-file"].format(resolution=config["input:resolution"]))
-    )
+    LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * config.training.lr.rate)
+    LOGGER.debug("Rollout window length: %d", config.training.rollout.start)
 
     model = GraphForecaster(
-        graph_data=graph_data,
         metadata=dmod.input_metadata,
-        fc_dim=num_fc_features,
-        aux_dim=num_aux_features,
-        num_levels=len(config["input:pl:levels"]),
-        encoder_hidden_channels=config["model:encoder:num-hidden-channels"],
-        encoder_out_channels=config["model:encoder:num-out-channels"],
-        encoder_num_layers=config["model:encoder:num-layers"],
-        encoder_mapper_num_layers=config["model:encoder:mapper-num-layers"],
-        mlp_extra_layers=config["model:encoder:mlp-extra-layers"],
-        era_trainable_size=config["model:encoder:era-trainable-size"],
-        h_trainable_size=config["model:encoder:h-trainable-size"],
-        e2h_trainable_size=config["model:encoder:e2h-trainable-size"],
-        h2e_trainable_size=config["model:encoder:h2e-trainable-size"],
-        h2h_trainable_size=config["model:encoder:h2h-trainable-size"],
-        activation=config["model:encoder:activation"],
-        lr=total_gpu_count * config["model:learn-rate"],
-        lr_iterations=config["model:lr-iterations"],
-        lr_min=config["model:lr-min"],
-        rollout=config["model:rollout"],
-        multistep=config["model:multistep-input"],
-        save_basedir=os.path.join(
-            config["output:basedir"].format(resolution=config["input:resolution"]), config["output:plots:plot-dir"], timestamp
-        ),
-        log_to_wandb=config["model:wandb:enabled"],
-        loss_scaling=loss_scaling,
-        pl_names=config["input:pl:names"],
-        metric_names=config["metrics"],
-        rollout_epoch_increment=config["model:rollout-epoch-increment"],
-        rollout_max=config["model:rollout-max"],
+        config=config
     )
 
-    if config["model:compile"]:
+    if config.training.compile:
         # this doesn't work ATM (April 2), don't bother enabling it ...
         LOGGER.debug("torch.compiling the Lightning model ...")
         model = torch.compile(model, mode="default", backend="inductor", fullgraph=False)
 
     # warm restart?
     ckpt_path: Optional[str] = None
-    if config["model:warm-restart:enabled"]:
+    if config.files.warm_start:
         ckpt_path = os.path.join(
-            config["output:basedir"].format(resolution=config["input:resolution"]),
-            config["output:checkpoints:ckpt-dir"],
-            config["model:warm-restart:ckpt-path"],
+            config.paths.checkpoints,
+            config.files.warm_start,
         )
         LOGGER.debug("Training will resume from %s ...", ckpt_path)
 
-    trainer_callbacks = setup_callbacks(config, timestamp)
+    trainer_callbacks = setup_callbacks(config, config.paths.run_id)
 
-    if config["model:profile"]:
+    if config.diagnostics.profiler:
         profiler = AdvancedProfiler(
-            dirpath=os.path.join(
-                config["output:basedir"].format(resolution=config["input:resolution"]), config["output:logging:log-dir"]
-            ),
+            dirpath=config.paths.logs,
             filename="aifs-profiler",
         )
     else:
         profiler = None
 
     logger = setup_wandb_logger(config)
-    if logger and (config["model:log-gradients"] or config["model:log-parameters"]):
-        if config["model:log-gradients"] and config["model:log-parameters"]:
+    if logger and (config.diagnostics.logging.gradients or config.diagnostics.logging.parameters):
+        if config.diagnostics.logging.gradients and config.diagnostics.logging.parameters:
             log_ = "all"
-        elif config["model:log-gradients"]:
+        elif config.diagnostics.logging.gradients:
             log_ = "gradients"
         else:
             log_ = "parameters"
-        logger.watch(model, log=log_, log_freq=config["output:logging:log-interval"], log_graph=False)
+        logger.watch(model, log=log_, log_freq=config.diagnostics.logging.interval, log_graph=False)
 
     trainer = pl.Trainer(
-        accelerator="gpu" if config["model:num-gpus"] > 0 else "cpu",
+        accelerator="gpu" if config.hardware.num_gpus > 0 else "cpu",
         callbacks=trainer_callbacks,
-        detect_anomaly=config["model:debug:anomaly-detection"],
-        strategy=config["model:strategy"],  # we should use ddp with find_unused_parameters = False, static_graph = True
-        devices=config["model:num-gpus"] if config["model:num-gpus"] > 0 else None,
-        num_nodes=config["model:num-nodes"],
-        precision=config["model:precision"],
-        max_epochs=config["model:max-epochs"],
+        detect_anomaly=config.diagnostics.debug.anomaly_detection,
+        strategy=config.hardware.strategy,  # we should use ddp with find_unused_parameters = False, static_graph = True
+        devices=config.hardware.num_gpus if config.hardware.num_gpus > 0 else None,
+        num_nodes=config.hardware.num_nodes,
+        precision=config.training.precision,
+        max_epochs=config.training.max_epochs,
         logger=setup_wandb_logger(config),
-        log_every_n_steps=config["output:logging:log-interval"],
+        log_every_n_steps=config.diagnostics.logging.interval,
         # run a fixed no of batches per epoch (helpful when debugging)
-        limit_train_batches=config["model:limit-batches:training"],
-        limit_val_batches=config["model:limit-batches:validation"],
+        limit_train_batches=config.dataloader.limit_batches.training,
+        limit_val_batches=config.dataloader.limit_batches.validation,
         num_sanity_val_steps=0,
-        accumulate_grad_batches=config["model:accum-grad-batches"],
-        gradient_clip_val=config["model:gradient-clip-val"],
-        gradient_clip_algorithm=config["model:gradient-clip-algorithm"],
+        accumulate_grad_batches=config.training.accum_grad_batches,
+        gradient_clip_val=config.training.gradient_clip.val,
+        gradient_clip_algorithm=config.training.gradient_clip.algorithm,
         # we have our own DDP-compliant sampler logic baked into the dataset
         use_distributed_sampler=False,
         profiler=profiler,
@@ -152,9 +109,6 @@ def train(config: YAMLConfig) -> None:
     trainer.fit(model, datamodule=dmod, ckpt_path=ckpt_path)
     LOGGER.debug("---- DONE. ----")
 
-
-def main() -> None:
-    """Entry point for training."""
-    args = get_args()
-    config = YAMLConfig(args.config)
+@hydra.main(version_base=None, config_path="../config", config_name="config")
+def main(config: DictConfig):
     train(config)

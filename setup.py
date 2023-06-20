@@ -11,6 +11,8 @@ setup(
     install_requires=[
         "torch_geometric==2.3.0",
         "pytorch-lightning==2.0.2",
+        "timm==0.9.2",
+        "hydra-core==1.3",
     ],
     extras_require={
         "extras": [
@@ -21,7 +23,7 @@ setup(
             "einops==0.6.1",
             "zarr==2.14.2",
             "networkx==3.1",
-            "h3==4.1.0",
+            "h3==3.7.6",
         ]
     },
     classifiers=[
