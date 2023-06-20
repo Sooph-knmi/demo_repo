@@ -26,8 +26,8 @@ def setup_wandb_logger(config: DictConfig):
         from pytorch_lightning.loggers.wandb import WandbLogger
 
         logger = WandbLogger(
-            project="GNN",
-            entity="ecmwf-s2s",
+            project="aifs-fc",
+            entity="ecmwf-ml",
             save_dir=config.paths.logs,
         )
         logger.log_hyperparams(OmegaConf.to_container(config, resolve=True))
