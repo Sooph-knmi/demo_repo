@@ -7,6 +7,7 @@ import pytorch_lightning as pl
 import torch
 import wandb
 from torch_geometric.data import HeteroData
+from timm.scheduler import CosineLRScheduler
 
 from aifs.data.era_normalizers import InputNormalizer
 from aifs.model.losses import WeightedMSELoss
@@ -30,8 +31,14 @@ class GraphAutoencoder(pl.LightningModule):
         mapper_num_layers: int = 1,
         encoder_out_channels: int = 512,
         mlp_extra_layers: int = 0,
+        era_trainable_size: int = 0,
+        e2h_trainable_size: int = 0,
+        h2e_trainable_size: int = 0,
         activation: str = "SiLU",
         lr: float = 1e-4,
+        lr_iterations: int = 50000,
+        lr_min: float = 3e-7,
+        multistep: int = 1,
         save_basedir: Optional[str] = None,
         log_to_wandb: bool = False,
         loss_scaling: Optional[torch.Tensor] = None,
@@ -74,6 +81,10 @@ class GraphAutoencoder(pl.LightningModule):
 
         self.fcdim = fc_dim
         self.lr = lr
+
+        self.mstep = multistep
+        self.lr_iterations = lr_iterations
+        self.lr_min = lr_min
 
         self.log_to_wandb = log_to_wandb
         self.save_basedir = save_basedir
@@ -179,6 +190,10 @@ class GraphAutoencoder(pl.LightningModule):
             exp_log_tag=f"val_ae_sample_rank{self.global_rank:01d}",
         )
 
+    def lr_scheduler_step(self, scheduler, metric):
+        del metric  # not used
+        scheduler.step(epoch=self.trainer.global_step)
+
     def _output_figure(self, fig, tag: str = "gnn-ae", exp_log_tag: str = "val_ae_sample") -> None:
         """Figure output: save to file and/or display in notebook."""
         if self.save_basedir is not None:
@@ -189,7 +204,12 @@ class GraphAutoencoder(pl.LightningModule):
                 self.logger.experiment.log({exp_log_tag: wandb.Image(save_path)})
         plt.close(fig)  # cleanup
 
-    def configure_optimizers(self) -> Dict:
-        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr, fused=True)
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100, eta_min=1.0e-6)
-        return [optimizer], [lr_scheduler]
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.99), lr=self.lr, fused=False)
+        scheduler = CosineLRScheduler(
+            optimizer,
+            lr_min=self.lr_min,
+            t_initial=self.lr_iterations,
+            warmup_t=1000,
+        )
+        return [optimizer], [{"scheduler": scheduler, "interval": "step"}]

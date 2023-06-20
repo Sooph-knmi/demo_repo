@@ -83,6 +83,13 @@ plot:
   - msl
   - 2t
 
+diagnostics:
+  eval:
+    enabled: True
+    # use this to evaluate the model over longer rollouts, every so many validation batches
+    rollout: 12
+    frequency: 75
+
 ###################
 #  OUTPUT BLOCK
 ###################
@@ -90,13 +97,14 @@ output:
   basedir: /ec/res4/scratch/syma/GNN-AE/ERA5/{resolution}/
   logging:
     log-dir: logs
-    log-interval: 250
+    log-interval: 750
   checkpoints:
     # model checkpoints: used to resume training or do inference
     ckpt-dir: checkpoints
   model:
     save-top-k: 10
-    checkpoint-filename: aifs-ae-ckpt-{epoch:02d}-{val_ae_wmse:.4f}
+    checkpoint-filename: aifs-ae-ckpt-{epoch:02d}-{val_ae_wmse_epoch:.3e}
+    checkpoint-monitor: val_ae_wmse_epoch
   plots:
     plot-dir: plots
 
@@ -111,6 +119,8 @@ graph:
 #  MODEL BLOCK
 ###################
 model:
+  # torch.compile is not working (yet), set this option to False 
+  compile: False
   debug:
     # this will detect and trace back NaNs / Infs etc. but will slow down training
     anomaly-detection: False
@@ -155,19 +165,27 @@ model:
 
   # number of GPUs per node and number of nodes (for DDP)
   num-gpus: 4
-  num-nodes: 1
+  num-nodes: 2
 
   # training settings
   lead-time: 6
-  max-epochs: 100
-  learn-rate: 0.00025
+  max-epochs: 50
+  learn-rate: 3.e-4
+  lr-iterations: 200000
+  lr-min: 1.5e-7 # Not scaled by #GPU
 
-  # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
-  # the effective batch size becomes num-devices * batch-size * k
+  # multistep input
+  # 1 = single step scheme, X(t-1) used to predict X(t)
+  # k > 1: multistep scheme, uses [X(t-k), X(t-k+1), ... X(t-1)] to predict X(t)
+  # Deepmind use k = 2 in their model
+  multistep-input: 1
+
+  # # gradient accumulation across K batches, K >= 1 (if K == 1 then no accumulation)
+  # # the effective batch size becomes num-devices * batch-size * k
   accum-grad-batches: 1
 
-  # clipp gradients, 0 : don't clip, default algorithm: norm, alternative: value
-  gradient-clip-val: 0.
+  # # clipp gradients, 0 : don't clip, default algorithm: norm, alternative: value
+  gradient-clip-val: 32.
   gradient-clip-algorithm: value
 
   # stochastic weight averaging
@@ -181,8 +199,26 @@ model:
 
   # specific GNN encoder settings
   encoder:
-    mapper-num-layers: 2
+    mapper-num-layers: 1
+    num-layers: 16
     activation: SiLU
-    num-out-channels: 512
+    num-out-channels: 256
     mlp-extra-layers: 0
     dropout: 0.
+    era-trainable-size: 8
+    h-trainable-size: 8
+    e2h-trainable-size: 8
+    h2e-trainable-size: 8
+    h2h-trainable-size: 8
+  # length of the "rollout" window (see Keisler's paper)
+  rollout: 1
+  # Increase rollout every n epochs
+  rollout-epoch-increment: 0
+  # Maximum rollout to use
+  rollout-max: 1
+
+  # Keisler's three training rounds were:
+  # Round 1. ~960,000 batches @ ~0.3 seconds per batch (4-step rollout)
+  # Round 2. ~90,000 batches @ ~1.0 seconds per batch (8-step rollout)
+  # Round 3. ~70,000 batches @ ~1.5 seconds per batch (12-step rollout)
+  # Each batch is an N-step rollout, with batch_size=1

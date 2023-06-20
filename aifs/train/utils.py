@@ -57,7 +57,7 @@ def setup_callbacks(config: YAMLConfig, timestamp: dt.datetime) -> List:
                 timestamp,
             ),
             filename=config["output:model:checkpoint-filename"],
-            monitor="val_wmse",
+            monitor=config["output:model:checkpoint-monitor"],
             verbose=False,
             save_top_k=config["output:model:save-top-k"],
             save_weights_only=False,

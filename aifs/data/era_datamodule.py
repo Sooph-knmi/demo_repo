@@ -56,7 +56,7 @@ class ERA5DataModule(pl.LightningDataModule):
     def _get_data_filename(self, stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation]
         return os.path.join(
-            self.config[f"input:{stage}:basedir"],  # UGLY HACK .format(resolution=self.config["input:resolution"]),
+            self.config[f"input:{stage}:basedir"],
             self.config[f"input:{stage}:filename"].format(resolution=self.config["input:resolution"]),
         )
 

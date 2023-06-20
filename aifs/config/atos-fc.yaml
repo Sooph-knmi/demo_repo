@@ -103,7 +103,8 @@ output:
     ckpt-dir: checkpoints
   model:
     save-top-k: 10
-    checkpoint-filename: aifs-fc-ckpt-{epoch:02d}-{val_wmse:.4f}
+    checkpoint-filename: aifs-fc-ckpt-{epoch:02d}-{val_wmse_epoch:.4f}
+    checkpoint-monitor: val_wmse_epoch
   plots:
     plot-dir: plots
 
@@ -205,10 +206,10 @@ model:
 
   # specific GNN encoder settings
   encoder:
-    mapper-num-layers: 2
+    mapper-num-layers: 1
     num-layers: 16
     activation: SiLU
-    num-out-channels: 512
+    num-out-channels: 256
     mlp-extra-layers: 0
     dropout: 0.
     era-trainable-size: 8
