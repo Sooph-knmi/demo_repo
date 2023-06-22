@@ -1,0 +1,39 @@
+generator:
+  activation: SiLU
+  num_channels: 256
+
+  mlp:
+    extra_layers: 0
+
+  encoder:
+    num_layers: 1
+
+  decoder:
+    num_layers: 1
+
+  hidden:
+    num_layers: 16
+
+  trainable_parameters:
+    era: 8
+    hidden: 8
+    era2hidden: 8
+    hidden2era: 8
+    hidden2hidden: 8
+
+  predicted_ensemble_size: 5
+
+  noise_channels: 4
+
+critic:
+  mlp:
+    extra_layers: 0
+
+  activation: SiLU
+  num_channels: 256
+
+  encoder:
+    num_layers: 1
+
+  hidden:
+    num_layers: 4

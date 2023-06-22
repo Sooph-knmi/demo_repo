@@ -1,20 +1,24 @@
 eval:
-  enabled: True
+  enabled: False
   # use this to evaluate the model over longer rollouts, every so many validation batches
   rollout: 12
   frequency: 75
 plot:
+  enabled: True
   frequency: 750
+  sample_idx: 0
+  per_sample: 6
   parameters:
-  #not yet used
-    - q_850
-    - t_850
-    - u_850
-    - v_850
-    - w_850 
-    - z_850
-    - msl
-    - 2t
+    10: q_850
+    23: t_850
+    36: u_850
+    49: v_850
+    75: z_850
+    83: 2t
+    81: 10u
+    82: 10v
+    79: msl
+  learned_features: True
 
 debug:
   # this will detect and trace back NaNs / Infs etc. but will slow down training
@@ -28,5 +32,4 @@ logging:
   # logger options (these probably come with some overhead)
   gradients: False
   parameters: False
-  interval: 100
-
+  interval: 50

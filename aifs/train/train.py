@@ -1,31 +1,35 @@
 import os
 from typing import Optional
 
-import numpy as np
+import hydra
 import pytorch_lightning as pl
 import torch
-
 from omegaconf import DictConfig
-import hydra
-
-
 from pytorch_lightning.profilers import AdvancedProfiler
 
 from aifs.data.era_datamodule import ERA5DataModule
-from aifs.train.trainer import GraphForecaster
-from aifs.train.utils import setup_wandb_logger, setup_callbacks
-# from aifs.utils.config import YAMLConfig
-from aifs.utils.logger import get_logger
+from aifs.diagnostics.logger import get_logger
+from aifs.train.trainer import GraphGANForecaster
+from aifs.train.utils import setup_callbacks
+from aifs.train.utils import setup_wandb_logger
 
 LOGGER = get_logger(__name__)
 
+
 def train(config: DictConfig) -> None:
-    """
-    Train entry point.
-    Args:
-        config: job configuration
+    """Training entry point.
+
+    Parameters
+    ----------
+    config : DictConfig
+        Job configuration
     """
     torch.set_float32_matmul_precision("high")
+
+    if config.training.initial_seed is not None:
+        initial_seed = config.training.initial_seed
+        pl.seed_everything(initial_seed, workers=True)
+        LOGGER.debug("Running with initial seed: %d", initial_seed)
 
     # create data module (data loaders and data sets)
     dmod = ERA5DataModule(config)
@@ -39,35 +43,28 @@ def train(config: DictConfig) -> None:
     LOGGER.debug("Total number of auxiliary variables: %d", num_aux_features)
 
     # learning rate multiplier when running single-node, multi-GPU and/or multi-node
-    total_gpu_count = config.hardware.num_nodes * config.hardware.num_gpus
+    total_gpu_count = config.hardware.num_nodes * config.hardware.num_gpus_per_node
     LOGGER.debug("Total GPU count: %d - NB: the learning rate will be scaled by this factor!", total_gpu_count)
-    LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * config.training.lr.rate)
+    LOGGER.debug("Effective generator learning rate: %.3e", total_gpu_count * config.training.lr.rate.generator)
+    LOGGER.debug("Effective critic learning rate: %.3e", total_gpu_count * config.training.lr.rate.critic)
     LOGGER.debug("Rollout window length: %d", config.training.rollout.start)
 
-    model = GraphForecaster(
-        metadata=dmod.input_metadata,
-        config=config
-    )
-
-    if config.training.compile:
-        # this doesn't work ATM (April 2), don't bother enabling it ...
-        LOGGER.debug("torch.compiling the Lightning model ...")
-        model = torch.compile(model, mode="default", backend="inductor", fullgraph=False)
+    model = GraphGANForecaster(metadata=dmod.input_metadata, config=config)
 
     # warm restart?
     ckpt_path: Optional[str] = None
-    if config.files.warm_start:
+    if config.hardware.files.warm_start.gan is not None:
         ckpt_path = os.path.join(
-            config.paths.checkpoints,
-            config.files.warm_start,
+            config.hardware.paths.checkpoints,
+            config.hardware.files.warm_start.gan,
         )
-        LOGGER.debug("Training will resume from %s ...", ckpt_path)
+        LOGGER.debug("GAN training will resume from %s ...", ckpt_path)
 
-    trainer_callbacks = setup_callbacks(config, config.paths.run_id)
+    trainer_callbacks = setup_callbacks(config, config.hardware.paths.run_id, config.hardware.files.checkpoint.gan)
 
     if config.diagnostics.profiler:
         profiler = AdvancedProfiler(
-            dirpath=config.paths.logs,
+            dirpath=config.hardware.paths.logs,
             filename="aifs-profiler",
         )
     else:
@@ -84,11 +81,12 @@ def train(config: DictConfig) -> None:
         logger.watch(model, log=log_, log_freq=config.diagnostics.logging.interval, log_graph=False)
 
     trainer = pl.Trainer(
-        accelerator="gpu" if config.hardware.num_gpus > 0 else "cpu",
+        accelerator="gpu" if config.hardware.num_gpus_per_node > 0 else "cpu",
         callbacks=trainer_callbacks,
+        deterministic=config.training.deterministic,
         detect_anomaly=config.diagnostics.debug.anomaly_detection,
         strategy=config.hardware.strategy,  # we should use ddp with find_unused_parameters = False, static_graph = True
-        devices=config.hardware.num_gpus if config.hardware.num_gpus > 0 else None,
+        devices=config.hardware.num_gpus_per_node if config.hardware.num_gpus_per_node > 0 else None,
         num_nodes=config.hardware.num_nodes,
         precision=config.training.precision,
         max_epochs=config.training.max_epochs,
@@ -98,9 +96,6 @@ def train(config: DictConfig) -> None:
         limit_train_batches=config.dataloader.limit_batches.training,
         limit_val_batches=config.dataloader.limit_batches.validation,
         num_sanity_val_steps=0,
-        accumulate_grad_batches=config.training.accum_grad_batches,
-        gradient_clip_val=config.training.gradient_clip.val,
-        gradient_clip_algorithm=config.training.gradient_clip.algorithm,
         # we have our own DDP-compliant sampler logic baked into the dataset
         use_distributed_sampler=False,
         profiler=profiler,
@@ -108,6 +103,7 @@ def train(config: DictConfig) -> None:
 
     trainer.fit(model, datamodule=dmod, ckpt_path=ckpt_path)
     LOGGER.debug("---- DONE. ----")
+
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(config: DictConfig):

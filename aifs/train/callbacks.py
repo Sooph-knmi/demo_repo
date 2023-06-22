@@ -1,19 +1,70 @@
-from typing import Dict, Any
-import torch
+import os
+from typing import Any
+from typing import Dict
+from typing import List
+
+import matplotlib.pyplot as plt
+import numpy as np
 import pytorch_lightning as pl
+import torch
 from pytorch_lightning.callbacks import Callback
 
-from aifs.utils.logger import get_logger
+import wandb
+from aifs.diagnostics.logger import get_logger
+from aifs.diagnostics.plots import init_plot_settings
+from aifs.diagnostics.plots import plot_graph_features
+from aifs.diagnostics.plots import plot_kcrps
+from aifs.diagnostics.plots import plot_loss
+from aifs.diagnostics.plots import plot_predicted_ensemble
+from aifs.diagnostics.plots import plot_predicted_multilevel_flat_sample
+
 
 LOGGER = get_logger(__name__)
 
 
+class PlotCallback(Callback):
+    """Factory for creating a callback that plots data to Weights and Biases."""
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.save_basedir = os.path.join(config.hardware.paths.plots, config.hardware.paths.run_id)
+        self.plot_frequency = config.diagnostics.plot.frequency
+        init_plot_settings()
+
+    def _output_figure(self, trainer, fig, tag: str = "gnn", exp_log_tag: str = "val_pred_sample") -> None:
+        """Figure output: save to file and/or display in notebook."""
+        if self.save_basedir is not None:
+            save_path = os.path.join(
+                self.save_basedir,
+                f"plots/{tag}_epoch{trainer.current_epoch:03d}.png",
+            )
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            fig.savefig(save_path, dpi=100)
+            if self.config.diagnostics.logging.wandb:
+                trainer.logger.experiment.log({exp_log_tag: wandb.Image(save_path)})
+        plt.close(fig)  # cleanup
+
+
 class RolloutEval(Callback):
-    """Evaluates the model performance over a (longer) rollout window"""
+    """Evaluates the model performance over a (longer) rollout window."""
 
     def __init__(self, rollout: int = 12, frequency: int = 20) -> None:
+        """Initialize RolloutEval callback.
+
+        Parameters
+        ----------
+        rollout : int, optional
+            Number of timesteps to roll out, by default 12
+        frequency : int, optional
+            Frequency of rollout evaluation, in terms of number of batches, by default 20
+        """
         super().__init__()
-        LOGGER.debug("Setting up RolloutEval callback with rollout = %d, frequency = %d ...", rollout, frequency)
+        LOGGER.debug(
+            "Setting up RolloutEval callback with rollout = %d, frequency = %d ...",
+            rollout,
+            frequency,
+        )
         self.rollout = rollout
         self.frequency = frequency
 
@@ -33,10 +84,11 @@ class RolloutEval(Callback):
 
         with torch.no_grad():
             for rstep in range(self.rollout):
-                y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+                z = pl_module.sample_noise(bs=x.shape[0])
+                y_pred = pl_module(z, x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
                 y = batch[:, pl_module.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
                 # y includes the auxiliary variables, so we must leave those out when computing the loss
-                loss += pl_module.loss(y_pred, y[..., : pl_module.fcdim])
+                loss += pl_module.wmse_loss(y_pred, y[..., : pl_module.fcdim])
 
                 x = pl_module.advance_input(x, y, y_pred)
 
@@ -75,8 +127,183 @@ class RolloutEval(Callback):
             )
 
     def on_validation_batch_end(
-        self, trainer: pl.Trainer, pl_module: pl.LightningModule, outputs: Any, batch: torch.Tensor, batch_idx: int
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        outputs: Any,
+        batch: torch.Tensor,
+        batch_idx: int,
     ) -> None:
         del trainer, outputs  # not used
         if batch_idx % self.frequency == 3 and pl_module.global_rank == 0:
             self._eval(pl_module, batch)
+
+
+class GraphTrainableFeaturesPlot(PlotCallback):
+    """Visualize the trainable features defined at the ERA and H graph nodes, if any.
+
+    TODO: How best to visualize the learned edge embeddings? Offline, perhaps - using code from @Simon's notebook?
+    """
+
+    def __init__(self, config):
+        super().__init__(config)
+
+    def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        if pl_module.global_rank == 0:
+            gnn = pl_module.generator
+            graph = pl_module.generator_graph
+
+            ecoords = np.rad2deg(graph[("era", "to", "era")].ecoords_rad.numpy())
+            hcoords = np.rad2deg(graph[("h", "to", "h")].hcoords_rad.numpy())
+
+            if gnn.era_trainable is not None:
+                fig = plot_graph_features(ecoords, gnn.era_trainable.cpu())
+                self._output_figure(trainer, fig, tag="era_trainable", exp_log_tag="era_trainable")
+
+            if gnn.h_trainable is not None:
+                fig = plot_graph_features(hcoords, gnn.h_trainable.cpu())
+                self._output_figure(trainer, fig, tag="h_trainable", exp_log_tag="h_trainable")
+
+
+class PlotLoss(PlotCallback):
+    """Plots the unsqueezed loss over rollouts."""
+
+    def __init__(self, config):
+        super().__init__(config)
+
+    def _plot(
+        self,
+        trainer,
+        pl_module,
+        outputs,
+        batch,
+    ) -> None:
+        for rstep in range(pl_module.rollout):
+            y_hat = outputs[1][rstep]
+            y_true = batch[:, pl_module.multi_step + rstep, :, : pl_module.fcdim]
+            loss = pl_module.wmse_loss(y_hat, y_true, squash=False).cpu().numpy()
+            fig = plot_loss(loss)
+            fig.tight_layout()
+            self._output_figure(
+                trainer,
+                fig,
+                tag=f"loss_rstep_rstep{rstep:02d}_rank{trainer.global_rank:01d}",
+                exp_log_tag=f"loss_sample_rstep{rstep:02d}_rank{trainer.global_rank:01d}",
+            )
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
+            self._plot(trainer, pl_module, outputs, batch)
+
+
+class PlotPredictedEnsemble(PlotCallback):
+    """Plots a small-sized ensemble produced by the generator over rollouts.
+
+    TODO: Generate a predicted ensemble that is consistent across rollouts.
+    This function generates an individual ensemble at every rollout step,
+    so ensemble members do not belong to a "continuous" prediction across rollouts.
+    """
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.ens_size = self.config.model.generator.predicted_ensemble_size
+        LOGGER.debug("Size of predicted ensemble: %d", self.ens_size)
+
+    def _plot(
+        self,
+        trainer,
+        pl_module,
+        batch,
+    ) -> None:
+        with torch.no_grad():
+            bs = batch.shape[0]
+            x = batch[:, 0 : pl_module.multi_step, ...]  # already normalized
+            assert pl_module.rollout == 1, "Plots for rollouts > 1 are not yet supported!"
+            rstep = 0
+
+            y_preds: List[torch.Tensor] = []
+            for _ in range(self.ens_size):
+                z = pl_module.sample_noise(bs=bs)
+                y_preds.append(pl_module.generator(z, x))
+            y = batch[:, pl_module.multi_step + rstep, ...]
+            y_preds = torch.stack(y_preds, dim=1)
+            pkcrps = pl_module.calculate_kcrps(y_preds, y[..., : pl_module.fcdim], reduce_sum=False)
+
+            # plot predicted ensemble
+            fig = plot_predicted_ensemble(
+                self.config.diagnostics.plot.parameters,
+                np.rad2deg(pl_module.era_latlons.numpy()),
+                pl_module.normalizer.denormalize(y[..., : pl_module.fcdim].clone()).cpu().numpy(),
+                pl_module.normalizer.denormalize(y_preds.clone()).cpu().numpy(),
+                sample_index=0,
+            )
+            fig.tight_layout()
+            self._output_figure(
+                trainer,
+                fig,
+                tag=f"ensemble_rstep{rstep:02d}_rank{trainer.global_rank:01d}",
+                exp_log_tag=f"ensemble_rstep{rstep:02d}_rank{trainer.global_rank:01d}",
+            )
+
+            # plot pointwise CRPS
+            fig = plot_kcrps(
+                self.config.diagnostics.plot.parameters, np.rad2deg(pl_module.era_latlons.numpy()), pkcrps.cpu().numpy()
+            )
+            fig.tight_layout()
+            self._output_figure(
+                trainer,
+                fig,
+                tag=f"ensemble_kcrps_rstep{rstep:02d}_batch{rstep:04d}_rank{trainer.global_rank:02d}",
+                exp_log_tag=f"ensemble_kcrps_rstep{rstep:02d}_rank{trainer.global_rank:02d}",
+            )
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        del outputs  # not used
+        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
+            self._plot(trainer, pl_module, batch)
+
+
+class PlotSample(PlotCallback):
+    """Plots a denormalized sample: input, target and prediction."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.sample_idx = self.config.diagnostics.plot.sample_idx
+
+    def _plot(
+        self,
+        trainer,
+        pl_module,
+        outputs,
+        batch,
+        batch_idx,
+    ) -> None:
+        data = (
+            pl_module.normalizer.denormalize(
+                batch[self.sample_idx, pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1, ...].clone()
+            )
+            .cpu()
+            .numpy()
+        )
+        for rstep in range(pl_module.rollout):
+            y_pred_ = pl_module.normalizer.denormalize(outputs[1][rstep][self.sample_idx, ...].clone()).cpu().numpy()
+            fig = plot_predicted_multilevel_flat_sample(
+                self.config.diagnostics.plot.parameters,
+                self.config.diagnostics.plot.per_sample,
+                np.rad2deg(pl_module.era_latlons.numpy()),
+                data[0, ..., : pl_module.fcdim].squeeze(),
+                data[rstep + 1, ..., : pl_module.fcdim].squeeze(),
+                y_pred_[..., : pl_module.fcdim].squeeze(),
+            )
+
+            fig.tight_layout()
+            self._output_figure(
+                trainer,
+                fig,
+                tag=f"gnn_pred_val_sample_rstep{rstep:02d}_batch{batch_idx:04d}_rank0",
+                exp_log_tag=f"val_pred_sample_rstep{rstep:02d}_rank{pl_module.local_rank:01d}",
+            )
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
+            self._plot(trainer, pl_module, outputs, batch, batch_idx)

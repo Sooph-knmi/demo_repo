@@ -1,0 +1,15 @@
+training: panguweather-${data.resolution}-1979-2015-6h.zarr
+validation: panguweather-${data.resolution}-2016-2017-6h.zarr
+test: panguweather-${data.resolution}-2016-2017-6h.zarr
+predict: panguweather-${data.resolution}-2016-2017-6h.zarr
+graph:
+  generator: graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4_5.pt
+  critic: graph_mappings_normed_edge_attrs_${data.resolution}_h3-210_newdirs.pt
+checkpoint:
+  generator: aifs-gan-generator-ckpt-{epoch:03d}-{gen_val_kcrps:.3e}
+  critic: aifs-gan-critic-ckpt-{epoch:03d}
+  gan: aifs-gan-ckpt-{epoch:03d}-{gen_val_kcrps:.3e}
+warm_start:
+  generator: 2023-08-09_07-57/aifs-gan-generator-ckpt-epoch=009-gen_val_kcrps=4.356e+00.ckpt
+  critic: 2023-08-09_16-30/aifs-gan-critic-ckpt-epoch=004-gen_val_kcrps=0.000e+00.ckpt
+  gan: null

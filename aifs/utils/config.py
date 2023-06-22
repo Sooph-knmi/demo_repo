@@ -1,14 +1,16 @@
-from typing import Mapping, Any
+from typing import Any
+from typing import Mapping
+
 import yaml
 
-from aifs.utils.logger import get_logger
+from aifs.diagnostics.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
 
 class YAMLConfig:
     def __init__(self, yaml_file: str):
-        with open(yaml_file, "r") as f:
+        with open(yaml_file) as f:
             self._cfg: Mapping[str, Any] = yaml.safe_load(f)
 
     def __len__(self) -> int:

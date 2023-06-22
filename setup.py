@@ -1,4 +1,5 @@
-from setuptools import find_packages, setup
+from setuptools import find_packages
+from setuptools import setup
 
 setup(
     name="aifs",
@@ -9,10 +10,11 @@ setup(
     author_email="ecmwf-authors@ecmwf.int",
     description="ERA5 forecasting with Graph Neural Networks",
     install_requires=[
-        "torch_geometric==2.3.0",
-        "pytorch-lightning==2.0.2",
+        "torch_geometric==2.3.1",
+        "pytorch-lightning==2.0.6",
         "timm==0.9.2",
         "hydra-core==1.3",
+        "einops==0.6.1",
     ],
     extras_require={
         "extras": [
@@ -20,10 +22,10 @@ setup(
             "cartopy==0.21.1",
             "tqdm==4.65.0",
             "wandb==0.15.0",
-            "einops==0.6.1",
             "zarr==2.14.2",
             "networkx==3.1",
             "h3==3.7.6",
+            "pre-commit==3.3.3",
         ]
     },
     classifiers=[
@@ -34,10 +36,11 @@ setup(
         "Programming Language :: Python :: 3.9",
     ],
     packages=find_packages(),
+    include_package_data=True,
     entry_points={
         "console_scripts": [
-            "aifs-train=aifs.train.train:main",
-            "aifs-predict=aifs.predict.predict:main",
+            "aifs-gan-train=aifs.train.train:main",
+            "aifs-gan-pretrain=aifs.train.pretrain:main",
         ]
     },
 )

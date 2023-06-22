@@ -1,0 +1,51 @@
+defaults:
+  - hardware: atos
+  - data: zarr
+  - dataloader: default
+  - model: gan
+  - training: default
+  - diagnostics: eval_rollout
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+  - _self_
+
+###############
+# Overrides
+###############
+
+hardware:
+  strategy: ddp_find_unused_parameters_true
+  paths:
+    graph:
+      generator: /home/mlx/data/graphs/
+      critic: /ec/res4/hpcperm/syma/gnn/
+  files:
+    graph:
+      generator: graph_mappings_normed_edge_attrs_2023062700_${data.resolution}_h_0_1_2_3_4.pt
+      critic: gan_critic_graph_mappings_normed_edge_attrs_${data.resolution}_h_0_1_2_3.pt
+model:
+  generator:
+    num_channels: 128
+  critic:
+    num_channels: 64
+  predicted_ensemble_size: 7
+
+dataloader:
+  batch_size:
+    training: 2
+    validation: 4
+  limit_batches:
+    training: null
+    validation: null
+
+training:
+  max_epochs: 100
+  loss_lambda:
+    adv: 1.e-4
+  frequency:
+    generator: 3
+    critic: 1
+
+# pretrain:
+#   generator: False
+#   critic: False

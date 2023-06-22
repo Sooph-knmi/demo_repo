@@ -1,6 +1,11 @@
+defaults:
+  - paths: atos
+  - files: atos
+
 # parallel strategy
 # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
-strategy: auto
+strategy: ddp_find_unused_parameters_true
+
 # number of GPUs per node and number of nodes (for DDP)
-num_gpus: 4
+num_gpus_per_node: 1
 num_nodes: 1
