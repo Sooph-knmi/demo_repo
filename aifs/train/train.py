@@ -1,23 +1,19 @@
 import os
 from typing import Optional
 
-import numpy as np
-import pytorch_lightning as pl
-import torch
-
-from omegaconf import DictConfig
 import hydra
-
-
+from omegaconf import DictConfig
+import pytorch_lightning as pl
 from pytorch_lightning.profilers import AdvancedProfiler
+import torch
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.train.trainer import GraphForecaster
 from aifs.train.utils import setup_wandb_logger, setup_callbacks
-# from aifs.utils.config import YAMLConfig
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
+
 
 def train(config: DictConfig) -> None:
     """
@@ -44,10 +40,7 @@ def train(config: DictConfig) -> None:
     LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * config.training.lr.rate)
     LOGGER.debug("Rollout window length: %d", config.training.rollout.start)
 
-    model = GraphForecaster(
-        metadata=dmod.input_metadata,
-        config=config
-    )
+    model = GraphForecaster(metadata=dmod.input_metadata, config=config)
 
     if config.training.compile:
         # this doesn't work ATM (April 2), don't bother enabling it ...
@@ -108,6 +101,7 @@ def train(config: DictConfig) -> None:
 
     trainer.fit(model, datamodule=dmod, ckpt_path=ckpt_path)
     LOGGER.debug("---- DONE. ----")
+
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(config: DictConfig):

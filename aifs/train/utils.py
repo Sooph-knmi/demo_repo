@@ -1,24 +1,22 @@
-import argparse
 import datetime as dt
 import os
 from typing import List
 
 import numpy as np
+from omegaconf import OmegaConf, DictConfig
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAveraging
 
-from aifs.train.callbacks import RolloutEval
-# from aifs.utils.config import YAMLConfig
+from aifs.train.callbacks import RolloutEval, RankHistogramPlotCallback
 from aifs.utils.logger import get_logger
 
-from omegaconf import OmegaConf, DictConfig
 
 LOGGER = get_logger(__name__)
 
 
 def pl_scaling(plev):
-    return np.array(plev) / 1000
+    return np.array(plev) / 1000.0
 
 
 def setup_wandb_logger(config: DictConfig):
@@ -36,6 +34,7 @@ def setup_wandb_logger(config: DictConfig):
     LOGGER.warning("You did not set up an experiment logger ...")
     return False
 
+
 def setup_callbacks(config: DictConfig, timestamp: dt.datetime) -> List:
     trainer_callbacks = [
         # EarlyStopping(monitor="val_wmse", min_delta=0.0, patience=7, verbose=False, mode="min"),
@@ -45,7 +44,7 @@ def setup_callbacks(config: DictConfig, timestamp: dt.datetime) -> List:
                 timestamp,
             ),
             filename=config.files.checkpoint,
-            monitor="val_wmse",
+            monitor="val_kcrps_epoch",
             verbose=False,
             save_top_k=config.training.save_top_k,
             # save weights, optimizer states, LR-schedule states, hyperparameters etc.
@@ -64,9 +63,10 @@ def setup_callbacks(config: DictConfig, timestamp: dt.datetime) -> List:
     ]
 
     if config.diagnostics.eval.enabled:
-        trainer_callbacks.append(
-            RolloutEval(rollout=config.diagnostics.eval.rollout, frequency=config.diagnostics.eval.frequency)
-        )
+        trainer_callbacks.append(RolloutEval(rollout=config.diagnostics.eval.rollout, frequency=config.diagnostics.eval.frequency))
+
+    if config.diagnostics.rank_histogram:
+        trainer_callbacks.append(RankHistogramPlotCallback())
 
     if config.training.swa.enabled:
         trainer_callbacks.append(

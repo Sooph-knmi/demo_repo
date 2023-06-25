@@ -47,7 +47,7 @@ class WeightedMSELoss(nn.Module):
             out = out * self.weights.expand_as(out)
             out /= torch.sum(self.weights.expand_as(out))
             return out.sum()
-        else:
-            out = out * self.weights[..., None].expand_as(out)
-            out /= torch.sum(self.weights[..., None].expand_as(out))
-            return out.sum(axis=(0, 1))
+
+        out = out * self.weights[..., None].expand_as(out)
+        out /= torch.sum(self.weights[..., None].expand_as(out))
+        return out.sum(axis=(0, 1))

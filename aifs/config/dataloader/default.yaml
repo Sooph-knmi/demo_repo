@@ -4,8 +4,8 @@ num_workers:
   test: 8
   predict: 8
 batch_size:
-  training: 4
-  validation: 4
+  training: 1
+  validation: 1
   test: 4
   predict: 4
 # runs only N training batches [N = integer | null]

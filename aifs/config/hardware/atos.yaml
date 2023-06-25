@@ -3,4 +3,4 @@
 strategy: auto
 # number of GPUs per node and number of nodes (for DDP)
 num_gpus: 4
-num_nodes: 1
+num_nodes: 2

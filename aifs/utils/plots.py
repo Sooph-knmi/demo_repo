@@ -25,10 +25,12 @@ def init_plot_settings():
     plt.rc("figure", titlesize=SMALL_SIZE)  # fontsize of the figure title
 
 
-def _hide_axes_ticks(ax) -> None:
+def _hide_axes_ticks(ax, x_axis: bool = True, y_axis: bool = True) -> None:
     # hide x/y-axis ticks
-    plt.setp(ax.get_xticklabels(), visible=False)
-    plt.setp(ax.get_yticklabels(), visible=False)
+    if x_axis:
+        plt.setp(ax.get_xticklabels(), visible=False)
+    if y_axis:
+        plt.setp(ax.get_yticklabels(), visible=False)
     ax.tick_params(axis="both", which="both", length=0)
 
 
@@ -197,3 +199,90 @@ def scatter_plot(fig, ax, pc, lat, lon, x, cmap="viridis", title=None) -> None:
         ax.set_title(title)
     ax.set_aspect("auto", adjustable=None)
     fig.colorbar(psc, ax=ax)
+
+
+def plot_rank_histogram(rh: np.ndarray) -> Figure:
+    fig, ax = plt.subplots(1, 1, figsize=(4.5, 4))
+    n_ens = rh.shape[0] - 1
+    rh = rh.astype(float)
+    LOGGER.debug("Rank histogram values: %s", rh)
+
+    ax.bar(np.arange(0, n_ens + 1), rh / rh.sum(), linewidth=1, color="blue", width=0.7)
+    ax.hlines(rh.mean() / rh.sum(), xmin=-0.5, xmax=n_ens + 0.5, linestyles="--", colors="red")
+    ax.set_title("Rank histogram")
+    ax.set_xlabel("Ensemble member index")
+    _hide_axes_ticks(ax, x_axis=False)
+
+    return fig
+
+
+def plot_predicted_ensemble(
+    latlons: np.ndarray,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+) -> Figure:
+    """Plots data for one ensemble sample.
+    Args:
+        latlons: lat/lon coordinates array, shape (lat*lon, 2)
+        x, y_true, y_pred: arrays of shape (nens, latlon, nvar)
+    Returns:
+        The figure object handle.
+    """
+
+    LOGGER.debug("y_true.shape = %s, y_pred.shape = %s", y_true.shape, y_pred.shape)
+    nens = y_pred.shape[0]
+    n_plots_x, n_plots_y = _NUM_VARS_TO_PLOT, nens + 4  # we also plot the truth, ensemble mean, mean error and spread
+    LOGGER.debug("n_plots_x = %d, n_plots_y = %d", n_plots_x, n_plots_y)
+
+    figsize = (n_plots_y * 4, n_plots_x * 3)
+    fig, ax = plt.subplots(n_plots_x, n_plots_y, figsize=figsize, subplot_kw={"projection": ccrs.PlateCarree()})
+    pc = ccrs.PlateCarree()
+
+    for vix, idx in enumerate(_IDXVARS_TO_PLOT):
+        vname = _NAM_VARS_TO_PLOT[vix]
+        yt = y_true[..., idx].squeeze()
+        yp = y_pred[..., idx].squeeze()
+        ax_ = ax[vix, :] if n_plots_x > 1 else ax
+        plot_ensemble(fig, ax_, pc, latlons, yt, yp, vname)
+
+    return fig
+
+
+def plot_ensemble(
+    fig,
+    ax,
+    pc,
+    latlons: np.ndarray,
+    truth: np.ndarray,
+    pred: np.ndarray,
+    vname: str,
+    ens_dim: int = 0,
+) -> None:
+    """
+    Use this when plotting ensembles, where each member is defined on "flat" (reduced Gaussian) grids.
+    """
+
+    lat, lon = latlons[:, 0], latlons[:, 1]
+    nens = pred.shape[ens_dim]
+    ens_mean, ens_sd = pred.mean(axis=ens_dim), pred.std(axis=ens_dim)
+
+    # ensemble mean
+    scatter_plot(fig, ax[0], pc, lat, lon, truth, title=f"{vname} target")
+    # ensemble mean
+    scatter_plot(fig, ax[1], pc, lat, lon, ens_mean, title=f"{vname} pred mean")
+    # ensemble spread
+    scatter_plot(fig, ax[2], pc, lat, lon, ens_mean - truth, cmap="bwr", title=f"{vname} mean err")
+    # ensemble mean error
+    scatter_plot(fig, ax[3], pc, lat, lon, ens_sd, title=f"{vname} pred sd")
+    # ensemble members (difference from mean)
+    for i_ens in range(nens):
+        scatter_plot(
+            fig,
+            ax[i_ens + 4],
+            pc,
+            lat,
+            lon,
+            np.take(pred, i_ens, axis=ens_dim) - ens_mean,
+            cmap="bwr",
+            title=f"{vname}_{i_ens + 1} - mean",
+        )

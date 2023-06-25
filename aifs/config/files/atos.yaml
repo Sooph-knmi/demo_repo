@@ -2,6 +2,6 @@ training: panguweather-${data.resolution}-1979-2015-6h.zarr
 validation: panguweather-${data.resolution}-2016-2017-6h.zarr
 test: panguweather-${data.resolution}-2016-2017-6h.zarr
 predict: panguweather-${data.resolution}-2016-2017-6h.zarr
-graph: graph_mappings_normed_edge_attrs_rot_${data.resolution}_h3_0_1_2.pt
+graph: graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4_5.pt
 checkpoint: aifs-ckpt-{epoch:02d}-{val_wmse:.4f}
 warm_start: null

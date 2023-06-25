@@ -1,9 +1,11 @@
 from typing import Dict, Any
+
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import Callback
 
 from aifs.utils.logger import get_logger
+from aifs.utils.plots import plot_rank_histogram
 
 LOGGER = get_logger(__name__)
 
@@ -27,23 +29,24 @@ class RolloutEval(Callback):
         metrics = {}
 
         # start rollout
-        x = batch[:, 0 : pl_module.multi_step, ...]  # (bs, multi_step, latlon, nvar)
+        x = batch[:, 0 : pl_module.multi_step, ...]  # (bs, multistep, latlon, nvar)
+        x = torch.stack([x] * pl_module.ensemble_size, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
 
         assert batch.shape[1] >= self.rollout + pl_module.multi_step, "Batch length not sufficient for requested rollout length!"
 
         with torch.no_grad():
             for rstep in range(self.rollout):
-                y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+                y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
                 y = batch[:, pl_module.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
                 # y includes the auxiliary variables, so we must leave those out when computing the loss
-                loss += pl_module.loss(y_pred, y[..., : pl_module.fcdim])
+                loss += pl_module.calculate_kcrps(y_pred, y[..., : pl_module.fcdim])
 
                 x = pl_module.advance_input(x, y, y_pred)
 
                 for mkey, (low, high) in pl_module.metric_ranges.items():
                     y_denorm = pl_module.normalizer.denormalize(y.clone())
-                    y_pred_denorm = pl_module.normalizer.denormalize(x[:, -1, ...].clone())
-                    metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
+                    y_pred_denorm = pl_module.normalizer.denormalize(x[:, :, -1, ...].clone())
+                    metrics[f"{mkey}_{rstep+1}"] = pl_module.metric(y_pred_denorm[..., low:high], y_denorm[..., low:high])
 
             # scale loss
             loss *= 1.0 / self.rollout
@@ -80,3 +83,12 @@ class RolloutEval(Callback):
         del trainer, outputs  # not used
         if batch_idx % self.frequency == 3 and pl_module.global_rank == 0:
             self._eval(pl_module, batch)
+
+
+class RankHistogramPlotCallback(Callback):
+    def on_validation_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        del trainer  # not used
+        assert hasattr(pl_module, "ranks"), "To use this, you must set up a ranks attribute in your pl.LightningModule class!"
+        fig = plot_rank_histogram(pl_module.ranks.compute().cpu().numpy())
+        pl_module.output_figure(fig, tag="ens_rank_hist", exp_log_tag=f"val_rank_hist_{pl_module.global_rank}")
+        pl_module.ranks.reset()
