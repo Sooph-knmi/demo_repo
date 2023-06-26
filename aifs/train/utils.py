@@ -47,6 +47,7 @@ def setup_callbacks(config: DictConfig, timestamp: dt.datetime) -> List:
             filename=config.files.checkpoint,
             monitor="val_wmse",
             verbose=False,
+            save_last=True,
             save_top_k=config.training.save_top_k,
             # save weights, optimizer states, LR-schedule states, hyperparameters etc.
             # https://pytorch-lightning.readthedocs.io/en/stable/common/checkpointing_basic.html#contents-of-a-checkpoint
