@@ -10,9 +10,9 @@ LOGGER = get_logger(__name__)
 
 def get_ranks(truth: torch.Tensor, pred: torch.Tensor):
     """
-        Args:
-            truth: shape (bs, latlon, nvar)
-            pred: shape (bs, nens, latlon, nvar)
+    Args:
+        truth: shape (bs, latlon, nvar)
+        pred: shape (bs, nens, latlon, nvar)
     """
     return torch.count_nonzero(truth[:, None, ...] >= pred, dim=1)  # mask array where truth > pred, count
 
@@ -34,14 +34,14 @@ class RankHistogram(Metric):
 
     def update(self, pred: torch.Tensor, truth: torch.Tensor) -> torch.Tensor:
         """
-            Args:
-                truth: shape (bs, latlon, nvar)
-                pred: shape (bs, nens, §latlon, nvar)
+        Args:
+            truth: shape (bs, latlon, nvar)
+            pred: shape (bs, nens, §latlon, nvar)
         """
         ranks_ = get_ranks(truth, pred).flatten()
         # update the running stats
         # NB: this will calculate a running sum instead of the accumulated totals
-        self.ranks += ranks_.bincount(minlength=self.nens+1)
+        self.ranks += ranks_.bincount(minlength=self.nens + 1)
 
     def compute(self):
         return self.ranks.float() / self.ranks.sum()

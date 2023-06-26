@@ -228,8 +228,6 @@ def plot_predicted_ensemble(
     Returns:
         The figure object handle.
     """
-
-    LOGGER.debug("y_true.shape = %s, y_pred.shape = %s", y_true.shape, y_pred.shape)
     nens = y_pred.shape[0]
     n_plots_x, n_plots_y = _NUM_VARS_TO_PLOT, nens + 4  # we also plot the truth, ensemble mean, mean error and spread
     LOGGER.debug("n_plots_x = %d, n_plots_y = %d", n_plots_x, n_plots_y)
@@ -245,6 +243,24 @@ def plot_predicted_ensemble(
         ax_ = ax[vix, :] if n_plots_x > 1 else ax
         plot_ensemble(fig, ax_, pc, latlons, yt, yp, vname)
 
+    return fig
+
+
+def plot_kcrps(latlons: np.ndarray, pkcrps: np.ndarray) -> Figure:
+    """
+    Plots pointwise KCRPS values
+    latlons: lat/lon coordinates array, shape (lat*lon, 2)
+    pkcrps: array of pointwise kcrps values, shape (nvar, latlon)
+    """
+    LOGGER.debug("latlons.shape = %s, pkcrps.shape = %s", latlons.shape, pkcrps.shape)
+    assert latlons.shape[0] == pkcrps.shape[1], "OOPS - shape mismatch!"
+
+    fig, ax = plt.subplots(1, _NUM_VARS_TO_PLOT, figsize=(_NUM_VARS_TO_PLOT * 4, 3), subplot_kw={"projection": ccrs.PlateCarree()})
+    lat, lon = latlons[:, 0], latlons[:, 1]
+    for vix, idx in enumerate(_IDXVARS_TO_PLOT):
+        vname = _NAM_VARS_TO_PLOT[vix]
+        pkcrps_ = pkcrps[idx, :].squeeze()
+        scatter_plot(fig, ax[vix], ccrs.PlateCarree(), lat, lon, pkcrps_, title=f"{vname} kCRPS")
     return fig
 
 

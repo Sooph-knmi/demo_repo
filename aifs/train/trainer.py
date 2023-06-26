@@ -15,7 +15,7 @@ from aifs.losses.wmse import WeightedMSELoss
 from aifs.losses.kcrps import KernelCRPS
 from aifs.model.msg import GraphMSG
 from aifs.utils.logger import get_logger
-from aifs.utils.plots import init_plot_settings, plot_predicted_ensemble
+from aifs.utils.plots import init_plot_settings, plot_predicted_ensemble, plot_kcrps
 from aifs.train.utils import pl_scaling
 from aifs.metrics.ranks import RankHistogram
 
@@ -105,11 +105,11 @@ class GraphForecaster(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.gnn(x)
 
-    def calculate_kcrps(self, y_pred: torch.Tensor, y_target: torch.Tensor) -> torch.Tensor:
+    def calculate_kcrps(self, y_pred: torch.Tensor, y_target: torch.Tensor, reduce_sum: bool = True) -> torch.Tensor:
         """Rearranges the prediction and ground truth tensors and then computes the KCRPS loss"""
         y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs v latlon e", e=self.ensemble_size)
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
-        return self.kcrps(y_pred, y_target)
+        return self.kcrps(y_pred, y_target, reduce_sum=reduce_sum)
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         # left-shift along the step dimension
@@ -138,6 +138,8 @@ class GraphForecaster(pl.LightningModule):
 
             if plot and self.global_rank == 0:
                 self.plot_sample(batch_idx, rstep, y[..., : self.fcdim], y_pred)
+                pointwise_kcrps = self.calculate_kcrps(y_pred, y[..., : self.fcdim], reduce_sum=False)  # shape (nvar, latlon)
+                self.plot_pointwise_kcrps(batch_idx, rstep, pointwise_kcrps)
 
             x = self.advance_input(x, y, y_pred)
 
@@ -213,6 +215,16 @@ class GraphForecaster(pl.LightningModule):
                 sync_dist=True,
                 rank_zero_only=True,
             )
+
+    def plot_pointwise_kcrps(self, batch_idx: int, rollout_step: int, pkcrps: torch.Tensor) -> None:
+        """pkcrps.shape == (nvar, latlon)"""
+        fig = plot_kcrps(np.rad2deg(self.era_latlons.numpy()), pkcrps.cpu().numpy())
+        fig.tight_layout()
+        self.output_figure(
+            fig,
+            tag=f"gnn_val_ens_kcrps_rstep{rollout_step:02d}_batch{batch_idx:04d}_rank{self.global_rank:02d}",
+            exp_log_tag=f"val_ens_kcrps_rstep{rollout_step:02d}_rank{self.global_rank:02d}",
+        )
 
     def plot_sample(self, batch_idx: int, rollout_step: int, y_true: torch.Tensor, y_pred: torch.Tensor) -> None:
         """Plots a denormalized sample: input, target and prediction."""
