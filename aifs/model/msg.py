@@ -16,11 +16,22 @@ LOGGER = get_logger(__name__)
 
 
 class GraphMSG(nn.Module):
+    """Message passing graph neural network."""
+
     def __init__(
         self,
         config: DictConfig,
         graph_data: HeteroData = None,
     ) -> None:
+        """Initializes the graph neural network.
+
+        Parameters
+        ----------
+        config : DictConfig
+            Job configuration
+        graph_data : HeteroData, optional
+            Graph definition, by default None
+        """
         super().__init__()
 
         # create mappings

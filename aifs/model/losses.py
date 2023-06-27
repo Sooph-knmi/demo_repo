@@ -12,12 +12,14 @@ class WeightedMSELoss(nn.Module):
     """Latitude-weighted MSE loss."""
 
     def __init__(self, area_weights: torch.Tensor, data_variances: Optional[torch.Tensor] = None) -> None:
-        """
-        Latitude- and (inverse-)variance-weighted MSE Loss.
-        Args:
-            area_weights: area weights
-            data_variances: precomputed, per-variable stepwise variance estimate
-                            V_{i,t} = E_{i,t} [ x^{t+1} - x^{t} ] (i = lat/lon index, t = time index, x = predicted variable)
+        """Latitude- and (inverse-)variance-weighted MSE Loss.
+
+        Parameters
+        ----------
+        area_weights : torch.Tensor
+            Weights by area
+        data_variances : Optional[torch.Tensor], optional
+            precomputed, per-variable stepwise variance estimate, by default None
         """
         super().__init__()
 
@@ -28,9 +30,19 @@ class WeightedMSELoss(nn.Module):
     def forward(self, pred: torch.Tensor, target: torch.Tensor, squash=True) -> torch.Tensor:
         """Calculates the lat-weighted MSE loss.
 
-        Args:
-            pred: Prediction tensor, shape (bs, lat*lon, n_outputs)
-            target: Target tensor, shape (bs, lat*lon, n_outputs)
+        Parameters
+        ----------
+        pred : torch.Tensor
+            Prediction tensor, shape (bs, lat*lon, n_outputs)
+        target : torch.Tensor
+            Target tensor, shape (bs, lat*lon, n_outputs)
+        squash : bool, optional
+            Average last dimension, by default True
+
+        Returns
+        -------
+        torch.Tensor
+            Weighted MSE loss
         """
         if hasattr(self, "ivar"):
             if squash:

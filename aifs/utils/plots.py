@@ -1,3 +1,5 @@
+from typing import Optional
+
 import cartopy.crs as ccrs
 import cartopy.feature as cf
 import matplotlib.pyplot as plt
@@ -16,6 +18,7 @@ LOGGER = get_logger(__name__)
 
 
 def init_plot_settings():
+    """Initialize matplotlib plot settings."""
     SMALL_SIZE = 8
     MEDIUM_SIZE = 10
 
@@ -29,7 +32,14 @@ def init_plot_settings():
 
 
 def _hide_axes_ticks(ax) -> None:
-    # hide x/y-axis ticks
+    """Hide x/y-axis ticks.
+
+    Parameters
+    ----------
+    ax : _type_
+        Axes object handle
+    """
+
     plt.setp(ax.get_xticklabels(), visible=False)
     plt.setp(ax.get_yticklabels(), visible=False)
     ax.tick_params(axis="both", which="both", length=0)
@@ -43,6 +53,23 @@ def plot_2d_sample(
     pred: np.ndarray,
     idx: int,
 ) -> None:
+    """Create 2D plots of input, truth, and prediction.
+
+    Parameters
+    ----------
+    fig : _type_
+        Figure object handle
+    ax : _type_
+        Axes object handle
+    input_ : np.ndarray
+        Input data
+    truth : np.ndarray
+        Expected data
+    pred : np.ndarray
+        Predicted data
+    idx : int
+        Sample index
+    """
     cmap = cm.bwr
     cmap.set_bad(color="gray")
 
@@ -84,10 +111,19 @@ def plot_predicted_multilevel_sample(
 ) -> Figure:
     """Plots data for one multilevel sample.
 
-    Args:
-        x, y_true, y_pred: arrays of shape (nvar*level, lat, lon)
-    Returns:
-        The figure object handle.
+    Parameters
+    ----------
+    x : np.ndarray
+        Input data (nvar*level, lat, lon)
+    y_true : np.ndarray
+        Expected data (nvar*level, lat, lon)
+    y_pred : np.ndarray
+        Predicted data (nvar*level, lat, lon)
+
+    Returns
+    -------
+    Figure
+        Figured object handle
     """
     n_plots_x, n_plots_y = y_true.shape[0], _NUM_PLOTS_PER_SAMPLE
 
@@ -110,9 +146,14 @@ def plot_loss(
 ) -> Figure:
     """Plots data for one multilevel sample.
 
-    Args:
-        x arrays of shape (npred,)
-    Returns:
+    Parameters
+    ----------
+    x : np.ndarray
+        Data for Plotting of shape (npred,)
+
+    Returns
+    -------
+    Figure
         The figure object handle.
     """
 
@@ -126,10 +167,6 @@ def plot_loss(
     return fig
 
 
-# ---------------------------------------------------------------
-# NB: this can be very slow for large data arrays
-# call it as infrequently as possible!
-# ---------------------------------------------------------------
 def plot_predicted_multilevel_flat_sample(
     latlons: np.ndarray,
     x: np.ndarray,
@@ -138,10 +175,23 @@ def plot_predicted_multilevel_flat_sample(
 ) -> Figure:
     """Plots data for one multilevel latlon-"flat" sample.
 
-    Args:
-        latlons: lat/lon coordinates array, shape (lat*lon, 2)
-        x, y_true, y_pred: arrays of shape (lat*lon, nvar*level)
-    Returns:
+    NB: this can be very slow for large data arrays
+    call it as infrequently as possible!
+
+    Parameters
+    ----------
+    latlons : np.ndarray
+        lat/lon coordinates array, shape (lat*lon, 2)
+    x : np.ndarray
+        Input data of shape (lat*lon, nvar*level)
+    y_true : np.ndarray
+        Expected data of shape (lat*lon, nvar*level)
+    y_pred : np.ndarray
+        Predicted data of shape (lat*lon, nvar*level)
+
+    Returns
+    -------
+    Figure
         The figure object handle.
     """
     n_plots_x, n_plots_y = _NUM_VARS_TO_PLOT, _NUM_PLOTS_PER_SAMPLE
@@ -172,7 +222,29 @@ def plot_flat_sample(
     pred: np.ndarray,
     vname: str,
 ) -> None:
-    """Use this with `flat` (1D) samples, e.g. data on non-rectangular (reduced Gaussian) grids."""
+    """Plot a "flat" 1D sample.
+
+    Data on non-rectangular (reduced Gaussian) grids.
+
+    Parameters
+    ----------
+    fig : _type_
+        Figure object handle
+    ax : _type_
+        Axis object handle
+    pc : _type_
+        CRS, eg. ccrs.PlateCarreee
+    latlons : np.ndarray
+        lat/lon coordinates array, shape (lat*lon, 2)
+    input_ : np.ndarray
+        Input data of shape (lat*lon,)
+    truth : np.ndarray
+        Expected data of shape (lat*lon,)
+    pred : np.ndarray
+        Predicted data of shape (lat*lon,)
+    vname : str
+        Variable name
+    """
 
     lat, lon = latlons[:, 0], latlons[:, 1]
 
@@ -184,15 +256,37 @@ def plot_flat_sample(
     scatter_plot(fig, ax[5], pc, lat, lon, truth - input_, cmap="bwr", title=f"{vname} persist err")
 
 
-def scatter_plot(fig, ax, pc, lat, lon, x, cmap="viridis", title=None) -> None:
-    """Lat-lon scatter plot: can work with arbitrary grids."""
+def scatter_plot(
+    fig, ax, pc, lat: np.array, lon: np.array, data: np.array, cmap: str = "viridis", title: Optional[None, str] = None
+) -> None:
+    """Lat-lon scatter plot: can work with arbitrary grids.
+
+    Parameters
+    ----------
+    fig : _type_
+        Figure object handle
+    ax : _type_
+        Axis object handle
+    pc : _type_
+        CRS, eg. ccrs.PlateCarreee
+    lat : _type_
+        Latitudes
+    lon : _type_
+        Longitudes
+    data : _type_
+        Data to plot
+    cmap : str, optional
+        Colormap string from matplotlib, by default "viridis"
+    title : _type_, optional
+        Title for plot, by default None
+    """
     ax.set_global()
     ax.add_feature(cf.COASTLINE, edgecolor="black", linewidth=0.5)
 
     psc = ax.scatter(
         x=lon,
         y=lat,
-        c=x,
+        c=data,
         cmap=cmap,
         s=1,
         alpha=1.0,

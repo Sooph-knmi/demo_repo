@@ -18,7 +18,16 @@ LOGGER = get_logger(__name__)
 
 
 class ERA5DataModule(pl.LightningDataModule):
+    """ERA5 data module for PyTorch Lightning."""
+
     def __init__(self, config: DictConfig) -> None:
+        """Initialize ERA5 data module.
+
+        Parameters
+        ----------
+        config : DictConfig
+            Job configuration
+        """
         super().__init__()
         self.bs_train = config.dataloader.batch_size.training
         self.bs_val = config.dataloader.batch_size.validation
@@ -89,7 +98,16 @@ class ERA5DataModule(pl.LightningDataModule):
 
 
 class ERA5TestDataModule(pl.LightningDataModule):
+    """ERA5 data test module for PyTorch Lightning."""
+
     def __init__(self, config: DictConfig) -> None:
+        """Initialize ERA5 data test module.
+
+        Parameters
+        ----------
+        config : DictConfig
+            Job configuration
+        """
         super().__init__()
         self.bs_test = config.dataloader.batch_size.test
         self.num_workers_test = config.dataloader.num_workers.test

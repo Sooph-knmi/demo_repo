@@ -18,8 +18,7 @@ LOGGER = get_logger(__name__, debug=False)
 
 
 class ERA5NativeGridDataset(IterableDataset):
-    """Iterable dataset for ERA5 2D + 3D data on the native (reduced-Gaussian)
-    grid."""
+    """Iterable dataset for ERA5 2D + 3D data on the native (reduced-Gaussian) grid."""
 
     def __init__(
         self,
@@ -32,16 +31,31 @@ class ERA5NativeGridDataset(IterableDataset):
         world_size: int = 1,
         shuffle: bool = True,
     ) -> None:
-        """
-        Initialize (part of) the dataset state.
-        Args:
-            fname / 3d: zarr file name with 2D / 3D data
-            era_[2d|3d]_data_reader: user function that opens and returns the zarr array data
-            lead_time: lead time (multiple of 6 hours!)
-            rollout: length of rollout window (Keisler, 2021)
-            multistep: collate (t-1, ... t - multistep) into the input state vector,
-            rank: process rank in the torch.distributed context (important when running on multiple GPUs)
-            world_size: total number of processes (nodes * GPUs_per_node) in the torch.distributed context
+        """Initialize (part of) the dataset state.
+
+        Parameters
+        ----------
+        fname : str
+            zarr file name with 2D / 3D data
+        era_data_reader : Callable
+            user function that opens and returns the zarr array data
+        lead_time : int, optional
+            lead time (multiple of 6 hours!), by default 6
+        rollout : int, optional
+            length of rollout window (Keisler, 2021), by default 4
+        multistep : int, optional
+            collate (t-1, ... t - multistep) into the input state vector,, by default 1
+        rank : int, optional
+            process rank in the torch.distributed context (important when running on multiple GPUs), by default 0
+        world_size : int, optional
+            total number of processes (nodes * GPUs_per_node) in the torch.distributed context, by default 1
+        shuffle : bool, optional
+            Shuffle batches, by default True
+
+        Raises
+        ------
+        RuntimeError
+            Multistep value cannot be negative.
         """
         self.fname = fname
         self.ds: Optional[Array] = None
@@ -84,8 +98,18 @@ class ERA5NativeGridDataset(IterableDataset):
             raise RuntimeError
 
     def per_worker_init(self, n_workers: int, worker_id: int) -> None:
-        """Called by worker_init_func on each copy of WeatherBenchDataset after
-        the worker process has been spawned."""
+        """Called by worker_init_func on each copy of WeatherBenchDataset.
+
+        This initialises after the worker process has been spawned.
+
+        Parameters
+        ----------
+        n_workers : int
+            Number of workers
+        worker_id : int
+            Worker ID
+        """
+
         if self.ds is None:
             self.ds = self._read_era(self.fname)
 
@@ -152,8 +176,20 @@ class ERA5NativeGridDataset(IterableDataset):
 
 
 def worker_init_func(worker_id: int) -> None:
-    """Configures each dataset worker process by calling
-    WeatherBenchDataset.per_worker_init()."""
+    """Configures each dataset worker process.
+
+    Calls WeatherBenchDataset.per_worker_init() on each dataset object.
+
+    Parameters
+    ----------
+    worker_id : int
+        Worker ID
+
+    Raises
+    ------
+    RuntimeError
+        If worker_info is None
+    """
     worker_info = get_worker_info()  # information specific to each worker process
     if worker_info is None:
         LOGGER.error("worker_info is None! Set num_workers > 0 in your dataloader!")

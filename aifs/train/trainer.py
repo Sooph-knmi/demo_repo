@@ -26,11 +26,22 @@ LOGGER = get_logger(__name__)
 
 
 class GraphForecaster(pl.LightningModule):
+    """Graph neural network forecaster for PyTorch Lightning."""
+
     def __init__(
         self,
         metadata: Dict,
         config: DictConfig,
     ) -> None:
+        """Initialize graph neural network forecaster.
+
+        Parameters
+        ----------
+        metadata : Dict
+            Zarr metadata
+        config : DictConfig
+            Job configuration
+        """
         super().__init__()
 
         self.fcdim = config.data.num_features - config.data.num_aux_features

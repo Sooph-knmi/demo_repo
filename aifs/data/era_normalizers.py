@@ -26,7 +26,16 @@ MAX_NORMALIZE = ["sdor", "slor", "z"]
 
 
 class InputNormalizer(nn.Module):
+    """Normalizes input data to zero mean and unit variance."""
+
     def __init__(self, zarr_metadata: Dict) -> None:
+        """Initialize the normalizer.
+
+        Parameters
+        ----------
+        zarr_metadata : Dict
+            Zarr metadata dictionary
+        """
         super().__init__()
         self._zarr_metadata = zarr_metadata
 

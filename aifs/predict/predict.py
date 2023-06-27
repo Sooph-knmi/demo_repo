@@ -139,8 +139,10 @@ LOGGER = get_logger(__name__)
 def predict(config: DictConfig) -> None:
     """Predict entry point.
 
-    Args:
-        config: job configuration
+    Parameters
+    ----------
+    config : DictConfig
+        Job Configuration
     """
 
     torch.set_float32_matmul_precision("high")

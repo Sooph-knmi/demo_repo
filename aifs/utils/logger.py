@@ -8,11 +8,17 @@ def get_logger(name: str, debug: bool = True) -> logging.Logger:
 
     We use ISO8601 timestamps and UTC times.
 
-    Args:
-        name : name of logger object
-        debug : if True: set logging level to logging.DEBUG; else set to logging.INFO
-    Returns:
-        The logger object.
+    Parameters
+    ----------
+    name : str
+        Name of logger object
+    debug : bool, optional
+        set logging level to logging.DEBUG; else set to logging.INFO, by default True
+
+    Returns
+    -------
+    logging.Logger
+        Logger object
     """
     # create logger object
     logger = logging.getLogger(name=name)

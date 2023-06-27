@@ -17,10 +17,12 @@ LOGGER = get_logger(__name__)
 
 
 def train(config: DictConfig) -> None:
-    """Train entry point.
+    """Training entry point.
 
-    Args:
-        config: job configuration
+    Parameters
+    ----------
+    config : DictConfig
+        Job configuration
     """
     torch.set_float32_matmul_precision("high")
 

@@ -1,4 +1,3 @@
-import datetime as dt
 import os
 from typing import List
 
@@ -12,16 +11,27 @@ from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAv
 from aifs.train.callbacks import RolloutEval
 from aifs.utils.logger import get_logger
 
-# from aifs.utils.config import YAMLConfig
-
 LOGGER = get_logger(__name__)
 
 
 def pl_scaling(plev):
+    """Convert pressure levels to PyTorch Lightning scaling."""
     return np.array(plev) / 1000
 
 
 def setup_wandb_logger(config: DictConfig):
+    """Setup Weights & Biases experiment logger.
+
+    Parameters
+    ----------
+    config : DictConfig
+        Job configuration
+
+    Returns
+    -------
+    _type_
+        Logger object or False
+    """
     if config.diagnostics.logging.wandb:
         from pytorch_lightning.loggers.wandb import WandbLogger
 
@@ -37,7 +47,21 @@ def setup_wandb_logger(config: DictConfig):
     return False
 
 
-def setup_callbacks(config: DictConfig, timestamp: dt.datetime) -> List:
+def setup_callbacks(config: DictConfig, timestamp: str) -> List:
+    """Setup callbacks for PyTorch Lightning trainer.
+
+    Parameters
+    ----------
+    config : DictConfig
+        Job configuration
+    timestamp : str
+        Timestamp of the job
+
+    Returns
+    -------
+    List
+        _description_
+    """
     trainer_callbacks = [
         # EarlyStopping(monitor="val_wmse", min_delta=0.0, patience=7, verbose=False, mode="min"),
         ModelCheckpoint(
