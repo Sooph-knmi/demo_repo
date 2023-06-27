@@ -4,8 +4,7 @@ _ERA_PLEV = 13
 _ERA_O160_LATLON = 108160
 _ERA_O96_LATLON = 40320
 
-# ... other stuff
-_DL_PREFETCH_FACTOR = 2
+
 
 # plotting
 _IDXVARS_TO_PLOT = [10, 23, 36, 49, 75, 83, 81, 82, 79]
