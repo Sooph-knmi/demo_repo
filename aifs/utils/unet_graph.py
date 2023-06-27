@@ -1,16 +1,13 @@
 #!/usr/bin/env python
-# coding: utf-8
-
-from typing import Tuple, List
-
 import os
-import xarray as xr
-import numpy as np
+from typing import List
+from typing import Tuple
 
+import numpy as np
+import torch
+import xarray as xr
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import normalize
-
-import torch
 from torch_geometric.data import HeteroData
 
 from aifs.utils.logger import get_logger

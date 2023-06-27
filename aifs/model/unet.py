@@ -1,4 +1,4 @@
-from typing import Optional, Any, Dict
+from typing import Optional
 
 import einops
 import numpy as np
@@ -6,7 +6,8 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
 
-from aifs.model.layers import TransformerMapper, GATEncoder
+from aifs.model.layers import GATEncoder
+from aifs.model.layers import TransformerMapper
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -14,6 +15,8 @@ GRID_NAMES = ["o160", "o80", "o48", "o32"]
 
 
 class GraphUNet(nn.Module):
+    """Graph UNet model."""
+
     def __init__(
         self,
         multigraph_data: HeteroData,
@@ -28,6 +31,33 @@ class GraphUNet(nn.Module):
         encoder_jk_mode: Optional[str] = "last",
         use_dynamic_context: bool = True,
     ) -> None:
+        """Initialize the model.
+
+        Parameters
+        ----------
+        multigraph_data : HeteroData
+            Graph definition
+        in_channels : int
+            Number of input channels
+        aux_in_channels : int
+            Number of auxiliary input channels
+        encoder_num_layers : int
+            Number of encoder layers
+        encoder_hidden_channels : int
+            Number of encoder hidden channels
+        encoder_out_channels : int
+            Number of encoder output channels
+        encoder_num_heads : int, optional
+            Number of transformer heads in encoder, by default 2
+        encoder_dropout : float, optional
+            Dropout probability in encoder, by default 0.0
+        encoder_activation : Optional[str], optional
+            Activation function in encoder, by default "gelu"
+        encoder_jk_mode : Optional[str], optional
+            Jumping Knowledge mode in encoder (None, "last", "cat", "max", "lstm"), by default "last"
+        use_dynamic_context : bool, optional
+            Use dynamic context in TransformerMapper, by default True
+        """
         super().__init__()
 
         LOGGER.debug("self.in_channels + self.aux_channels == %d", in_channels + aux_in_channels)

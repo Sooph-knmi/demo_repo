@@ -1,6 +1,8 @@
-from typing import Dict, Any
-import torch
+from typing import Any
+from typing import Dict
+
 import pytorch_lightning as pl
+import torch
 from pytorch_lightning.callbacks import Callback
 
 from aifs.utils.logger import get_logger
@@ -9,11 +11,24 @@ LOGGER = get_logger(__name__)
 
 
 class RolloutEval(Callback):
-    """Evaluates the model performance over a (longer) rollout window"""
+    """Evaluates the model performance over a (longer) rollout window."""
 
     def __init__(self, rollout: int = 12, frequency: int = 20) -> None:
+        """Initialize RolloutEval callback.
+
+        Parameters
+        ----------
+        rollout : int, optional
+            Number of timesteps to roll out, by default 12
+        frequency : int, optional
+            Frequency of rollout evaluation, in terms of number of batches, by default 20
+        """
         super().__init__()
-        LOGGER.debug("Setting up RolloutEval callback with rollout = %d, frequency = %d ...", rollout, frequency)
+        LOGGER.debug(
+            "Setting up RolloutEval callback with rollout = %d, frequency = %d ...",
+            rollout,
+            frequency,
+        )
         self.rollout = rollout
         self.frequency = frequency
 
@@ -75,7 +90,12 @@ class RolloutEval(Callback):
             )
 
     def on_validation_batch_end(
-        self, trainer: pl.Trainer, pl_module: pl.LightningModule, outputs: Any, batch: torch.Tensor, batch_idx: int
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        outputs: Any,
+        batch: torch.Tensor,
+        batch_idx: int,
     ) -> None:
         del trainer, outputs  # not used
         if batch_idx % self.frequency == 3 and pl_module.global_rank == 0:

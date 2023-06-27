@@ -1,23 +1,24 @@
 import os
-from typing import Callable, Optional
+import re
+from typing import Callable
+from typing import Optional
 
 import numpy as np
 import torch
 from einops import rearrange
-from torch.utils.data import IterableDataset, get_worker_info
+from torch.utils.data import get_worker_info
+from torch.utils.data import IterableDataset
 from zarr.core import Array
-import re
 
-from aifs.utils.constants import _DL_PREFETCH_FACTOR, _ERA_PLEV
+from aifs.utils.constants import _DL_PREFETCH_FACTOR
+from aifs.utils.constants import _ERA_PLEV
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__, debug=False)
 
 
 class ERA5NativeGridDataset(IterableDataset):
-    """
-    Iterable dataset for ERA5 2D + 3D data on the native (reduced-Gaussian) grid.
-    """
+    """Iterable dataset for ERA5 2D + 3D data on the native (reduced-Gaussian) grid."""
 
     def __init__(
         self,
@@ -30,23 +31,38 @@ class ERA5NativeGridDataset(IterableDataset):
         world_size: int = 1,
         shuffle: bool = True,
     ) -> None:
-        """
-        Initialize (part of) the dataset state.
-        Args:
-            fname / 3d: zarr file name with 2D / 3D data
-            era_[2d|3d]_data_reader: user function that opens and returns the zarr array data
-            lead_time: lead time (multiple of 6 hours!)
-            rollout: length of rollout window (Keisler, 2021)
-            multistep: collate (t-1, ... t - multistep) into the input state vector,
-            rank: process rank in the torch.distributed context (important when running on multiple GPUs)
-            world_size: total number of processes (nodes * GPUs_per_node) in the torch.distributed context
+        """Initialize (part of) the dataset state.
+
+        Parameters
+        ----------
+        fname : str
+            zarr file name with 2D / 3D data
+        era_data_reader : Callable
+            user function that opens and returns the zarr array data
+        lead_time : int, optional
+            lead time (multiple of 6 hours!), by default 6
+        rollout : int, optional
+            length of rollout window (Keisler, 2021), by default 4
+        multistep : int, optional
+            collate (t-1, ... t - multistep) into the input state vector,, by default 1
+        rank : int, optional
+            process rank in the torch.distributed context (important when running on multiple GPUs), by default 0
+        world_size : int, optional
+            total number of processes (nodes * GPUs_per_node) in the torch.distributed context, by default 1
+        shuffle : bool, optional
+            Shuffle batches, by default True
+
+        Raises
+        ------
+        RuntimeError
+            Multistep value cannot be negative.
         """
         self.fname = fname
         self.ds: Optional[Array] = None
 
         self.lead_time = lead_time
         # Data_step should be stored in meta-data of file
-        self.data_step = int(re.findall("\d+", self.fname)[-1])
+        self.data_step = int(re.findall(r"\d+", self.fname)[-1])
         assert self.data_step == 6 or self.data_step == 1, f"Data step detected as {self.data_step}, only 1 and 6 are supported"
         assert self.lead_time > 0 and self.lead_time % self.data_step == 0, f"Lead time must be multiple of {self.data_step} hours"
         self.lead_step = lead_time // self.data_step
@@ -75,11 +91,25 @@ class ERA5NativeGridDataset(IterableDataset):
 
         self.multi_step = multistep
         if self.multi_step <= 0:
-            LOGGER.error("Multistep value invalid %d - check your configuration file!", self.multi_step)
+            LOGGER.error(
+                "Multistep value invalid %d - check your configuration file!",
+                self.multi_step,
+            )
             raise RuntimeError
 
     def per_worker_init(self, n_workers: int, worker_id: int) -> None:
-        """Called by worker_init_func on each copy of WeatherBenchDataset after the worker process has been spawned."""
+        """Called by worker_init_func on each copy of WeatherBenchDataset.
+
+        This initialises after the worker process has been spawned.
+
+        Parameters
+        ----------
+        n_workers : int
+            Number of workers
+        worker_id : int
+            Worker ID
+        """
+
         if self.ds is None:
             self.ds = self._read_era(self.fname)
 
@@ -112,7 +142,10 @@ class ERA5NativeGridDataset(IterableDataset):
             shuffled_chunk_indices = self.chunk_index_range
 
         for i in shuffled_chunk_indices:
-            start, end = i - (self.multi_step - 1) * self.lead_step, i + (self.rollout + 1) * self.lead_step
+            start, end = (
+                i - (self.multi_step - 1) * self.lead_step,
+                i + (self.rollout + 1) * self.lead_step,
+            )
             LOGGER.debug(
                 "Worker PID %d serving device %d selected start-end range [%i, %i] with stride lead_step = %i",
                 os.getpid(),
@@ -124,7 +157,12 @@ class ERA5NativeGridDataset(IterableDataset):
 
             X = self.ds[start : end : self.lead_step]
             X = rearrange(X, "r var latlon -> r latlon var")
-            LOGGER.debug("Worker PID %d serving device %d produced a sample of size %s", os.getpid(), self.rank, X.shape)
+            LOGGER.debug(
+                "Worker PID %d serving device %d produced a sample of size %s",
+                os.getpid(),
+                self.rank,
+                X.shape,
+            )
             yield torch.from_numpy(X)
 
     def __repr__(self) -> str:
@@ -138,7 +176,20 @@ class ERA5NativeGridDataset(IterableDataset):
 
 
 def worker_init_func(worker_id: int) -> None:
-    """Configures each dataset worker process by calling WeatherBenchDataset.per_worker_init()."""
+    """Configures each dataset worker process.
+
+    Calls WeatherBenchDataset.per_worker_init() on each dataset object.
+
+    Parameters
+    ----------
+    worker_id : int
+        Worker ID
+
+    Raises
+    ------
+    RuntimeError
+        If worker_info is None
+    """
     worker_info = get_worker_info()  # information specific to each worker process
     if worker_info is None:
         LOGGER.error("worker_info is None! Set num_workers > 0 in your dataloader!")
@@ -163,8 +214,8 @@ if __name__ == "__main__":
     def _get_data_filename(stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation]
         return os.path.join(
-            self.config.hardware.paths[stage],
-            self.config.hardware.files[stage],
+            config.hardware.paths[stage],
+            config.hardware.files[stage],
         )
 
     era5_ds = ERA5NativeGridDataset(

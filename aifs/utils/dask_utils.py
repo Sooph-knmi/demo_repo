@@ -1,11 +1,14 @@
 import ctypes
+
 import dask
 
 
 def trim_dask_worker_memory() -> int:
-    """
-    Manually trim Dask worker memory. This will forcefully release allocated but unutilized memory.
+    """Manually trim Dask worker memory.
+
+    This will forcefully release allocated but unutilized memory.
     This may help reduce total memory used per worker.
+
     See:
         https://distributed.dask.org/en/stable/worker-memory.html
     and

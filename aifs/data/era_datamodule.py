@@ -1,26 +1,33 @@
-from typing import Optional
 import os
+from typing import Optional
 
 import pytorch_lightning as pl
 import zarr
+from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
-from aifs.data.era_dataset import ERA5NativeGridDataset, worker_init_func
+from aifs.data.era_dataset import ERA5NativeGridDataset
+from aifs.data.era_dataset import worker_init_func
 from aifs.data.era_readers import read_era_data
-
-# from aifs.utils.config import DictConfig
 from aifs.utils.constants import _DL_PREFETCH_FACTOR
 from aifs.utils.logger import get_logger
 
-
-from omegaconf import DictConfig
-import hydra
+# from aifs.utils.config import DictConfig
 
 LOGGER = get_logger(__name__)
 
 
 class ERA5DataModule(pl.LightningDataModule):
+    """ERA5 data module for PyTorch Lightning."""
+
     def __init__(self, config: DictConfig) -> None:
+        """Initialize ERA5 data module.
+
+        Parameters
+        ----------
+        config : DictConfig
+            Job configuration
+        """
         super().__init__()
         self.bs_train = config.dataloader.batch_size.training
         self.bs_val = config.dataloader.batch_size.validation
@@ -91,7 +98,16 @@ class ERA5DataModule(pl.LightningDataModule):
 
 
 class ERA5TestDataModule(pl.LightningDataModule):
+    """ERA5 data test module for PyTorch Lightning."""
+
     def __init__(self, config: DictConfig) -> None:
+        """Initialize ERA5 data test module.
+
+        Parameters
+        ----------
+        config : DictConfig
+            Job configuration
+        """
         super().__init__()
         self.bs_test = config.dataloader.batch_size.test
         self.num_workers_test = config.dataloader.num_workers.test

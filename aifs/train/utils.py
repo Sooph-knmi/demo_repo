@@ -1,28 +1,37 @@
-import argparse
-import datetime as dt
 import os
 from typing import List
 
 import numpy as np
+from omegaconf import DictConfig
+from omegaconf import OmegaConf
 from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAveraging
 
 from aifs.train.callbacks import RolloutEval
-
-# from aifs.utils.config import YAMLConfig
 from aifs.utils.logger import get_logger
-
-from omegaconf import OmegaConf, DictConfig
 
 LOGGER = get_logger(__name__)
 
 
 def pl_scaling(plev):
+    """Convert pressure levels to PyTorch Lightning scaling."""
     return np.array(plev) / 1000
 
 
 def setup_wandb_logger(config: DictConfig):
+    """Setup Weights & Biases experiment logger.
+
+    Parameters
+    ----------
+    config : DictConfig
+        Job configuration
+
+    Returns
+    -------
+    _type_
+        Logger object or False
+    """
     if config.diagnostics.logging.wandb:
         from pytorch_lightning.loggers.wandb import WandbLogger
 
@@ -38,7 +47,21 @@ def setup_wandb_logger(config: DictConfig):
     return False
 
 
-def setup_callbacks(config: DictConfig, timestamp: dt.datetime) -> List:
+def setup_callbacks(config: DictConfig, timestamp: str) -> List:
+    """Setup callbacks for PyTorch Lightning trainer.
+
+    Parameters
+    ----------
+    config : DictConfig
+        Job configuration
+    timestamp : str
+        Timestamp of the job
+
+    Returns
+    -------
+    List
+        _description_
+    """
     trainer_callbacks = [
         # EarlyStopping(monitor="val_wmse", min_delta=0.0, patience=7, verbose=False, mode="min"),
         ModelCheckpoint(
@@ -73,7 +96,10 @@ def setup_callbacks(config: DictConfig, timestamp: dt.datetime) -> List:
         trainer_callbacks.append(
             StochasticWeightAveraging(
                 swa_lrs=config.training.swa.lr,
-                swa_epoch_start=min(int(0.75 * config.training.max_epochs), config.training.max_epochs - 1),
+                swa_epoch_start=min(
+                    int(0.75 * config.training.max_epochs),
+                    config.training.max_epochs - 1,
+                ),
                 annealing_epochs=max(int(0.25 * config.training.max_epochs), 1),
                 annealing_strategy="cos",
                 # TODO: do we want the averaging to happen on the CPU, to save memory?

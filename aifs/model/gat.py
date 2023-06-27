@@ -1,4 +1,4 @@
-from typing import Optional, Any, Dict
+from typing import Optional
 
 import einops
 import numpy as np
@@ -6,13 +6,16 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
 
-from aifs.model.layers import TransformerMapper, GATEncoder
+from aifs.model.layers import GATEncoder
+from aifs.model.layers import TransformerMapper
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
 
 class GraphTransformer(nn.Module):
+    """Graph Transformer model."""
+
     def __init__(
         self,
         graph_data: HeteroData,
@@ -27,6 +30,33 @@ class GraphTransformer(nn.Module):
         encoder_jk_mode: Optional[str] = "last",
         use_dynamic_context: bool = True,
     ) -> None:
+        """Initialize the model.
+
+        Parameters
+        ----------
+        graph_data : HeteroData
+            Graph definition
+        in_channels : int
+            Number of input channels
+        aux_in_channels : int
+            Number of auxiliary input channels
+        encoder_num_layers : int
+            Number of encoder layers
+        encoder_hidden_channels : int
+            Number of encoder hidden channels
+        encoder_out_channels : int
+            Number of encoder output channels
+        encoder_num_heads : int, optional
+            Number of transformer heads in encoder, by default 2
+        encoder_dropout : float, optional
+            Dropout probability in encoder, by default 0.0
+        encoder_activation : Optional[str], optional
+            Activation function in encoder, by default "gelu"
+        encoder_jk_mode : Optional[str], optional
+            Jumping Knowledge mode (None, "last", "cat", "max", "lstm") in encoder, by default "last"
+        use_dynamic_context : bool, optional
+            Use dynamic context, by default True
+        """
         super().__init__()
 
         LOGGER.debug("self.in_channels + self.aux_channels == %d", in_channels + aux_in_channels)
@@ -50,13 +80,19 @@ class GraphTransformer(nn.Module):
         self._h_size = self._graph_data[("h", "to", "h")].hcoords_rad.shape[0]
 
         self.register_buffer(
-            "_e2h_edge_inc", torch.from_numpy(np.asarray([[self._era_size], [self._h_size]], dtype=np.int64)), persistent=False
+            "_e2h_edge_inc",
+            torch.from_numpy(np.asarray([[self._era_size], [self._h_size]], dtype=np.int64)),
+            persistent=False,
         )
         self.register_buffer(
-            "_h2e_edge_inc", torch.from_numpy(np.asarray([[self._h_size], [self._era_size]], dtype=np.int64)), persistent=False
+            "_h2e_edge_inc",
+            torch.from_numpy(np.asarray([[self._h_size], [self._era_size]], dtype=np.int64)),
+            persistent=False,
         )
         self.register_buffer(
-            "_h2h_edge_inc", torch.from_numpy(np.asarray([[self._h_size], [self._h_size]], dtype=np.int64)), persistent=False
+            "_h2h_edge_inc",
+            torch.from_numpy(np.asarray([[self._h_size], [self._h_size]], dtype=np.int64)),
+            persistent=False,
         )
 
         self.register_buffer(

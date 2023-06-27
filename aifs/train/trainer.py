@@ -1,35 +1,47 @@
 import os
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict
+from typing import Mapping
+from typing import Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pytorch_lightning as pl
 import torch
-import wandb
-from torch_geometric.data import HeteroData
-
 from omegaconf import DictConfig
-import hydra
-
-# from torch.autograd.graph import save_on_cpu
 from timm.scheduler import CosineLRScheduler
 
+import wandb
 from aifs.data.era_normalizers import InputNormalizer
 from aifs.model.losses import WeightedMSELoss
 from aifs.model.msg import GraphMSG
-from aifs.utils.logger import get_logger
-from aifs.utils.plots import init_plot_settings, plot_loss, plot_predicted_multilevel_flat_sample
 from aifs.train.utils import pl_scaling
+from aifs.utils.logger import get_logger
+from aifs.utils.plots import init_plot_settings
+from aifs.utils.plots import plot_loss
+from aifs.utils.plots import plot_predicted_multilevel_flat_sample
+
+# from torch.autograd.graph import save_on_cpu
 
 LOGGER = get_logger(__name__)
 
 
 class GraphForecaster(pl.LightningModule):
+    """Graph neural network forecaster for PyTorch Lightning."""
+
     def __init__(
         self,
         metadata: Dict,
         config: DictConfig,
     ) -> None:
+        """Initialize graph neural network forecaster.
+
+        Parameters
+        ----------
+        metadata : Dict
+            Zarr metadata
+        config : DictConfig
+            Job configuration
+        """
         super().__init__()
 
         self.fcdim = config.data.num_features - config.data.num_aux_features
@@ -110,7 +122,11 @@ class GraphForecaster(pl.LightningModule):
         return x
 
     def _step(
-        self, batch: torch.Tensor, batch_idx: int, compute_metrics: bool = False, plot: bool = False
+        self,
+        batch: torch.Tensor,
+        batch_idx: int,
+        compute_metrics: bool = False,
+        plot: bool = False,
     ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
         batch = self.normalizer(batch)  # normalized in-place
@@ -128,7 +144,13 @@ class GraphForecaster(pl.LightningModule):
 
             if plot and self.global_rank == 0:
                 self._plot_loss(y_pred, y[..., : self.fcdim], rollout_step=rstep)
-                self._plot_sample(batch_idx, rstep, x[:, -1, :, : self.fcdim], y[..., : self.fcdim], y_pred)
+                self._plot_sample(
+                    batch_idx,
+                    rstep,
+                    x[:, -1, :, : self.fcdim],
+                    y[..., : self.fcdim],
+                    y_pred,
+                )
 
             x = self.advance_input(x, y, y_pred)
 

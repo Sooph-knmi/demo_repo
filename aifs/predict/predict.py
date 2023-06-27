@@ -1,16 +1,17 @@
-import datetime as dt
 import os
 
+import hydra
 import numpy as np
 import pytorch_lightning as pl
 import torch
+from omegaconf import DictConfig
 
 from aifs.data.era_datamodule import ERA5TestDataModule
 from aifs.train.trainer import GraphForecaster
-from aifs.train.utils import get_args, setup_wandb_logger
+from aifs.train.utils import setup_wandb_logger
+from aifs.utils.logger import get_logger
 
 # from aifs.utils.config import YAMLConfig
-from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
@@ -135,13 +136,15 @@ LOGGER = get_logger(__name__)
 #     return predictions
 
 
-def predict(config: YAMLConfig) -> None:
+def predict(config: DictConfig) -> None:
+    """Predict entry point.
+
+    Parameters
+    ----------
+    config : DictConfig
+        Job Configuration
     """
-    Predict entry point.
-    Args:
-        config: job configuration
-    """
-    timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M")
+
     torch.set_float32_matmul_precision("high")
 
     # create data module (data loaders and data sets)
@@ -200,8 +203,16 @@ def predict(config: YAMLConfig) -> None:
 
     # len(predictions_) = num-predict-batches, predictions_[0].shape = (batch_size, latlon, nvar, rollout)
     # len(sample_idx_) = num-predict-batches, sample_idx_[0].shape = (batch_size, )
-    LOGGER.debug("len(predictions_) = %d, predictions_[0].shape = %s", len(predictions_), predictions_[0].shape)
-    LOGGER.debug("len(sample_idx_) = %d, sample_idx_[0].shape = %s", len(sample_idx_), sample_idx_[0].shape)
+    LOGGER.debug(
+        "len(predictions_) = %d, predictions_[0].shape = %s",
+        len(predictions_),
+        predictions_[0].shape,
+    )
+    LOGGER.debug(
+        "len(sample_idx_) = %d, sample_idx_[0].shape = %s",
+        len(sample_idx_),
+        sample_idx_[0].shape,
+    )
 
     # predictions.shape = (batch_size * num-predict-batches, latlon, nvar, rollout)
     # sample_idx.shape = (batch_size * num-predict-batches, )
@@ -231,8 +242,7 @@ def predict(config: YAMLConfig) -> None:
     LOGGER.debug("---- DONE. ----")
 
 
-def main() -> None:
+@hydra.main(version_base=None, config_path="../config", config_name="config")
+def main(config: DictConfig) -> None:
     """Entry point for inference."""
-    args = get_args()
-    config = YAMLConfig(args.config)
     predict(config)

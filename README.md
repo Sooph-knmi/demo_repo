@@ -4,15 +4,15 @@ GNN for for weather prediction trained on the ERA5 dataset
 
 ## Pre-commit Etiquette
 
-Until we've set up pre-commit hooks, please auto-format your code using `black` _before_ committing changes. Just run `make black` in this folder:
+We are using pre-commit hooks. You can find the config in `.pre-commit-config.yaml`, which automatically format new code and check with tools like `black` and `flake8`.
 
-```shell
-$> cd <... your local clone dir ...> 
-$> make black
-find . -type f -name "*.py" | xargs black -l 132
-All done!
-27 files left unchanged.
+When you first set up this repo, run:
+
 ```
+pre-commit install
+```
+
+To enable these code formatters.
 
 **Please don't push changes directly to `master`**. Instead, PR changes from your own branch into `origin/master` so they get peer-reviewed.
 
@@ -22,7 +22,5 @@ All done!
 $> cd <... your local clone dir ...>
 $> pip install -e .
 # this creates entry points for training and prediction
-# see aifs/config/atos.yaml for an example o160 input configuration
-$> aifs-train --config <path-to-config-file>
+$> aifs-train
 ```
-
