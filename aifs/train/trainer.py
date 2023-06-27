@@ -107,7 +107,11 @@ class GraphForecaster(pl.LightningModule):
 
         self.log_to_wandb = config.diagnostics.logging.wandb
         self.plot_frequency = config.diagnostics.plot.frequency
+
+        self.plot_variables = config.diagnostics.plot.parameters
+        self.plot_per_sample = config.diagnostics.plot.per_sample
         self.save_basedir = os.path.join(config.hardware.paths.plots, config.hardware.paths.run_id)
+        
 
         init_plot_settings()
 
@@ -240,6 +244,8 @@ class GraphForecaster(pl.LightningModule):
         y_pred_ = self.normalizer.denormalize(y_pred.clone()).cpu().numpy()
 
         fig = plot_predicted_multilevel_flat_sample(
+            self.plot_variables,
+            self.plot_per_sample,
             np.rad2deg(self.era_latlons.numpy()),
             x_[sample_idx, ...].squeeze(),
             y_true_[sample_idx, ...].squeeze(),

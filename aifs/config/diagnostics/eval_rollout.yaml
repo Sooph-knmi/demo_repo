@@ -5,18 +5,17 @@ eval:
   frequency: 75
 plot:
   frequency: 750
+  per_sample: 6
   parameters:
-  #not yet used
-    - q_850
-    - t_850
-    - u_850
-    - v_850
-    - w_850
-    - z_850
-    - msl
-    - 2t
-  # plot learned graph (node) features T/F
-  learned_features: True
+    10: q_850
+    23: t_850
+    36: u_850
+    49: v_850
+    75: z_850
+    83: 2t
+    81: 10u
+    82: 10v
+    79: msl
 
 debug:
   # this will detect and trace back NaNs / Infs etc. but will slow down training

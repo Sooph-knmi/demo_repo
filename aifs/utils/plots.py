@@ -1,3 +1,4 @@
+from typing import Dict
 from typing import Optional
 
 import cartopy.crs as ccrs
@@ -8,10 +9,6 @@ from matplotlib import cm
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.figure import Figure
 
-from aifs.utils.constants import _IDXVARS_TO_PLOT
-from aifs.utils.constants import _NAM_VARS_TO_PLOT
-from aifs.utils.constants import _NUM_PLOTS_PER_SAMPLE
-from aifs.utils.constants import _NUM_VARS_TO_PLOT
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -105,6 +102,7 @@ def plot_2d_sample(
 
 
 def plot_predicted_multilevel_sample(
+    n_plots_per_sample: int,
     x: np.ndarray,
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -125,7 +123,7 @@ def plot_predicted_multilevel_sample(
     Figure
         Figured object handle
     """
-    n_plots_x, n_plots_y = y_true.shape[0], _NUM_PLOTS_PER_SAMPLE
+    n_plots_x, n_plots_y = y_true.shape[0], n_plots_per_sample
 
     figsize = (n_plots_y * 4, n_plots_x * 3)
     fig, ax = plt.subplots(n_plots_x, n_plots_y, figsize=figsize)
@@ -168,6 +166,8 @@ def plot_loss(
 
 
 def plot_predicted_multilevel_flat_sample(
+    parameters: Dict[str, int],
+    n_plots_per_sample: int,
     latlons: np.ndarray,
     x: np.ndarray,
     y_true: np.ndarray,
@@ -194,19 +194,18 @@ def plot_predicted_multilevel_flat_sample(
     Figure
         The figure object handle.
     """
-    n_plots_x, n_plots_y = _NUM_VARS_TO_PLOT, _NUM_PLOTS_PER_SAMPLE
+    n_plots_x, n_plots_y = len(parameters), n_plots_per_sample
 
     figsize = (n_plots_y * 4, n_plots_x * 3)
     fig, ax = plt.subplots(n_plots_x, n_plots_y, figsize=figsize, subplot_kw={"projection": ccrs.PlateCarree()})
     pc = ccrs.PlateCarree()
 
-    for vix, idx in enumerate(_IDXVARS_TO_PLOT):
-        vname = _NAM_VARS_TO_PLOT[vix]
+    for idx, vname in parameters.items():
         xt = x[..., idx].squeeze()
         yt = y_true[..., idx].squeeze()
         yp = y_pred[..., idx].squeeze()
         if n_plots_x > 1:
-            plot_flat_sample(fig, ax[vix, :], pc, latlons, xt, yt, yp, vname)
+            plot_flat_sample(fig, ax[idx, :], pc, latlons, xt, yt, yp, vname)
         else:
             plot_flat_sample(fig, ax, pc, latlons, xt, yt, yp, vname)
     return fig
