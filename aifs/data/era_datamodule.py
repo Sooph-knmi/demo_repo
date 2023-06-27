@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 
 from aifs.data.era_dataset import ERA5NativeGridDataset, worker_init_func
 from aifs.data.era_readers import read_era_data
+
 # from aifs.utils.config import DictConfig
 from aifs.utils.constants import _DL_PREFETCH_FACTOR
 from aifs.utils.logger import get_logger
@@ -44,7 +45,9 @@ class ERA5DataModule(pl.LightningDataModule):
 
     def _get_dataset(self, stage: str, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
         rollout_config = (
-            self.config.training.rollout.max if self.config.training.rollout.epoch_increment > 0 else self.config.training.rollout.start
+            self.config.training.rollout.max
+            if self.config.training.rollout.epoch_increment > 0
+            else self.config.training.rollout.start
         )
         r = max(rollout, rollout_config) if rollout is not None else rollout_config
         return ERA5NativeGridDataset(
@@ -54,15 +57,16 @@ class ERA5DataModule(pl.LightningDataModule):
             rollout=r,
             multistep=self.config.training.multistep_input,
             rank=self.local_rank,
-            world_size=self.config.hardware.num_gpus * self.config.hardware.num_nodes,
+            world_size=self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes,
         )
 
     def _get_data_filename(self, stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation]
         return os.path.join(
-            self.config.paths[stage],
-            self.config.files[stage],
+            self.config.hardware.paths[stage],
+            self.config.hardware.files[stage],
         )
+
     def _get_dataloader(self, ds: ERA5NativeGridDataset, num_workers: int, batch_size: int) -> DataLoader:
         return DataLoader(
             ds,
@@ -112,15 +116,15 @@ class ERA5TestDataModule(pl.LightningDataModule):
             rollout=self.config.training.rollout.start,
             multistep=self.config.training.multistep_input,
             rank=self.local_rank,
-            world_size=self.config.hardware.num_gpus * self.config.hardware.num_nodes,
+            world_size=self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes,
             shuffle=False,
         )
 
     def _get_data_filename(self, stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation | test]
         return os.path.join(
-            self.config.paths[stage],
-            self.config.files[stage],
+            self.config.hardware.paths[stage],
+            self.config.hardware.files[stage],
         )
 
     def _get_dataloader(self, ds: ERA5NativeGridDataset, num_workers: int, batch_size: int) -> DataLoader:

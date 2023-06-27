@@ -1,7 +1,5 @@
 defaults:
   - hardware: atos
-  - paths: atos
-  - files: atos
   - data: zarr
   - dataloader: default
   - model: gnn
@@ -14,4 +12,4 @@ defaults:
 ##  to the correct defaults.
 # For example to change from default GPU count:
 # hardware:
-#   num_gpus: 1
+#   num_gpus_per_node: 1

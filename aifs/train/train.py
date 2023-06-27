@@ -14,10 +14,12 @@ from pytorch_lightning.profilers import AdvancedProfiler
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.train.trainer import GraphForecaster
 from aifs.train.utils import setup_wandb_logger, setup_callbacks
+
 # from aifs.utils.config import YAMLConfig
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
+
 
 def train(config: DictConfig) -> None:
     """
@@ -39,15 +41,12 @@ def train(config: DictConfig) -> None:
     LOGGER.debug("Total number of auxiliary variables: %d", num_aux_features)
 
     # learning rate multiplier when running single-node, multi-GPU and/or multi-node
-    total_gpu_count = config.hardware.num_nodes * config.hardware.num_gpus
+    total_gpu_count = config.hardware.num_nodes * config.hardware.num_gpus_per_node
     LOGGER.debug("Total GPU count: %d - NB: the learning rate will be scaled by this factor!", total_gpu_count)
     LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * config.training.lr.rate)
     LOGGER.debug("Rollout window length: %d", config.training.rollout.start)
 
-    model = GraphForecaster(
-        metadata=dmod.input_metadata,
-        config=config
-    )
+    model = GraphForecaster(metadata=dmod.input_metadata, config=config)
 
     if config.training.compile:
         # this doesn't work ATM (April 2), don't bother enabling it ...
@@ -56,18 +55,18 @@ def train(config: DictConfig) -> None:
 
     # warm restart?
     ckpt_path: Optional[str] = None
-    if config.files.warm_start:
+    if config.hardware.files.warm_start:
         ckpt_path = os.path.join(
-            config.paths.checkpoints,
-            config.files.warm_start,
+            config.hardware.paths.checkpoints,
+            config.hardware.files.warm_start,
         )
         LOGGER.debug("Training will resume from %s ...", ckpt_path)
 
-    trainer_callbacks = setup_callbacks(config, config.paths.run_id)
+    trainer_callbacks = setup_callbacks(config, config.hardware.paths.run_id)
 
     if config.diagnostics.profiler:
         profiler = AdvancedProfiler(
-            dirpath=config.paths.logs,
+            dirpath=config.hardware.paths.logs,
             filename="aifs-profiler",
         )
     else:
@@ -84,11 +83,11 @@ def train(config: DictConfig) -> None:
         logger.watch(model, log=log_, log_freq=config.diagnostics.logging.interval, log_graph=False)
 
     trainer = pl.Trainer(
-        accelerator="gpu" if config.hardware.num_gpus > 0 else "cpu",
+        accelerator="gpu" if config.hardware.num_gpus_per_node > 0 else "cpu",
         callbacks=trainer_callbacks,
         detect_anomaly=config.diagnostics.debug.anomaly_detection,
         strategy=config.hardware.strategy,  # we should use ddp with find_unused_parameters = False, static_graph = True
-        devices=config.hardware.num_gpus if config.hardware.num_gpus > 0 else None,
+        devices=config.hardware.num_gpus_per_node if config.hardware.num_gpus_per_node > 0 else None,
         num_nodes=config.hardware.num_nodes,
         precision=config.training.precision,
         max_epochs=config.training.max_epochs,
@@ -108,6 +107,7 @@ def train(config: DictConfig) -> None:
 
     trainer.fit(model, datamodule=dmod, ckpt_path=ckpt_path)
     LOGGER.debug("---- DONE. ----")
+
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(config: DictConfig):

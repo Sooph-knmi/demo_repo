@@ -8,6 +8,7 @@ import torch
 from aifs.data.era_datamodule import ERA5TestDataModule
 from aifs.train.trainer import GraphForecaster
 from aifs.train.utils import get_args, setup_wandb_logger
+
 # from aifs.utils.config import YAMLConfig
 from aifs.utils.logger import get_logger
 
@@ -163,25 +164,21 @@ def predict(config: YAMLConfig) -> None:
     LOGGER.debug("Total number of prognostic variables: %d", num_fc_features)
     LOGGER.debug("Total number of auxiliary variables: %d", num_aux_features)
 
-    graph_data = torch.load(os.path.join(config.paths.data, config.files.data))
+    graph_data = torch.load(os.path.join(config.hardware.paths.data, config.hardware.files.data))
 
-    model = GraphForecaster(
-        graph_data=graph_data,
-        metadata=dmod.input_metadata,
-        config=config
-    )
+    model = GraphForecaster(graph_data=graph_data, metadata=dmod.input_metadata, config=config)
 
     ckpt_path = os.path.join(
-        config.paths.checkpoints,
-        config.files.warm_start,
+        config.hardware.paths.checkpoints,
+        config.hardware.files.warm_start,
     )
     LOGGER.debug("Loading checkpoint from %s ...", ckpt_path)
 
     trainer = pl.Trainer(
-        accelerator="gpu" if config.hardware.num_gpus > 0 else "cpu",
+        accelerator="gpu" if config.hardware.num_gpus_per_node > 0 else "cpu",
         detect_anomaly=config.diagnostics.debug.anomaly_detection,
         strategy=config.hardware.strategy,
-        devices=config.hardware.num_gpus if config.hardware.num_gpus > 0 else None,
+        devices=config.hardware.num_gpus_per_node if config.hardware.num_gpus_per_node > 0 else None,
         num_nodes=config.hardware.num_nodes,
         precision=config.training.precision,
         max_epochs=config.training.max_epochs,

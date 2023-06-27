@@ -163,8 +163,8 @@ if __name__ == "__main__":
     def _get_data_filename(stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation]
         return os.path.join(
-            self.config.paths[stage],
-            self.config.files[stage],
+            self.config.hardware.paths[stage],
+            self.config.hardware.files[stage],
         )
 
     era5_ds = ERA5NativeGridDataset(
@@ -174,7 +174,7 @@ if __name__ == "__main__":
         rollout=_ROLLOUT,
         multistep=_MULTISTEP,
         rank=int(os.environ.get("LOCAL_RANK", "0")),
-        world_size=config.hardware.num_gpus * config.hardware.num_nodes,
+        world_size=config.hardware.num_gpus_per_node * config.hardware.num_nodes,
     )
 
     era5_dl = DataLoader(

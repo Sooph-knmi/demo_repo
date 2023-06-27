@@ -9,6 +9,7 @@ from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAveraging
 
 from aifs.train.callbacks import RolloutEval
+
 # from aifs.utils.config import YAMLConfig
 from aifs.utils.logger import get_logger
 
@@ -28,7 +29,7 @@ def setup_wandb_logger(config: DictConfig):
         logger = WandbLogger(
             project="aifs-fc",
             entity="ecmwf-ml",
-            save_dir=config.paths.logs,
+            save_dir=config.hardware.paths.logs,
         )
         logger.log_hyperparams(OmegaConf.to_container(config, resolve=True))
         return logger
@@ -36,15 +37,16 @@ def setup_wandb_logger(config: DictConfig):
     LOGGER.warning("You did not set up an experiment logger ...")
     return False
 
+
 def setup_callbacks(config: DictConfig, timestamp: dt.datetime) -> List:
     trainer_callbacks = [
         # EarlyStopping(monitor="val_wmse", min_delta=0.0, patience=7, verbose=False, mode="min"),
         ModelCheckpoint(
             dirpath=os.path.join(
-                config.paths.checkpoints,
+                config.hardware.paths.checkpoints,
                 timestamp,
             ),
-            filename=config.files.checkpoint,
+            filename=config.hardware.files.checkpoint,
             monitor="val_wmse",
             verbose=False,
             save_last=True,
@@ -65,9 +67,7 @@ def setup_callbacks(config: DictConfig, timestamp: dt.datetime) -> List:
     ]
 
     if config.diagnostics.eval.enabled:
-        trainer_callbacks.append(
-            RolloutEval(rollout=config.diagnostics.eval.rollout, frequency=config.diagnostics.eval.frequency)
-        )
+        trainer_callbacks.append(RolloutEval(rollout=config.diagnostics.eval.rollout, frequency=config.diagnostics.eval.frequency))
 
     if config.training.swa.enabled:
         trainer_callbacks.append(

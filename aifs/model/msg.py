@@ -28,19 +28,16 @@ class GraphMSG(nn.Module):
     ) -> None:
         super().__init__()
 
-
         # create mappings
         if graph_data is None:
-            self.graph_data = torch.load(
-                os.path.join(config.paths.graph, config.files.graph)
-            )
+            self.graph_data = torch.load(os.path.join(config.hardware.paths.graph, config.hardware.files.graph))
         else:
             self._graph_data = graph_data
 
         self.in_channels = config.data.num_features - config.data.num_aux_features
         self.multi_step = config.training.multistep_input
         self.aux_in_channels = config.data.num_aux_features
-        
+
         LOGGER.debug("self.in_channels + self.aux_channels == %d", self.in_channels + self.aux_in_channels)
 
         self.activation = config.model.activation
@@ -121,12 +118,14 @@ class GraphMSG(nn.Module):
             persistent=True,
         )
 
-        encoder_out_channels=config.model.num_channels
-        mlp_extra_layers=config.model.mlp.extra_layers
+        encoder_out_channels = config.model.num_channels
+        mlp_extra_layers = config.model.mlp.extra_layers
 
         # Encoder from ERA -> H
         self.forward_mapper = MessagePassingMapper(
-            in_channels_src=self.multi_step * (self.in_channels + self.aux_in_channels) + self.era_latlons.shape[1] + self.era_trainable_size,
+            in_channels_src=self.multi_step * (self.in_channels + self.aux_in_channels)
+            + self.era_latlons.shape[1]
+            + self.era_trainable_size,
             in_channels_dst=self.h_latlons.shape[1] + self.h_trainable_size,
             hidden_dim=encoder_out_channels,
             hidden_layers=config.model.encoder.num_layers,

@@ -3,7 +3,7 @@
 #SBATCH --qos=ng
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
-#SBATCH --gpus=4
+#SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256G
 #SBATCH --time=48:00:00
@@ -30,4 +30,4 @@ WORKDIR=$GITDIR
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-srun aifs-train
+srun aifs-train hardware=atos_slurm

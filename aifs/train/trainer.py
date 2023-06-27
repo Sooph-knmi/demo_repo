@@ -30,15 +30,12 @@ class GraphForecaster(pl.LightningModule):
         metadata: Dict,
         config: DictConfig,
     ) -> None:
-
         super().__init__()
-        
-        self.fcdim = config.data.num_features - config.data.num_aux_features
-        num_levels=len(config.data.pl.levels)
 
-        self.graph_data = torch.load(
-                os.path.join(config.paths.graph, config.files.graph)
-            )
+        self.fcdim = config.data.num_features - config.data.num_aux_features
+        num_levels = len(config.data.pl.levels)
+
+        self.graph_data = torch.load(os.path.join(config.hardware.paths.graph, config.hardware.files.graph))
 
         self.gnn = GraphMSG(
             config=config,
@@ -70,7 +67,7 @@ class GraphForecaster(pl.LightningModule):
         assert len(loss_scaling) == self.fcdim
         # LOGGER.debug("Loss scaling: %s", loss_scaling)
         loss_scaling = torch.from_numpy(loss_scaling)
-        
+
         self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
 
         # TODO: extract the level names from the input metadata
@@ -82,9 +79,8 @@ class GraphForecaster(pl.LightningModule):
             self.metric_ranges[key] = [idx, idx + 1]
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
-
         self.multi_step = config.training.multistep_input
-        self.lr = config.hardware.num_nodes * config.hardware.num_gpus * config.training.lr.rate
+        self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
         self.lr_iterations = config.training.lr.iterations
         self.lr_min = config.training.lr.min
         self.rollout = config.training.rollout.start
@@ -98,12 +94,8 @@ class GraphForecaster(pl.LightningModule):
 
         self.log_to_wandb = config.diagnostics.logging.wandb
         self.plot_frequency = config.diagnostics.plot.frequency
-        self.save_basedir = os.path.join(
-            config.paths.plots, config.paths.run_id
-        )
+        self.save_basedir = os.path.join(config.hardware.paths.plots, config.hardware.paths.run_id)
 
-        
-        
         init_plot_settings()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
