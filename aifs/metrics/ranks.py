@@ -32,11 +32,11 @@ class RankHistogram(Metric):
         self.nens = nens
         self.add_state("ranks", default=torch.zeros(nens + 1, dtype=torch.long), dist_reduce_fx="sum")
 
-    def update(self, pred: torch.Tensor, truth: torch.Tensor) -> torch.Tensor:
+    def update(self, truth: torch.Tensor, pred: torch.Tensor) -> torch.Tensor:
         """
         Args:
             truth: shape (bs, latlon, nvar)
-            pred: shape (bs, nens, §latlon, nvar)
+            pred: shape (bs, nens, latlon, nvar)
         """
         ranks_ = get_ranks(truth, pred).flatten()
         # update the running stats
@@ -55,9 +55,13 @@ if __name__ == "__main__":
     n_batches = 10
     for i in range(n_batches):
         yt = torch.randn(bs, nlatlon, nvar)
-        yp = torch.randn(bs, e, nlatlon, nvar)
+        yp = torch.randn(bs, e, nlatlon, nvar)  # perfectly calibrated (uniform)
+        # yp = 2 * torch.randn(bs, e, nlatlon, nvar)  # overdispersive - "peaked"
+        # yp = 0.25 * torch.randn(bs, e, nlatlon, nvar)  # underdispersive - u-shaped
+        # yp = 0.5 * torch.abs(torch.randn(bs, e, nlatlon, nvar))  # strong skew to the left
+        # yp = -0.5 * torch.abs(torch.randn(bs, e, nlatlon, nvar))  # strong skew to the right
         rh = metric(yp, yt)
 
     rh = metric.compute()
     torch.set_printoptions(precision=3)
-    LOGGER.debug("Rank histogram: %s", rh)
+    LOGGER.debug("Rank histogram: %s -- sum: %.2e", rh, rh.sum())
