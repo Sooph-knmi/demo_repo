@@ -10,7 +10,7 @@ DDP works as follows:
 6. Each process updates its optimizer.
 
 With Dask, it's important to make sure that only the "root" process sets up the cluster, the others just create their own clients.
-Otherwise we end up with multiple Dask clusters. 
+Otherwise we end up with multiple Dask clusters.
 
 With DDP the model doesn't need to be pickled (so there are no pickle-related limitations).
 
@@ -77,8 +77,8 @@ In `DDP`, `DDP_SPAWN`, `Deepspeed`, `DDP_SHARDED`, or Horovod your effective bat
 
 ### [Lightning `global_rank`](https://pytorch-lightning.readthedocs.io/en/stable/common/lightning_module.html#global-rank)
 
-The `global_rank` is the index of the current process across all nodes and devices. 
-Lightning will perform some operations such as logging, weight checkpointing only when `global_rank=0`. 
+The `global_rank` is the index of the current process across all nodes and devices.
+Lightning will perform some operations such as logging, weight checkpointing only when `global_rank=0`.
 You usually do not need to use this property, but it is useful to know how to access it if needed.
 
 ```python
@@ -90,8 +90,8 @@ def training_step(self, batch, batch_idx):
 
 ### [Validation with DDP](https://pytorch-lightning.readthedocs.io/en/stable/common/lightning_module.html#validation)
 
-It is recommended to validate on single device to ensure each sample/batch gets evaluated exactly once. 
-This is helpful to make sure benchmarking for research papers is done the right way. 
+It is recommended to validate on single device to ensure each sample/batch gets evaluated exactly once.
+This is helpful to make sure benchmarking for research papers is done the right way.
 Otherwise, in a multi-device setting, samples could occur duplicated when `DistributedSampler` is used, for eg. with `strategy="ddp"`.
 It replicates some samples on some devices to make sure all devices have same batch size in case of uneven inputs.
 

@@ -4,8 +4,8 @@ import time
 
 
 def get_logger(name: str, debug: bool = True) -> logging.Logger:
-    """
-    Returns a logger with a custom level and format.
+    """Returns a logger with a custom level and format.
+
     We use ISO8601 timestamps and UTC times.
 
     Args:

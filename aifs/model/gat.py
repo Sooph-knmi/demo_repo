@@ -1,4 +1,4 @@
-from typing import Optional, Any, Dict
+from typing import Optional
 
 import einops
 import numpy as np
@@ -6,7 +6,8 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
 
-from aifs.model.layers import TransformerMapper, GATEncoder
+from aifs.model.layers import GATEncoder
+from aifs.model.layers import TransformerMapper
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -50,13 +51,19 @@ class GraphTransformer(nn.Module):
         self._h_size = self._graph_data[("h", "to", "h")].hcoords_rad.shape[0]
 
         self.register_buffer(
-            "_e2h_edge_inc", torch.from_numpy(np.asarray([[self._era_size], [self._h_size]], dtype=np.int64)), persistent=False
+            "_e2h_edge_inc",
+            torch.from_numpy(np.asarray([[self._era_size], [self._h_size]], dtype=np.int64)),
+            persistent=False,
         )
         self.register_buffer(
-            "_h2e_edge_inc", torch.from_numpy(np.asarray([[self._h_size], [self._era_size]], dtype=np.int64)), persistent=False
+            "_h2e_edge_inc",
+            torch.from_numpy(np.asarray([[self._h_size], [self._era_size]], dtype=np.int64)),
+            persistent=False,
         )
         self.register_buffer(
-            "_h2h_edge_inc", torch.from_numpy(np.asarray([[self._h_size], [self._h_size]], dtype=np.int64)), persistent=False
+            "_h2h_edge_inc",
+            torch.from_numpy(np.asarray([[self._h_size], [self._h_size]], dtype=np.int64)),
+            persistent=False,
         )
 
         self.register_buffer(

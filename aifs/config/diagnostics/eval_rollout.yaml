@@ -11,7 +11,7 @@ plot:
     - t_850
     - u_850
     - v_850
-    - w_850 
+    - w_850
     - z_850
     - msl
     - 2t
@@ -29,4 +29,3 @@ logging:
   gradients: False
   parameters: False
   interval: 100
-

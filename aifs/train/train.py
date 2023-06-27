@@ -1,29 +1,24 @@
 import os
 from typing import Optional
 
-import numpy as np
+import hydra
 import pytorch_lightning as pl
 import torch
-
 from omegaconf import DictConfig
-import hydra
-
-
 from pytorch_lightning.profilers import AdvancedProfiler
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.train.trainer import GraphForecaster
-from aifs.train.utils import setup_wandb_logger, setup_callbacks
-
-# from aifs.utils.config import YAMLConfig
+from aifs.train.utils import setup_callbacks
+from aifs.train.utils import setup_wandb_logger
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
 
 def train(config: DictConfig) -> None:
-    """
-    Train entry point.
+    """Train entry point.
+
     Args:
         config: job configuration
     """

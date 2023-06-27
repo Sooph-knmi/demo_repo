@@ -1,4 +1,4 @@
-# torch.compile is not working (yet), set this option to False 
+# torch.compile is not working (yet), set this option to False
 compile: False
 
 # resume training from a checkpoint
@@ -29,7 +29,7 @@ swa:
   lr: 1.e-4
 
 # length of the "rollout" window (see Keisler's paper)
-rollout: 
+rollout:
   start: 1
   #Increase rollout every n epochs
   epoch_increment: 0

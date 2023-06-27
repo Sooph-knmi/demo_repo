@@ -9,7 +9,7 @@ LOGGER = get_logger(__name__)
 
 
 class WeightedMSELoss(nn.Module):
-    """Latitude-weighted MSE loss"""
+    """Latitude-weighted MSE loss."""
 
     def __init__(self, area_weights: torch.Tensor, data_variances: Optional[torch.Tensor] = None) -> None:
         """
@@ -26,8 +26,8 @@ class WeightedMSELoss(nn.Module):
             self.register_buffer("ivar", data_variances, persistent=True)
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor, squash=True) -> torch.Tensor:
-        """
-        Calculates the lat-weighted MSE loss.
+        """Calculates the lat-weighted MSE loss.
+
         Args:
             pred: Prediction tensor, shape (bs, lat*lon, n_outputs)
             target: Target tensor, shape (bs, lat*lon, n_outputs)

@@ -1,14 +1,19 @@
-from typing import Optional, Tuple, Union
+from typing import Optional
+from typing import Tuple
+from typing import Union
 
 import einops
 import torch
+import torch_geometric.nn as tgnn
 from torch import nn
 from torch import Tensor
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import offload_wrapper
 from torch.utils.checkpoint import checkpoint
-import torch_geometric.nn as tgnn
 from torch_geometric.nn.conv import MessagePassing
-from torch_geometric.typing import Adj, OptPairTensor, Size, PairTensor
+from torch_geometric.typing import Adj
+from torch_geometric.typing import OptPairTensor
+from torch_geometric.typing import PairTensor
+from torch_geometric.typing import Size
 from torch_geometric.utils import scatter
 
 from aifs.utils.logger import get_logger
@@ -79,7 +84,12 @@ class TransformerMapper(MessagePassing):
             if batch_size > 1:
                 context = einops.repeat(context, "n f -> (repeat n) f", repeat=batch_size)
             assert edge_index[0].max() < x.size(0) and edge_index[1].max() < context.size(0), "Your edge index tensor is invalid."
-            out = self.conv(x=(x, context), edge_index=edge_index, edge_attr=edge_attr, size=(x.shape[0], context.shape[0]))
+            out = self.conv(
+                x=(x, context),
+                edge_index=edge_index,
+                edge_attr=edge_attr,
+                size=(x.shape[0], context.shape[0]),
+            )
         else:
             out = self.conv(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
@@ -270,7 +280,8 @@ class MessagePassingMapper(MessagePassingProcessor):
 
 
 class MessagePassingProcessorChunk(nn.Module):
-    """Wraps X message passing blocks for checkpointing in Processor / Mapper"""
+    """Wraps X message passing blocks for checkpointing in Processor /
+    Mapper."""
 
     def __init__(
         self,

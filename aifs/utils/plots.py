@@ -6,7 +6,10 @@ from matplotlib import cm
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.figure import Figure
 
-from aifs.utils.constants import _IDXVARS_TO_PLOT, _NAM_VARS_TO_PLOT, _NUM_PLOTS_PER_SAMPLE, _NUM_VARS_TO_PLOT
+from aifs.utils.constants import _IDXVARS_TO_PLOT
+from aifs.utils.constants import _NAM_VARS_TO_PLOT
+from aifs.utils.constants import _NUM_PLOTS_PER_SAMPLE
+from aifs.utils.constants import _NUM_VARS_TO_PLOT
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -80,6 +83,7 @@ def plot_predicted_multilevel_sample(
     y_pred: np.ndarray,
 ) -> Figure:
     """Plots data for one multilevel sample.
+
     Args:
         x, y_true, y_pred: arrays of shape (nvar*level, lat, lon)
     Returns:
@@ -105,6 +109,7 @@ def plot_loss(
     x: np.ndarray,
 ) -> Figure:
     """Plots data for one multilevel sample.
+
     Args:
         x arrays of shape (npred,)
     Returns:
@@ -132,6 +137,7 @@ def plot_predicted_multilevel_flat_sample(
     y_pred: np.ndarray,
 ) -> Figure:
     """Plots data for one multilevel latlon-"flat" sample.
+
     Args:
         latlons: lat/lon coordinates array, shape (lat*lon, 2)
         x, y_true, y_pred: arrays of shape (lat*lon, nvar*level)

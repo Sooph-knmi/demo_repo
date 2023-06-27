@@ -60,9 +60,21 @@ class InputNormalizer(nn.Module):
         # register all buffers - this will ensure they get copied to the correct device(s)
         self.register_buffer("_max_norm_idx", torch.from_numpy(_max_norm_idx), persistent=True)
         self.register_buffer("_max_norm", _max_norm, persistent=True)
-        self.register_buffer("_std_norm_idx", torch.from_numpy(np.array(_std_norm_idx, dtype=np.int32)), persistent=True)
-        self.register_buffer("_std_norm_mu", torch.from_numpy(np.array(_std_norm_mu, dtype=np.float32)), persistent=True)
-        self.register_buffer("_std_norm_sd", torch.from_numpy(np.array(_std_norm_sd, dtype=np.float32)), persistent=True)
+        self.register_buffer(
+            "_std_norm_idx",
+            torch.from_numpy(np.array(_std_norm_idx, dtype=np.int32)),
+            persistent=True,
+        )
+        self.register_buffer(
+            "_std_norm_mu",
+            torch.from_numpy(np.array(_std_norm_mu, dtype=np.float32)),
+            persistent=True,
+        )
+        self.register_buffer(
+            "_std_norm_sd",
+            torch.from_numpy(np.array(_std_norm_sd, dtype=np.float32)),
+            persistent=True,
+        )
 
     def normalize(self, x: torch.Tensor) -> torch.Tensor:
         """Normalizes an input tensor x of shape [..., nvars]; normalization done in-place."""
