@@ -13,7 +13,7 @@ LOGGER = get_logger(__name__)
 
 
 def init_plot_settings():
-    SMALL_SIZE = 8
+    SMALL_SIZE = 10
     MEDIUM_SIZE = 10
 
     plt.rc("font", size=SMALL_SIZE)  # controls default text sizes
@@ -201,17 +201,20 @@ def scatter_plot(fig, ax, pc, lat, lon, x, cmap="viridis", title=None) -> None:
     fig.colorbar(psc, ax=ax)
 
 
-def plot_rank_histogram(rh: np.ndarray) -> Figure:
-    fig, ax = plt.subplots(1, 1, figsize=(4.5, 4))
+def plot_rank_histograms(rh: np.ndarray) -> Figure:
+    """Plots one rank histogram per target variable"""
+    fig, ax = plt.subplots(1, _NUM_VARS_TO_PLOT, figsize=(_NUM_VARS_TO_PLOT * 4.5, 4))
     n_ens = rh.shape[0] - 1
     rh = rh.astype(float)
-    LOGGER.debug("Rank histogram values: %s", rh)
 
-    ax.bar(np.arange(0, n_ens + 1), rh / rh.sum(), linewidth=1, color="blue", width=0.7)
-    ax.hlines(rh.mean() / rh.sum(), xmin=-0.5, xmax=n_ens + 0.5, linestyles="--", colors="red")
-    ax.set_title("Rank histogram")
-    ax.set_xlabel("Ensemble member index")
-    _hide_axes_ticks(ax, x_axis=False)
+    for vix, idx in enumerate(_IDXVARS_TO_PLOT):
+        vname = _NAM_VARS_TO_PLOT[vix]
+        rh_ = rh[:, idx]
+        ax[vix].bar(np.arange(0, n_ens + 1), rh_ / rh_.sum(), linewidth=1, color="blue", width=0.7)
+        ax[vix].hlines(rh_.mean() / rh_.sum(), xmin=-0.5, xmax=n_ens + 0.5, linestyles="--", colors="red")
+        ax[vix].set_title(f"{vname} ranks")
+        ax[vix].set_xlabel("Ensemble member index")
+        _hide_axes_ticks(ax[vix], x_axis=False)
 
     return fig
 

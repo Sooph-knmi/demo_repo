@@ -92,7 +92,6 @@ class ERA5TestDataModule(pl.LightningDataModule):
         self.num_workers_test = config.dataloader.num_workers.test
         self.config = config
 
-        # TODO: will this work correctly in multi-node runs?
         self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
         # load data used to transform input

@@ -81,7 +81,7 @@ class GraphForecaster(pl.LightningModule):
         self.ensemble_size = config.training.ensemble_size
         # Rank histogram
         if config:
-            self.ranks = RankHistogram(nens=self.ensemble_size)
+            self.ranks = RankHistogram(nens=self.ensemble_size, nvar=self.fcdim)
 
         self.multi_step = config.training.multistep_input
         self.lr = config.hardware.num_nodes * config.hardware.num_gpus * config.training.lr.rate
@@ -144,8 +144,7 @@ class GraphForecaster(pl.LightningModule):
             x = self.advance_input(x, y, y_pred)
 
             if compute_metrics:
-                # rank histogram - update metric state
-                # TODO: best to calculate separate rank histograms for each rollout step
+                # rank histograms - update metric state
                 _ = self.ranks(y[..., : self.fcdim], y_pred)
                 # WMSE metrics
                 for mkey, (low, high) in self.metric_ranges.items():

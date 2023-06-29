@@ -5,7 +5,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import Callback
 
 from aifs.utils.logger import get_logger
-from aifs.utils.plots import plot_rank_histogram
+from aifs.utils.plots import plot_rank_histograms
 
 LOGGER = get_logger(__name__)
 
@@ -89,6 +89,6 @@ class RankHistogramPlotCallback(Callback):
     def on_validation_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         del trainer  # not used
         assert hasattr(pl_module, "ranks"), "To use this, you must set up a ranks attribute in your pl.LightningModule class!"
-        fig = plot_rank_histogram(pl_module.ranks.compute().cpu().numpy())
+        fig = plot_rank_histograms(pl_module.ranks.compute().cpu().numpy())
         pl_module.output_figure(fig, tag="ens_rank_hist", exp_log_tag=f"val_rank_hist_{pl_module.global_rank}")
         pl_module.ranks.reset()
