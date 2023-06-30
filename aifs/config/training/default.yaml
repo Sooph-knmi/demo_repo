@@ -28,6 +28,11 @@ swa:
   enabled: False
   lr: 1.e-4
 
+# dynamic rescaling of the loss gradient
+# see https://arxiv.org/pdf/2306.06079.pdf, section 4.3.2
+# don't enable this by default until it's been tested and proven beneficial
+loss_gradient_scaling: False
+
 # length of the "rollout" window (see Keisler's paper)
 rollout:
   start: 1
@@ -42,7 +47,7 @@ rollout:
 # Round 3. ~70,000 batches @ ~1.5 seconds per batch (12-step rollout)
 # Each batch is an N-step rollout, with batch_size=1
 
-save_top_k: 5
+save_top_k: -1
 
 lead_time: 6
 max_epochs: 100

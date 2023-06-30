@@ -63,7 +63,6 @@ def setup_callbacks(config: DictConfig, timestamp: str) -> List:
         _description_
     """
     trainer_callbacks = [
-        # EarlyStopping(monitor="val_wmse", min_delta=0.0, patience=7, verbose=False, mode="min"),
         ModelCheckpoint(
             dirpath=os.path.join(
                 config.hardware.paths.checkpoints,

@@ -12,7 +12,6 @@ from aifs.data.era_readers import read_era_data
 from aifs.utils.constants import _DL_PREFETCH_FACTOR
 from aifs.utils.logger import get_logger
 
-# from aifs.utils.config import DictConfig
 
 LOGGER = get_logger(__name__)
 

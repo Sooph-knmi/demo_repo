@@ -10,7 +10,6 @@ from torch.utils.data import get_worker_info
 from torch.utils.data import IterableDataset
 from zarr.core import Array
 
-from aifs.utils.constants import _DL_PREFETCH_FACTOR
 from aifs.utils.constants import _ERA_PLEV
 from aifs.utils.logger import get_logger
 
@@ -199,49 +198,3 @@ def worker_init_func(worker_id: int) -> None:
         n_workers=worker_info.num_workers,
         worker_id=worker_id,
     )
-
-
-if __name__ == "__main__":
-    from torch.utils.data import DataLoader
-
-    from aifs.data.era_readers import read_era_data
-    from aifs.utils.config import YAMLConfig
-
-    _ROLLOUT = 2
-    _MULTISTEP = 2
-    config = YAMLConfig("aifs/config/atos.yaml")
-
-    def _get_data_filename(stage: str) -> str:
-        # field_type == [pl | sfc], stage == [training | validation]
-        return os.path.join(
-            config.hardware.paths[stage],
-            config.hardware.files[stage],
-        )
-
-    era5_ds = ERA5NativeGridDataset(
-        fname=_get_data_filename("validation"),
-        era_data_reader=read_era_data,
-        lead_time=config.training.lead_time,
-        rollout=_ROLLOUT,
-        multistep=_MULTISTEP,
-        rank=int(os.environ.get("LOCAL_RANK", "0")),
-        world_size=config.hardware.num_gpus_per_node * config.hardware.num_nodes,
-    )
-
-    era5_dl = DataLoader(
-        era5_ds,
-        batch_size=8,
-        num_workers=8,
-        worker_init_fn=worker_init_func,
-        prefetch_factor=_DL_PREFETCH_FACTOR,
-        persistent_workers=True,
-    )
-
-    # simple dataloader speed test
-    for idx_batch, batch in enumerate(era5_dl):
-        LOGGER.info("Batch index: %d - shape: %s", idx_batch, batch.shape)
-        assert batch.shape[1] == (_ROLLOUT + _MULTISTEP)
-        for r in range(batch.shape[1]):
-            LOGGER.debug("Rollout step %d: batch.shape = %s", r, batch[:, r, ...].shape)
-        if idx_batch > 4:
-            break

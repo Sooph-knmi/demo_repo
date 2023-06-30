@@ -7,11 +7,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytorch_lightning as pl
 import torch
+import wandb
 from omegaconf import DictConfig
 from timm.scheduler import CosineLRScheduler
 
-import wandb
 from aifs.data.era_normalizers import InputNormalizer
+from aifs.model.losses import grad_scaler
 from aifs.model.losses import WeightedMSELoss
 from aifs.model.msg import GraphMSG
 from aifs.train.utils import pl_scaling
@@ -67,22 +68,22 @@ class GraphForecaster(pl.LightningModule):
                 scl = config.training.loss_scaling.pl[pl_name]
             else:
                 scl = 1
-                LOGGER.debug(f"Parameter {pl_name} was not scaled.")
+                LOGGER.debug("Parameter %s was not scaled.", pl_name)
             loss_scaling = np.append(loss_scaling, [scl] * pl_scaling(config.data.pl.levels))
         for sfc_name in config.data.sfc.parameters:
             if sfc_name in config.training.loss_scaling.sfc:
                 scl = config.training.loss_scaling.sfc[sfc_name]
             else:
                 scl = 1
-                LOGGER.debug(f"Parameter {sfc_name} was not scaled.")
+                LOGGER.debug("Parameter %s was not scaled.", sfc_name)
             loss_scaling = np.append(loss_scaling, [scl])
         assert len(loss_scaling) == self.fcdim
-        # LOGGER.debug("Loss scaling: %s", loss_scaling)
         loss_scaling = torch.from_numpy(loss_scaling)
 
         self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
+        if config.training.loss_gradient_scaling:
+            self.loss.register_full_backward_hook(grad_scaler, prepend=False)
 
-        # TODO: extract the level names from the input metadata
         self.metric_ranges = {}
         for i, key in enumerate(config.data.pl.parameters):
             self.metric_ranges[key] = [i * num_levels, (i + 1) * num_levels]
@@ -178,7 +179,7 @@ class GraphForecaster(pl.LightningModule):
         )
         self.log(
             "rollout",
-            self.rollout,
+            float(self.rollout),
             on_step=True,
             logger=True,
             rank_zero_only=True,
