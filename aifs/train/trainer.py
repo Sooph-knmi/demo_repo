@@ -276,7 +276,7 @@ class GraphForecaster(pl.LightningModule):
                 x[:, 0, ..., self.feature_dim :] = y[..., self.feature_dim :]
                 for mkey, mranges in self.metric_ranges.items():
                     y_denorm = self.normalizer.denormalize(y.clone())
-                    y_hat_denorm = self.normalizer.denormalize(x.clone())
+                    y_hat_denorm = self.normalizer.denormalize(x[:,0,...].clone())
                     low, high = mranges
                     metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
             loss *= 1.0 / self.rollout
