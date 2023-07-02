@@ -125,7 +125,7 @@ class GraphForecaster(pl.LightningModule):
         x = batch[:, :1, ...]
         with save_on_cpu(pin_memory=True):
             for rstep in range(self.rollout):
-                y_hat = self(x)#[:,0,...]  # prediction at rollout step rstep
+                y_hat = self(x)  # prediction at rollout step rstep
                 y = batch[:, rstep + 1, ...]  # target
                 # y includes the auxiliary variables, so we must leave those out when computing the loss
                 train_loss += self.loss(y_hat, y[..., : self.feature_dim])
@@ -262,7 +262,7 @@ class GraphForecaster(pl.LightningModule):
         with torch.no_grad():
             loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
             persist_loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)  # persistence loss
-            x = batch[:, 0, ...]
+            x = batch[:, :1, ...]
             for rstep in range(self.rollout):
                 y_hat = self(x)
                 y = batch[:, rstep + 1, ...]
@@ -271,9 +271,9 @@ class GraphForecaster(pl.LightningModule):
                 if plot_sample and self.global_rank == 0:
                     self._plot_loss(y_hat, y[..., : self.feature_dim], rollout_step=rstep)
                     self._plot_sample(batch_idx, rstep, x[..., : self.feature_dim], y[..., : self.feature_dim], y_hat)
-                x[..., : self.feature_dim] = y_hat
+                x[:, 0, ..., : self.feature_dim] = y_hat
                 # get new "constants" needed for time-varying fields
-                x[..., self.feature_dim :] = y[..., self.feature_dim :]
+                x[:, 0, ..., self.feature_dim :] = y[..., self.feature_dim :]
                 for mkey, mranges in self.metric_ranges.items():
                     y_denorm = self.normalizer.denormalize(y.clone())
                     y_hat_denorm = self.normalizer.denormalize(x.clone())
