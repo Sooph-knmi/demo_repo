@@ -157,7 +157,7 @@ class GraphMSG(nn.Module):
             activation=activation,
         )
 
-        self._init_weights()
+        # self._init_weights()
 
     def _init_weights(self) -> None:
         """Initializes the weights"""
