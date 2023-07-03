@@ -58,7 +58,7 @@ class RolloutEval(Callback):
                 for mkey, (low, high) in pl_module.metric_ranges.items():
                     y_denorm = pl_module.normalizer.denormalize(y.clone())
                     y_pred_denorm = pl_module.normalizer.denormalize(x[:, -1, ...].clone())
-                    metrics[f"{mkey}_{rstep+1}"] = pl_module.metric(y_pred_denorm[..., low:high], y_denorm[..., low:high])
+                    metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
 
             # scale loss
             loss *= 1.0 / self.rollout
