@@ -257,7 +257,7 @@ def plot_flat_sample(
 
 
 def scatter_plot(
-    fig, ax, pc, lat: np.array, lon: np.array, data: np.array, cmap: str = "viridis", title: Optional[None, str] = None
+    fig, ax, pc, lat: np.array, lon: np.array, data: np.array, cmap: str = "viridis", title: Optional[str] = None
 ) -> None:
     """Lat-lon scatter plot: can work with arbitrary grids.
 
