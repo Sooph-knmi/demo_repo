@@ -36,6 +36,7 @@ setup(
         "Programming Language :: Python :: 3.9",
     ],
     packages=find_packages(),
+    include_package_data=True,
     entry_points={
         "console_scripts": [
             "aifs-train=aifs.train.train:main",

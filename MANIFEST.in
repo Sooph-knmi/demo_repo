@@ -1,0 +1,6 @@
+include aifs/*.yaml
+include aifs/*/*.yaml
+include aifs/*/*/*.yaml
+include aifs/*/*/*/*.yaml
+include aifs/*/*/*/*/*.yaml
+include aifs/*/*/*/*/*/*.yaml
