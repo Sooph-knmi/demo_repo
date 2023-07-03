@@ -25,7 +25,7 @@ setup(
             "zarr==2.14.2",
             "networkx==3.1",
             "h3==3.7.6",
-            "pre-commit===3.3.3",
+            "pre-commit==3.3.3",
         ]
     },
     classifiers=[
