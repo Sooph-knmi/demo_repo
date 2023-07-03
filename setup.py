@@ -14,6 +14,7 @@ setup(
         "pytorch-lightning==2.0.2",
         "timm==0.9.2",
         "hydra-core==1.3",
+        "einops==0.6.1",
     ],
     extras_require={
         "extras": [
@@ -21,7 +22,6 @@ setup(
             "cartopy==0.21.1",
             "tqdm==4.65.0",
             "wandb==0.15.0",
-            "einops==0.6.1",
             "zarr==2.14.2",
             "networkx==3.1",
             "h3==3.7.6",
