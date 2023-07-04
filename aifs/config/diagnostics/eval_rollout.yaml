@@ -19,8 +19,6 @@ plot:
 debug:
   # this will detect and trace back NaNs / Infs etc. but will slow down training
   anomaly_detection: False
-  # run in deterministic mode (for reproducibility also setting the correct initial seed is required)
-  deterministic: False
 
 # activate the pytorch profiler (disable this in production)
 profiler: False
