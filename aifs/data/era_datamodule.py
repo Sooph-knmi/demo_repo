@@ -2,13 +2,13 @@ import os
 from typing import Optional
 
 import pytorch_lightning as pl
-import zarr
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
 from aifs.data.era_dataset import ERA5NativeGridDataset
 from aifs.data.era_dataset import worker_init_func
 from aifs.data.era_readers import read_era_data
+from aifs.data.zarr import read_zarr
 from aifs.utils.constants import _DL_PREFETCH_FACTOR
 from aifs.utils.logger import get_logger
 
@@ -45,7 +45,7 @@ class ERA5DataModule(pl.LightningDataModule):
             r = max(r, config.diagnostics.eval.rollout)
         self.ds_valid = self._get_dataset("validation", rollout=r)
 
-        ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
+        ds_tmp = read_zarr(self._get_data_filename("training"))
         self.input_metadata = ds_tmp.attrs["climetlab"]
         ds_tmp = None
 
@@ -116,7 +116,7 @@ class ERA5TestDataModule(pl.LightningDataModule):
         self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
         # load data used to transform input
-        ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
+        ds_tmp = read_zarr(self._get_data_filename("training"), mode="r")
         self.input_metadata = ds_tmp.attrs["climetlab"]
         ds_tmp = None
 
