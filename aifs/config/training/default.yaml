@@ -5,7 +5,7 @@ compile: False
 warm_start: False
 
 # miscellaneous
-precision: 16-mixed  # "16" with Lightning < 2.0
+precision: 16-mixed
 
 # multistep input
 # 1 = single step scheme, X(t-1) used to predict X(t)
@@ -36,9 +36,9 @@ loss_gradient_scaling: False
 # length of the "rollout" window (see Keisler's paper)
 rollout:
   start: 1
-  #Increase rollout every n epochs
+  # increase rollout every n epochs
   epoch_increment: 0
-  #Maximum rollout to use
+  # maximum rollout to use
   max: 1
 
 # Keisler's three training rounds were:
