@@ -13,6 +13,8 @@ from aifs.train.utils import setup_callbacks
 from aifs.train.utils import setup_wandb_logger
 from aifs.utils.logger import get_logger
 
+from datetime import datetime
+
 LOGGER = get_logger(__name__)
 
 
@@ -25,6 +27,15 @@ def train(config: DictConfig) -> None:
         Job configuration
     """
     torch.set_float32_matmul_precision("high")
+
+
+    if config.training.inital_seed:
+        initial_seed = config.training.inital_seed
+    else:
+        initial_seed = datetime.now().time().microsecond
+    pl.seed_everything(initial_seed, workers=True)
+
+    LOGGER.debug("Running with initial seed: %d", initial_seed)
 
     # create data module (data loaders and data sets)
     dmod = ERA5DataModule(config)
@@ -82,6 +93,7 @@ def train(config: DictConfig) -> None:
     trainer = pl.Trainer(
         accelerator="gpu" if config.hardware.num_gpus_per_node > 0 else "cpu",
         callbacks=trainer_callbacks,
+        deterministic=config.diagnostics.debug.deterministic,
         detect_anomaly=config.diagnostics.debug.anomaly_detection,
         strategy=config.hardware.strategy,  # we should use ddp with find_unused_parameters = False, static_graph = True
         devices=config.hardware.num_gpus_per_node if config.hardware.num_gpus_per_node > 0 else None,

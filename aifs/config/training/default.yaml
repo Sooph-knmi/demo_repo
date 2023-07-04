@@ -4,6 +4,9 @@ compile: False
 # resume training from a checkpoint
 warm_start: False
 
+# prescribe initial seed, if 0 generate seed from microseconds 
+inital_seed: 0
+
 # miscellaneous
 precision: 16-mixed  # "16" with Lightning < 2.0
 

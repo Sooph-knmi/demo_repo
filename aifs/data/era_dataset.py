@@ -10,6 +10,8 @@ from torch.utils.data import get_worker_info
 from torch.utils.data import IterableDataset
 from zarr.core import Array
 
+from lightning_fabric.utilities.seed import pl_worker_init_function
+
 from aifs.utils.constants import _ERA_PLEV
 from aifs.utils.logger import get_logger
 
@@ -131,7 +133,14 @@ class ERA5NativeGridDataset(IterableDataset):
 
         # each worker must have a different seed for its random number generator,
         # otherwise all the workers will output exactly the same data
-        self.rng = np.random.default_rng(seed=torch.initial_seed())
+        if int(os.environ.get("PL_SEED_WORKERS", 0)):
+            pl_worker_init_function(worker_id, self.rank)
+            seed1 = np.random.randint(low=0, high=2**30)
+        else:
+            seed1 = torch.initial_seed()
+        self.rng = np.random.default_rng(seed=seed1)
+
+        LOGGER.debug("Worker %d (pid %d) using seed %d", worker_id, os.getpid(), seed1)
 
     def __iter__(self):
         # this needs to happen at the start of every epoch
