@@ -28,7 +28,6 @@ def train(config: DictConfig) -> None:
     """
     torch.set_float32_matmul_precision("high")
 
-
     if config.training.inital_seed:
         initial_seed = config.training.inital_seed
     else:
