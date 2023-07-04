@@ -1,11 +1,13 @@
 from typing import Any
 from typing import Dict
 
+import numpy as np
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import Callback
 
 from aifs.utils.logger import get_logger
+from aifs.utils.plots import plot_graph_features
 
 LOGGER = get_logger(__name__)
 
@@ -100,3 +102,27 @@ class RolloutEval(Callback):
         del trainer, outputs  # not used
         if batch_idx % self.frequency == 3 and pl_module.global_rank == 0:
             self._eval(pl_module, batch)
+
+
+class GraphTrainableFeaturesPlot(Callback):
+    """Visualize the trainable features defined at the ERA and H graph nodes, if any.
+
+    TODO: How best to visualize the learned edge embeddings? Offline, perhaps - using code from @Simon's notebook?
+    """
+
+    def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        del trainer  # not used
+        if pl_module.global_rank == 0:
+            gnn = pl_module.gnn
+            graph = pl_module.graph_data
+
+            ecoords = np.rad2deg(graph[("era", "to", "era")].ecoords_rad.numpy())
+            hcoords = np.rad2deg(graph[("h", "to", "h")].hcoords_rad.numpy())
+
+            if gnn.era_trainable is not None:
+                fig = plot_graph_features(ecoords, gnn.era_trainable.cpu())
+                pl_module.output_figure(fig, tag="era_trainable", exp_log_tag="era_trainable")
+
+            if gnn.h_trainable is not None:
+                fig = plot_graph_features(hcoords, gnn.h_trainable.cpu())
+                pl_module.output_figure(fig, tag="h_trainable", exp_log_tag="h_trainable")

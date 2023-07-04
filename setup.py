@@ -10,8 +10,8 @@ setup(
     author_email="ecmwf-authors@ecmwf.int",
     description="ERA5 forecasting with Graph Neural Networks",
     install_requires=[
-        "torch_geometric==2.3.0",
-        "pytorch-lightning==2.0.2",
+        "torch_geometric==2.3.1",
+        "pytorch-lightning==2.0.3",
         "timm==0.9.2",
         "hydra-core==1.3",
         "einops==0.6.1",
@@ -40,7 +40,6 @@ setup(
     entry_points={
         "console_scripts": [
             "aifs-train=aifs.train.train:main",
-            "aifs-predict=aifs.predict.predict:main",
         ]
     },
 )

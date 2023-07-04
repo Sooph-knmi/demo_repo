@@ -8,6 +8,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAveraging
 
+from aifs.train.callbacks import GraphTrainableFeaturesPlot
 from aifs.train.callbacks import RolloutEval
 from aifs.utils.logger import get_logger
 
@@ -105,5 +106,9 @@ def setup_callbacks(config: DictConfig, timestamp: str) -> List:
                 device=None,
             )
         )
+
+    if config.diagnostics.plot.learned_features:
+        LOGGER.debug("Setting up a callback to plot the trainable graph node features ...")
+        trainer_callbacks.append(GraphTrainableFeaturesPlot())
 
     return trainer_callbacks

@@ -228,7 +228,7 @@ class GraphForecaster(pl.LightningModule):
         loss = self.loss(y_true, y_pred, squash=False).cpu().numpy()
         fig = plot_loss(loss)
         fig.tight_layout()
-        self._output_figure(
+        self.output_figure(
             fig,
             tag=f"loss_rstep_rstep{rollout_step:02d}_rank{self.local_rank:01d}",
             exp_log_tag=f"loss_sample_rstep{rollout_step:02d}_rank{self.local_rank:01d}",
@@ -248,13 +248,13 @@ class GraphForecaster(pl.LightningModule):
             y_pred_[sample_idx, ...].squeeze(),
         )
         fig.tight_layout()
-        self._output_figure(
+        self.output_figure(
             fig,
             tag=f"gnn_pred_val_sample_rstep{rollout_step:02d}_batch{batch_idx:04d}_rank0",
             exp_log_tag=f"val_pred_sample_rstep{rollout_step:02d}_rank{self.local_rank:01d}",
         )
 
-    def _output_figure(self, fig, tag: str = "gnn", exp_log_tag: str = "val_pred_sample") -> None:
+    def output_figure(self, fig, tag: str = "gnn", exp_log_tag: str = "val_pred_sample") -> None:
         """Figure output: save to file and/or display in notebook."""
         if self.save_basedir is not None:
             save_path = os.path.join(self.save_basedir, f"plots/{tag}_epoch{self.current_epoch:03d}.png")

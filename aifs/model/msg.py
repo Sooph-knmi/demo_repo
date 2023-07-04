@@ -36,7 +36,7 @@ class GraphMSG(nn.Module):
 
         # create mappings
         if graph_data is None:
-            self.graph_data = torch.load(os.path.join(config.hardware.paths.graph, config.hardware.files.graph))
+            self._graph_data = torch.load(os.path.join(config.hardware.paths.graph, config.hardware.files.graph))
         else:
             self._graph_data = graph_data
 

@@ -297,3 +297,19 @@ def scatter_plot(
         ax.set_title(title)
     ax.set_aspect("auto", adjustable=None)
     fig.colorbar(psc, ax=ax)
+
+
+def plot_graph_features(
+    latlons: np.ndarray,
+    features: np.ndarray,
+) -> Figure:
+    nplots = features.shape[-1]
+    figsize = (nplots * 4, 3)
+    fig, ax = plt.subplots(1, nplots, figsize=figsize, subplot_kw={"projection": ccrs.PlateCarree()})
+    lat, lon = latlons[:, 0], latlons[:, 1]
+
+    pc = ccrs.PlateCarree()
+    for i in range(nplots):
+        ax_ = ax[i] if nplots > 1 else ax
+        scatter_plot(fig, ax_, pc, lat, lon, features[..., i])
+    return fig
