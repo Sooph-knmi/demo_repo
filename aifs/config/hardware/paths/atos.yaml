@@ -1,11 +1,15 @@
 input_data_basedir: /lus/h2resw01/fws4/lb/project/ai-ml/zarrs
-training: ${input_data_basedir}/../panguweather-${data.resolution}
-validation: ${input_data_basedir}/../panguweather-${data.resolution}
-test: ${input_data_basedir}/../panguweather-${data.resolution}
-predict: ${input_data_basedir}/../panguweather-${data.resolution}
-output: ${oc.env:SCRATCH}/aifs/${data.resolution}/
-logs: ${hardware.paths.output}/logs
-checkpoints: ${hardware.paths.output}/checkpoint
-plots: ${hardware.paths.output}/plots
+output_data_basedir: ${oc.env:SCRATCH}/aifs/${data.resolution}
+
+training: ${hardware.paths.input_data_basedir}/../panguweather-${data.resolution}
+validation: ${hardware.paths.input_data_basedir}/../panguweather-${data.resolution}
+test: ${hardware.paths.input_data_basedir}/../panguweather-${data.resolution}
+predict: ${hardware.paths.input_data_basedir}/../panguweather-${data.resolution}
+
+output: ${hardware.paths.output_data_basedir}/
+logs: ${hardware.paths.output_data_basedir}/logs
+checkpoints: ${hardware.paths.output_data_basedir}/checkpoint
+plots: ${hardware.paths.output_data_basedir}/plots
+
 graph: /home/mlx/data/graphs/
 run_id: ${now:%Y-%m-%d_%H-%M}
