@@ -4,6 +4,12 @@ compile: False
 # resume training from a checkpoint
 warm_start: False
 
+# prescribe initial seed, if null generate seed 
+initial_seed: null
+
+# run in deterministic mode ; slows down
+deterministic: False
+
 # miscellaneous
 precision: 16-mixed
 

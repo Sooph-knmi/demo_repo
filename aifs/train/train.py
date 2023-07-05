@@ -26,6 +26,11 @@ def train(config: DictConfig) -> None:
     """
     torch.set_float32_matmul_precision("high")
 
+    if config.training.initial_seed is not None:
+        initial_seed = config.training.initial_seed
+        pl.seed_everything(initial_seed, workers=True)
+        LOGGER.debug("Running with initial seed: %d", initial_seed)
+
     # create data module (data loaders and data sets)
     dmod = ERA5DataModule(config)
 
@@ -82,6 +87,7 @@ def train(config: DictConfig) -> None:
     trainer = pl.Trainer(
         accelerator="gpu" if config.hardware.num_gpus_per_node > 0 else "cpu",
         callbacks=trainer_callbacks,
+        deterministic=config.training.deterministic,
         detect_anomaly=config.diagnostics.debug.anomaly_detection,
         strategy=config.hardware.strategy,  # we should use ddp with find_unused_parameters = False, static_graph = True
         devices=config.hardware.num_gpus_per_node if config.hardware.num_gpus_per_node > 0 else None,
