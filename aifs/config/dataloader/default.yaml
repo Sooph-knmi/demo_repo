@@ -4,7 +4,7 @@ num_workers:
   test: 8
   predict: 8
 batch_size:
-  training: 4
+  training: 2
   validation: 4
   test: 4
   predict: 4

@@ -19,7 +19,7 @@ accum_grad_batches: 1
 
 # clipp gradients, 0 : don't clip, default algorithm: norm, alternative: value
 gradient_clip:
-  val: 0.
+  val: 32.
   algorithm: value
 
 # stochastic weight averaging
@@ -50,10 +50,10 @@ rollout:
 save_top_k: -1
 
 lead_time: 6
-max_epochs: 100
+max_epochs: 200
 lr:
   rate: 0.625e-4
-  iterations: 300000
+  iterations: 600000
   min: 1.5e-7 #Not scaled by #GPU
 
 loss_scaling:
@@ -62,7 +62,7 @@ loss_scaling:
     t: 6 #1
     u: 0.8 #0.5
     v: 0.5 #0.33
-    w: 0.01
+    w: 0.001
     z: 12 #1
   sfc:
     sp: 0.1
