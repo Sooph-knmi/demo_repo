@@ -1,5 +1,5 @@
 defaults:
-  - hardware: atos
+  - hardware: atos_slurm
   - data: zarr
   - dataloader: default
   - model: gnn

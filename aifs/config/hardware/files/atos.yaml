@@ -1,4 +1,4 @@
-training: panguweather-${data.resolution}-1979-2015-6h.zarr
+training: aifs-era5-${data.resolution}-1979-2015-1h.zarr
 validation: panguweather-${data.resolution}-2016-2017-6h.zarr
 test: panguweather-${data.resolution}-2016-2017-6h.zarr
 predict: panguweather-${data.resolution}-2016-2017-6h.zarr

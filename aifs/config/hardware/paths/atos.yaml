@@ -1,4 +1,4 @@
-training: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
+training: /lus/h2resw01/fws4/lb/project/ai-ml/zarrs/
 validation: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
 test: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
 predict: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
