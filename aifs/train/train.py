@@ -1,22 +1,25 @@
 import os
+import sys
 from typing import Optional
 
 import hydra
-import pytorch_lightning as pl
-import torch
 from omegaconf import DictConfig
-from pytorch_lightning.profilers import AdvancedProfiler
+from omegaconf import OmegaConf
 
-from aifs.data.era_datamodule import ERA5DataModule
-from aifs.train.trainer import GraphForecaster
-from aifs.train.utils import setup_callbacks
-from aifs.train.utils import setup_wandb_logger
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
 
 def train(config: DictConfig) -> None:
+    from aifs.data.era_datamodule import ERA5DataModule
+    from aifs.train.trainer import GraphForecaster
+    from aifs.train.utils import setup_callbacks
+    from aifs.train.utils import setup_wandb_logger
+    import pytorch_lightning as pl
+    import torch
+    from pytorch_lightning.profilers import AdvancedProfiler
+
     """Training entry point.
 
     Parameters
@@ -106,6 +109,36 @@ def train(config: DictConfig) -> None:
     LOGGER.debug("---- DONE. ----")
 
 
-@hydra.main(version_base=None, config_path="../config", config_name="config")
+def hydra_main_with_overwrite(*args, **kwargs):
+    def pop_argument(key):
+        """Finds argument --{key} in sys.argv and remove it.
+
+        Returns the value found, or None if --{key} is not present
+        """
+        try:
+            i = sys.argv.index(f"--{key}")
+        except ValueError:
+            return None
+        assert len(sys.argv) > i, f"--{key} requires an argument."
+        assert sys.argv.pop(i) == f"--{key}"
+        return sys.argv.pop(i)  # get value
+
+    def decorator(func):
+        overwrite = pop_argument("overwrite")
+
+        @hydra.main(*args, **kwargs)
+        def wrapper(config: DictConfig):
+            if overwrite:
+                LOGGER.info(f"Using {overwrite} to overwrite config.")
+                overwrite_cfg = OmegaConf.load(overwrite)
+                config = OmegaConf.merge(config, overwrite_cfg)
+            return func(config)
+
+        return wrapper
+
+    return decorator
+
+
+@hydra_main_with_overwrite(version_base=None, config_path="../config", config_name="config")
 def main(config: DictConfig):
     train(config)
