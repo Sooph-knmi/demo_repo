@@ -1,5 +1,5 @@
 defaults:
-  - hardware: atos
+  - hardware: atos_slurm
   - data: zarr
   - dataloader: default
   - model: gnn
@@ -15,12 +15,16 @@ defaults:
 #   num_gpus_per_node: 1
 hardware:
   files:
-    graph: graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4.pt
+    graph: graph_mappings_normed_edge_attrs_2023062700_${data.resolution}_h_0_1_2_3_4.pt
+    training: panguweather-${data.resolution}-1979-2015-6h.zarr
+  paths:
+    training: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
 model:
-  num_channels: 128
+  num_channels: 256
 dataloader:
-  limit_batches:
-    training: 100
-    validation: 100
+  batch_size:
+    training: 4
 training:
-  max_epochs: 3
+  initial_seed: 42
+  lr:
+    rate: 0.125e-3
