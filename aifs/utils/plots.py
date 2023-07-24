@@ -200,14 +200,14 @@ def plot_predicted_multilevel_flat_sample(
     fig, ax = plt.subplots(n_plots_x, n_plots_y, figsize=figsize, subplot_kw={"projection": ccrs.PlateCarree()})
     pc = ccrs.PlateCarree()
 
-    for idx, vname in parameters.items():
-        xt = x[..., idx].squeeze()
-        yt = y_true[..., idx].squeeze()
-        yp = y_pred[..., idx].squeeze()
+    for plot_idx, (variable_idx, variable_name) in enumerate(parameters.items()):
+        xt = x[..., variable_idx].squeeze()
+        yt = y_true[..., variable_idx].squeeze()
+        yp = y_pred[..., variable_idx].squeeze()
         if n_plots_x > 1:
-            plot_flat_sample(fig, ax[idx, :], pc, latlons, xt, yt, yp, vname)
+            plot_flat_sample(fig, ax[plot_idx, :], pc, latlons, xt, yt, yp, variable_name)
         else:
-            plot_flat_sample(fig, ax, pc, latlons, xt, yt, yp, vname)
+            plot_flat_sample(fig, ax, pc, latlons, xt, yt, yp, variable_name)
     return fig
 
 
