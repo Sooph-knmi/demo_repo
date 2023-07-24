@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from aifs.data.era_dataset import ERA5NativeGridDataset
 from aifs.data.era_dataset import worker_init_func
 from aifs.data.era_readers import read_era_data
-from aifs.utils.constants import _DL_PREFETCH_FACTOR
+
 from aifs.utils.logger import get_logger
 
 
@@ -84,8 +84,8 @@ class ERA5DataModule(pl.LightningDataModule):
             pin_memory=True,
             # worker initializer
             worker_init_fn=worker_init_func,
-            # prefetch batches (default prefetch_factor == 2)
-            prefetch_factor=_DL_PREFETCH_FACTOR,
+            # prefetch batches
+            prefetch_factor=self.config.dataloader.prefetch_factor,
             persistent_workers=False,
         )
 
@@ -149,7 +149,7 @@ class ERA5TestDataModule(pl.LightningDataModule):
             num_workers=num_workers,
             pin_memory=True,
             worker_init_fn=worker_init_func,
-            prefetch_factor=_DL_PREFETCH_FACTOR,
+            prefetch_factor=config.dataloader.prefetch_factor,
             persistent_workers=False,
         )
 

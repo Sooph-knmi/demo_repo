@@ -11,7 +11,6 @@ from torch.utils.data import get_worker_info
 from torch.utils.data import IterableDataset
 from zarr.core import Array
 
-from aifs.utils.constants import _ERA_PLEV
 from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__, debug=False)
@@ -70,8 +69,6 @@ class ERA5NativeGridDataset(IterableDataset):
         LOGGER.debug("Dataset lead_time = %d, lead_step = %d ..., date_step = %d", self.lead_time, self.lead_step, self.data_step)
 
         self.rollout = rollout
-
-        self.nlev = _ERA_PLEV
 
         self._read_era = era_data_reader
 

@@ -1,3 +1,5 @@
+prefetch_factor: 2
+
 num_workers:
   training: 8
   validation: 8
