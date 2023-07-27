@@ -8,9 +8,9 @@ from torch import nn
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
 
+from aifs.diagnostics.logger import get_logger
 from aifs.model.layers import MessagePassingMapper
 from aifs.model.layers import MessagePassingProcessor
-from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 

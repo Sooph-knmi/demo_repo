@@ -4,7 +4,7 @@ from typing import Tuple
 import torch
 from torch import nn
 
-from aifs.utils.logger import get_logger
+from aifs.diagnostics.logger import get_logger
 
 LOGGER = get_logger(__name__)
 

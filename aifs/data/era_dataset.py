@@ -1,9 +1,9 @@
 import os
+import random
 import re
 from typing import Callable
 from typing import Optional
 
-import random
 import numpy as np
 import torch
 from einops import rearrange
@@ -11,7 +11,7 @@ from torch.utils.data import get_worker_info
 from torch.utils.data import IterableDataset
 from zarr.core import Array
 
-from aifs.utils.logger import get_logger
+from aifs.diagnostics.logger import get_logger
 
 LOGGER = get_logger(__name__, debug=False)
 

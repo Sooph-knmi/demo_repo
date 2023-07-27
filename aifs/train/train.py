@@ -8,10 +8,10 @@ from omegaconf import DictConfig
 from pytorch_lightning.profilers import AdvancedProfiler
 
 from aifs.data.era_datamodule import ERA5DataModule
+from aifs.diagnostics.logger import get_logger
 from aifs.train.trainer import GraphForecaster
 from aifs.train.utils import setup_callbacks
 from aifs.train.utils import setup_wandb_logger
-from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 

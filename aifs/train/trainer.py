@@ -3,23 +3,18 @@ from typing import Dict
 from typing import Mapping
 from typing import Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pytorch_lightning as pl
 import torch
-import wandb
 from omegaconf import DictConfig
 from timm.scheduler import CosineLRScheduler
 
 from aifs.data.era_normalizers import InputNormalizer
+from aifs.diagnostics.logger import get_logger
 from aifs.model.losses import grad_scaler
 from aifs.model.losses import WeightedMSELoss
 from aifs.model.msg import GraphMSG
 from aifs.train.utils import pl_scaling
-from aifs.utils.logger import get_logger
-from aifs.utils.plots import init_plot_settings
-from aifs.utils.plots import plot_loss
-from aifs.utils.plots import plot_predicted_multilevel_flat_sample
 
 # from torch.autograd.graph import save_on_cpu
 
@@ -105,16 +100,6 @@ class GraphForecaster(pl.LightningModule):
         LOGGER.debug("Rollout max : %d", self.rollout_max)
         LOGGER.debug("Multistep: %d", self.multi_step)
 
-        self.log_to_wandb = config.diagnostics.logging.wandb
-        self.plot_frequency = config.diagnostics.plot.frequency
-
-        self.plot_variables = config.diagnostics.plot.parameters
-        self.plot_per_sample = config.diagnostics.plot.per_sample
-        self.save_basedir = os.path.join(config.hardware.paths.plots, config.hardware.paths.run_id)
-        
-
-        init_plot_settings()
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.gnn(x)
 
@@ -131,7 +116,6 @@ class GraphForecaster(pl.LightningModule):
         batch: torch.Tensor,
         batch_idx: int,
         compute_metrics: bool = False,
-        plot: bool = False,
     ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
         batch = self.normalizer(batch)  # normalized in-place
@@ -147,16 +131,6 @@ class GraphForecaster(pl.LightningModule):
             # y includes the auxiliary variables, so we must leave those out when computing the loss
             loss += self.loss(y_pred, y[..., : self.fcdim])
 
-            if plot and self.global_rank == 0:
-                self._plot_loss(y_pred, y[..., : self.fcdim], rollout_step=rstep)
-                self._plot_sample(
-                    batch_idx,
-                    rstep,
-                    x[:, -1, :, : self.fcdim],
-                    y[..., : self.fcdim],
-                    y_pred,
-                )
-
             x = self.advance_input(x, y, y_pred)
 
             if compute_metrics:
@@ -167,10 +141,10 @@ class GraphForecaster(pl.LightningModule):
 
         # scale loss
         loss *= 1.0 / self.rollout
-        return loss, metrics
+        return loss, metrics, y_pred
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        train_loss, _ = self._step(batch, batch_idx)
+        train_loss, _, _ = self._step(batch, batch_idx)
         self.log(
             "train_wmse",
             train_loss,
@@ -201,9 +175,8 @@ class GraphForecaster(pl.LightningModule):
         self.rollout = min(self.rollout, self.rollout_max)
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
-        plot_sample = batch_idx % self.plot_frequency == 3
         with torch.no_grad():
-            val_loss, metrics = self._step(batch, batch_idx, compute_metrics=True, plot=plot_sample)
+            val_loss, metrics, y_pred = self._step(batch, batch_idx, compute_metrics=True)
         self.log(
             "val_wmse",
             val_loss,
@@ -225,48 +198,7 @@ class GraphForecaster(pl.LightningModule):
                 batch_size=batch.shape[0],
                 sync_dist=True,
             )
-
-    def _plot_loss(self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int) -> None:
-        loss = self.loss(y_true, y_pred, squash=False).cpu().numpy()
-        fig = plot_loss(loss)
-        fig.tight_layout()
-        self.output_figure(
-            fig,
-            tag=f"loss_rstep_rstep{rollout_step:02d}_rank{self.local_rank:01d}",
-            exp_log_tag=f"loss_sample_rstep{rollout_step:02d}_rank{self.local_rank:01d}",
-        )
-
-    def _plot_sample(self, batch_idx: int, rollout_step: int, x: torch.Tensor, y_true: torch.Tensor, y_pred: torch.Tensor) -> None:
-        """Plots a denormalized sample: input, target and prediction."""
-        sample_idx = 0
-        x_ = self.normalizer.denormalize(x.clone()).cpu().numpy()
-        y_true_ = self.normalizer.denormalize(y_true.clone()).cpu().numpy()
-        y_pred_ = self.normalizer.denormalize(y_pred.clone()).cpu().numpy()
-
-        fig = plot_predicted_multilevel_flat_sample(
-            self.plot_variables,
-            self.plot_per_sample,
-            np.rad2deg(self.era_latlons.numpy()),
-            x_[sample_idx, ...].squeeze(),
-            y_true_[sample_idx, ...].squeeze(),
-            y_pred_[sample_idx, ...].squeeze(),
-        )
-        fig.tight_layout()
-        self.output_figure(
-            fig,
-            tag=f"gnn_pred_val_sample_rstep{rollout_step:02d}_batch{batch_idx:04d}_rank0",
-            exp_log_tag=f"val_pred_sample_rstep{rollout_step:02d}_rank{self.local_rank:01d}",
-        )
-
-    def output_figure(self, fig, tag: str = "gnn", exp_log_tag: str = "val_pred_sample") -> None:
-        """Figure output: save to file and/or display in notebook."""
-        if self.save_basedir is not None:
-            save_path = os.path.join(self.save_basedir, f"plots/{tag}_epoch{self.current_epoch:03d}.png")
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            fig.savefig(save_path, dpi=100)
-            if self.log_to_wandb:
-                self.logger.experiment.log({exp_log_tag: wandb.Image(save_path)})
-        plt.close(fig)  # cleanup
+        return val_loss, y_pred
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)

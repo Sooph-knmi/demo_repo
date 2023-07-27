@@ -3,7 +3,7 @@ from typing import Mapping
 
 import yaml
 
-from aifs.utils.logger import get_logger
+from aifs.diagnostics.logger import get_logger
 
 LOGGER = get_logger(__name__)
 

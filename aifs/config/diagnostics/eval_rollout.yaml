@@ -4,7 +4,9 @@ eval:
   rollout: 12
   frequency: 75
 plot:
+  enabled: True
   frequency: 750
+  sample_idx: 0
   per_sample: 6
   parameters:
     10: q_850
@@ -16,6 +18,7 @@ plot:
     81: 10u
     82: 10v
     79: msl
+  learned_features: True
 
 debug:
   # this will detect and trace back NaNs / Infs etc. but will slow down training

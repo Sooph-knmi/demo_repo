@@ -1,15 +1,46 @@
+import os
 from typing import Any
 from typing import Dict
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import Callback
 
-from aifs.utils.logger import get_logger
-from aifs.utils.plots import plot_graph_features
+import wandb
+from aifs.diagnostics.logger import get_logger
+from aifs.diagnostics.plots import init_plot_settings
+from aifs.diagnostics.plots import plot_graph_features
+from aifs.diagnostics.plots import plot_loss
+from aifs.diagnostics.plots import plot_predicted_multilevel_flat_sample
+
 
 LOGGER = get_logger(__name__)
+
+
+class PlotCallback(Callback):
+    """Factory for creating a callback that plots data to Weights and Biases."""
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.save_basedir = os.path.join(config.hardware.paths.plots, config.hardware.paths.run_id)
+        self.plot_frequency = config.diagnostics.plot.frequency
+        init_plot_settings()
+
+    def _output_figure(self, trainer, fig, tag: str = "gnn", exp_log_tag: str = "val_pred_sample") -> None:
+        """Figure output: save to file and/or display in notebook."""
+        if self.save_basedir is not None:
+            save_path = os.path.join(
+                self.save_basedir,
+                f"plots/{tag}_epoch{trainer.current_epoch:03d}.png",
+            )
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            fig.savefig(save_path, dpi=100)
+            if self.config.diagnostics.logging.wandb:
+                trainer.logger.experiment.log({exp_log_tag: wandb.Image(save_path)})
+        plt.close(fig)  # cleanup
 
 
 class RolloutEval(Callback):
@@ -104,14 +135,16 @@ class RolloutEval(Callback):
             self._eval(pl_module, batch)
 
 
-class GraphTrainableFeaturesPlot(Callback):
+class GraphTrainableFeaturesPlot(PlotCallback):
     """Visualize the trainable features defined at the ERA and H graph nodes, if any.
 
     TODO: How best to visualize the learned edge embeddings? Offline, perhaps - using code from @Simon's notebook?
     """
 
+    def __init__(self, config):
+        super().__init__(config)
+
     def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
-        del trainer  # not used
         if pl_module.global_rank == 0:
             gnn = pl_module.gnn
             graph = pl_module.graph_data
@@ -121,8 +154,86 @@ class GraphTrainableFeaturesPlot(Callback):
 
             if gnn.era_trainable is not None:
                 fig = plot_graph_features(ecoords, gnn.era_trainable.cpu())
-                pl_module.output_figure(fig, tag="era_trainable", exp_log_tag="era_trainable")
+                self._output_figure(trainer, fig, tag="era_trainable", exp_log_tag="era_trainable")
 
             if gnn.h_trainable is not None:
                 fig = plot_graph_features(hcoords, gnn.h_trainable.cpu())
-                pl_module.output_figure(fig, tag="h_trainable", exp_log_tag="h_trainable")
+                self._output_figure(trainer, fig, tag="h_trainable", exp_log_tag="h_trainable")
+
+
+class PlotLoss(PlotCallback):
+    """Plots the unsqueezed loss over rollouts."""
+
+    def __init__(self, config):
+        super().__init__(config)
+
+    def _plot(
+        # self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int
+        self,
+        trainer,
+        pl_module,
+        outputs,
+        batch,
+        batch_idx,
+    ) -> None:
+        for rollout_step, (y_hat, y_true) in enumerate(zip(batch[:, 1:, ...], outputs[1])):
+            loss = pl_module.loss(y_hat[..., : pl_module.fcdim], y_true, squash=False).cpu().numpy()
+            fig = plot_loss(loss)
+            fig.tight_layout()
+            self._output_figure(
+                trainer,
+                fig,
+                tag=f"loss_rstep_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
+                exp_log_tag=f"loss_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
+            )
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
+            self._plot(trainer, pl_module, outputs, batch, batch_idx)
+
+
+class PlotSample(PlotCallback):
+    """Plots a denormalized sample: input, target and prediction."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.sample_idx = self.config.diagnostics.plot.sample_idx
+
+    def _plot(
+        # batch_idx: int, rollout_step: int, x: torch.Tensor, y_true: torch.Tensor, y_pred: torch.Tensor,
+        self,
+        trainer,
+        pl_module,
+        outputs,
+        batch,
+        batch_idx,
+    ) -> None:
+        data = (
+            pl_module.normalizer.denormalize(
+                batch[self.sample_idx, pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1, ...].clone()
+            )
+            .cpu()
+            .numpy()
+        )
+        y_pred_ = pl_module.normalizer.denormalize(outputs[1][self.sample_idx, ...].clone()).cpu().numpy()
+        for rollout_step in range(pl_module.rollout):
+            fig = plot_predicted_multilevel_flat_sample(
+                self.config.diagnostics.plot.parameters,
+                self.config.diagnostics.plot.per_sample,
+                np.rad2deg(pl_module.era_latlons.numpy()),
+                data[0, ..., : pl_module.fcdim].squeeze(),
+                data[rollout_step + 1, ..., : pl_module.fcdim].squeeze(),
+                y_pred_[..., : pl_module.fcdim].squeeze(),
+            )
+
+            fig.tight_layout()
+            self._output_figure(
+                trainer,
+                fig,
+                tag=f"gnn_pred_val_sample_rstep{rollout_step:02d}_batch{batch_idx:04d}_rank0",
+                exp_log_tag=f"val_pred_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
+            )
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
+            self._plot(trainer, pl_module, outputs, batch, batch_idx)

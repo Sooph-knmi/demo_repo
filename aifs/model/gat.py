@@ -6,9 +6,9 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import HeteroData
 
+from aifs.diagnostics.logger import get_logger
 from aifs.model.layers import GATEncoder
 from aifs.model.layers import TransformerMapper
-from aifs.utils.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
