@@ -176,8 +176,11 @@ class PlotLoss(PlotCallback):
         batch,
         batch_idx,
     ) -> None:
-        for rollout_step, (y_hat, y_true) in enumerate(zip(batch[:, 1:, ...], outputs[1])):
-            loss = pl_module.loss(y_hat[..., : pl_module.fcdim], y_true, squash=False).cpu().numpy()
+        for rollout_step in range(pl_module.rollout):
+            y_hat = outputs[1][rollout_step]
+            y_true = batch[:, pl_module.multi_step + rollout_step, :, : pl_module.fcdim]
+            loss = pl_module.loss(y_hat, y_true, squash=False).cpu().numpy()
+
             fig = plot_loss(loss)
             fig.tight_layout()
             self._output_figure(
@@ -215,7 +218,7 @@ class PlotSample(PlotCallback):
             .cpu()
             .numpy()
         )
-        y_pred_ = pl_module.normalizer.denormalize(outputs[1][self.sample_idx, ...].clone()).cpu().numpy()
+
         for rollout_step in range(pl_module.rollout):
             fig = plot_predicted_multilevel_flat_sample(
                 self.config.diagnostics.plot.parameters,
@@ -223,7 +226,10 @@ class PlotSample(PlotCallback):
                 np.rad2deg(pl_module.era_latlons.numpy()),
                 data[0, ..., : pl_module.fcdim].squeeze(),
                 data[rollout_step + 1, ..., : pl_module.fcdim].squeeze(),
-                y_pred_[..., : pl_module.fcdim].squeeze(),
+                pl_module.normalizer.denormalize(outputs[1][rollout_step][self.sample_idx, ..., : pl_module.fcdim])
+                .squeeze()
+                .cpu()
+                .numpy(),
             )
 
             fig.tight_layout()

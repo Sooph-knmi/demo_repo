@@ -100,6 +100,8 @@ class GraphForecaster(pl.LightningModule):
         LOGGER.debug("Rollout max : %d", self.rollout_max)
         LOGGER.debug("Multistep: %d", self.multi_step)
 
+        self.enable_plot = config.diagnostics.plot.enabled
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.gnn(x)
 
@@ -124,6 +126,7 @@ class GraphForecaster(pl.LightningModule):
         # start rollout
         x = batch[:, 0 : self.multi_step, ...]  # (bs, multi_step, latlon, nvar)
 
+        y_preds = []
         # with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
@@ -139,9 +142,12 @@ class GraphForecaster(pl.LightningModule):
                     y_hat_denorm = self.normalizer.denormalize(x[:, -1, ...].clone())
                     metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
 
+            if self.enable_plot:
+                y_preds.append(y_pred.detach())
+
         # scale loss
         loss *= 1.0 / self.rollout
-        return loss, metrics, y_pred
+        return loss, metrics, y_preds
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         train_loss, _, _ = self._step(batch, batch_idx)
@@ -176,7 +182,7 @@ class GraphForecaster(pl.LightningModule):
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
         with torch.no_grad():
-            val_loss, metrics, y_pred = self._step(batch, batch_idx, compute_metrics=True)
+            val_loss, metrics, y_preds = self._step(batch, batch_idx, compute_metrics=True)
         self.log(
             "val_wmse",
             val_loss,
@@ -198,7 +204,7 @@ class GraphForecaster(pl.LightningModule):
                 batch_size=batch.shape[0],
                 sync_dist=True,
             )
-        return val_loss, y_pred
+        return val_loss, y_preds
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
