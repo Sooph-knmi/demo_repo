@@ -117,7 +117,7 @@ class GraphForecaster(pl.LightningModule):
         self,
         batch: torch.Tensor,
         batch_idx: int,
-        compute_metrics: bool = False,
+        validation_mode: bool = False,
     ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
         batch = self.normalizer(batch)  # normalized in-place
@@ -136,14 +136,14 @@ class GraphForecaster(pl.LightningModule):
 
             x = self.advance_input(x, y, y_pred)
 
-            if compute_metrics:
+            if validation_mode:
                 for mkey, (low, high) in self.metric_ranges.items():
                     y_denorm = self.normalizer.denormalize(y.clone())
                     y_hat_denorm = self.normalizer.denormalize(x[:, -1, ...].clone())
                     metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
 
-            if self.enable_plot:
-                y_preds.append(y_pred.detach())
+                if self.enable_plot:
+                    y_preds.append(y_pred)
 
         # scale loss
         loss *= 1.0 / self.rollout
@@ -182,7 +182,7 @@ class GraphForecaster(pl.LightningModule):
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
         with torch.no_grad():
-            val_loss, metrics, y_preds = self._step(batch, batch_idx, compute_metrics=True)
+            val_loss, metrics, y_preds = self._step(batch, batch_idx, validation_mode=True)
         self.log(
             "val_wmse",
             val_loss,
