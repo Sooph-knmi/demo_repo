@@ -19,7 +19,6 @@ setup(
     extras_require={
         "extras": [
             "matplotlib==3.7.1",
-            "cartopy==0.21.1",
             "tqdm==4.65.0",
             "wandb==0.15.0",
             "zarr==2.14.2",

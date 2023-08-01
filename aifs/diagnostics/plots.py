@@ -1,23 +1,29 @@
 from typing import Dict
 from typing import Optional
 
-import cartopy.crs as ccrs
-import cartopy.feature as cf
 import matplotlib.pyplot as plt
+import matplotlib.style as mplstyle
 import numpy as np
 from matplotlib import cm
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.figure import Figure
 
 from aifs.diagnostics.logger import get_logger
+from aifs.diagnostics.maps import Coastlines
+from aifs.diagnostics.maps import EquirectangularProjection
 
 LOGGER = get_logger(__name__)
+
+continents = Coastlines()
 
 
 def init_plot_settings():
     """Initialize matplotlib plot settings."""
     SMALL_SIZE = 8
     MEDIUM_SIZE = 10
+
+    mplstyle.use("fast")
+    plt.rcParams["path.simplify_threshold"] = 0.9
 
     plt.rc("font", size=SMALL_SIZE)  # controls default text sizes
     plt.rc("axes", titlesize=SMALL_SIZE)  # fontsize of the axes title
@@ -197,8 +203,9 @@ def plot_predicted_multilevel_flat_sample(
     n_plots_x, n_plots_y = len(parameters), n_plots_per_sample
 
     figsize = (n_plots_y * 4, n_plots_x * 3)
-    fig, ax = plt.subplots(n_plots_x, n_plots_y, figsize=figsize, subplot_kw={"projection": ccrs.PlateCarree()})
-    pc = ccrs.PlateCarree()
+    fig, ax = plt.subplots(n_plots_x, n_plots_y, figsize=figsize)
+
+    pc = EquirectangularProjection()
 
     for plot_idx, (variable_idx, variable_name) in enumerate(parameters.items()):
         xt = x[..., variable_idx].squeeze()
@@ -279,22 +286,26 @@ def scatter_plot(
     title : _type_, optional
         Title for plot, by default None
     """
-    ax.set_global()
-    ax.add_feature(cf.COASTLINE, edgecolor="black", linewidth=0.5)
 
     psc = ax.scatter(
-        x=lon,
-        y=lat,
+        *pc(lon, lat),
         c=data,
         cmap=cmap,
         s=1,
         alpha=1.0,
-        transform=pc,
         norm=TwoSlopeNorm(vcenter=0.0) if cmap == "bwr" else None,
     )
+    ax.set_xlim((-np.pi, np.pi))
+    ax.set_ylim((-np.pi / 2, np.pi / 2))
+
+    continents.plot_continents(ax)
+
     if title is not None:
         ax.set_title(title)
+
     ax.set_aspect("auto", adjustable=None)
+    _hide_axes_ticks(ax)
+    plt.tight_layout()
     fig.colorbar(psc, ax=ax)
 
 
@@ -302,12 +313,27 @@ def plot_graph_features(
     latlons: np.ndarray,
     features: np.ndarray,
 ) -> Figure:
+    """Plot trainable graph features.
+
+    Parameters
+    ----------
+    latlons : np.ndarray
+        Latitudes and longitudes
+    features : np.ndarray
+        Trainable Features
+
+    Returns
+    -------
+    Figure
+        Figure object handle
+    """
     nplots = features.shape[-1]
     figsize = (nplots * 4, 3)
-    fig, ax = plt.subplots(1, nplots, figsize=figsize, subplot_kw={"projection": ccrs.PlateCarree()})
+    fig, ax = plt.subplots(1, nplots, figsize=figsize)
+
     lat, lon = latlons[:, 0], latlons[:, 1]
 
-    pc = ccrs.PlateCarree()
+    pc = EquirectangularProjection()
     for i in range(nplots):
         ax_ = ax[i] if nplots > 1 else ax
         scatter_plot(fig, ax_, pc, lat, lon, features[..., i])

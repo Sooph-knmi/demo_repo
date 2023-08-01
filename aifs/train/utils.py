@@ -103,6 +103,14 @@ def setup_callbacks(config: DictConfig, timestamp: str) -> List:
             ]
         )
 
+    if config.diagnostics.plot.enabled:
+        trainer_callbacks.extend(
+            [
+                PlotLoss(config),
+                PlotSample(config),
+            ]
+        )
+
     if config.training.swa.enabled:
         trainer_callbacks.append(
             StochasticWeightAveraging(

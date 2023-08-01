@@ -15,7 +15,6 @@ from aifs.diagnostics.plots import plot_graph_features
 from aifs.diagnostics.plots import plot_loss
 from aifs.diagnostics.plots import plot_predicted_multilevel_flat_sample
 
-
 LOGGER = get_logger(__name__)
 
 
@@ -36,10 +35,11 @@ class PlotCallback(Callback):
                 self.save_basedir,
                 f"plots/{tag}_epoch{trainer.current_epoch:03d}.png",
             )
+
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             fig.savefig(save_path, dpi=100)
             if self.config.diagnostics.logging.wandb:
-                trainer.logger.experiment.log({exp_log_tag: wandb.Image(save_path)})
+                trainer.logger.experiment.log({exp_log_tag: wandb.Image(fig)})
         plt.close(fig)  # cleanup
 
 
