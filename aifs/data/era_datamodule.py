@@ -30,8 +30,6 @@ class ERA5DataModule(pl.LightningDataModule):
         self.bs_train = config.dataloader.batch_size.training
         self.bs_val = config.dataloader.batch_size.validation
 
-        self.shuffle_valid = config.dataloader.shuffle.validation
-
         self.num_workers_train = config.dataloader.num_workers.training
         self.num_workers_val = config.dataloader.num_workers.validation
         self.config = config
@@ -39,18 +37,18 @@ class ERA5DataModule(pl.LightningDataModule):
         # TODO: will this work correctly in multi-node runs?
         self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
-        self.ds_train = self._get_dataset("training")
+        self.ds_train = self._get_dataset("training", shuffle=True)
 
         r = self.config.training.rollout.max
         if config.diagnostics.eval.enabled:
             r = max(r, config.diagnostics.eval.rollout)
-        self.ds_valid = self._get_dataset("validation", shuffle=self.shuffle_valid, rollout=r)
+        self.ds_valid = self._get_dataset("validation", shuffle=False, rollout=r)
 
         ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
         self.input_metadata = ds_tmp.attrs["climetlab"]
         ds_tmp = None
 
-    def _get_dataset(self, stage: str, shuffle: Optional[str] = True, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
+    def _get_dataset(self, stage: str, shuffle: Optional[bool] = True, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
         rollout_config = (
             self.config.training.rollout.max
             if self.config.training.rollout.epoch_increment > 0

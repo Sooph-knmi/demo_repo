@@ -10,8 +10,6 @@ batch_size:
   validation: 4
   test: 4
   predict: 4
-shuffle:
-  validation: False
 # runs only N training batches [N = integer | null]
 # if null then we run through all the batches
 limit_batches:
