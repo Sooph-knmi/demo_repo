@@ -37,18 +37,18 @@ class ERA5DataModule(pl.LightningDataModule):
         # TODO: will this work correctly in multi-node runs?
         self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
-        self.ds_train = self._get_dataset("training")
+        self.ds_train = self._get_dataset("training", shuffle=True)
 
         r = self.config.training.rollout.max
         if config.diagnostics.eval.enabled:
             r = max(r, config.diagnostics.eval.rollout)
-        self.ds_valid = self._get_dataset("validation", rollout=r)
+        self.ds_valid = self._get_dataset("validation", shuffle=False, rollout=r)
 
         ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
         self.input_metadata = ds_tmp.attrs["climetlab"]
         ds_tmp = None
 
-    def _get_dataset(self, stage: str, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
+    def _get_dataset(self, stage: str, shuffle: bool = True, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
         rollout_config = (
             self.config.training.rollout.max
             if self.config.training.rollout.epoch_increment > 0
@@ -63,6 +63,7 @@ class ERA5DataModule(pl.LightningDataModule):
             multistep=self.config.training.multistep_input,
             rank=self.local_rank,
             world_size=self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes,
+            shuffle=shuffle,
         )
 
     def _get_data_filename(self, stage: str) -> str:
@@ -148,7 +149,7 @@ class ERA5TestDataModule(pl.LightningDataModule):
             num_workers=num_workers,
             pin_memory=True,
             worker_init_fn=worker_init_func,
-            prefetch_factor=config.dataloader.prefetch_factor,
+            prefetch_factor=self.config.dataloader.prefetch_factor,
             persistent_workers=False,
         )
 
