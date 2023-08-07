@@ -7,10 +7,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytorch_lightning as pl
 import torch
-import wandb
 from omegaconf import DictConfig
 from timm.scheduler import CosineLRScheduler
 
+import wandb
 from aifs.data.era_normalizers import InputNormalizer
 from aifs.model.losses import grad_scaler
 from aifs.model.losses import WeightedMSELoss
@@ -221,6 +221,16 @@ class GraphForecaster(pl.LightningModule):
                 batch_size=batch.shape[0],
                 sync_dist=True,
             )
+
+    def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
+        batch = self.normalizer(batch)
+
+        with torch.no_grad():
+            # start rollout
+            x = batch[:, 0 : self.multi_step, ...]
+            y_hat = self(x)
+
+        return self.normalizer.denormalize(y_hat)
 
     def _plot_loss(self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int) -> None:
         loss = self.loss(y_true, y_pred, squash=False).cpu().numpy()
