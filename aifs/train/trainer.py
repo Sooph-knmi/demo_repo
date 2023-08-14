@@ -1,3 +1,4 @@
+import math
 import os
 from typing import Dict
 from typing import Mapping
@@ -88,22 +89,41 @@ class GraphForecaster(pl.LightningModule):
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
         self.multi_step = config.training.multistep_input
-        self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
+        self.lr = (
+            config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
+        )
         self.lr_iterations = config.training.lr.iterations
         self.lr_min = config.training.lr.min
         self.rollout = config.training.rollout.start
         self.rollout_epoch_increment = config.training.rollout.epoch_increment
         self.rollout_max = config.training.rollout.max
 
+        self.mgroupdef = None
+
         LOGGER.debug("Rollout window length: %d", self.rollout)
         LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
         LOGGER.debug("Rollout max : %d", self.rollout_max)
         LOGGER.debug("Multistep: %d", self.multi_step)
 
+        self.log_to_wandb = config.diagnostics.logging.wandb
+        self.plot_frequency = config.diagnostics.plot.frequency
+
+        self.plot_variables = config.diagnostics.plot.parameters
+        self.plot_per_sample = config.diagnostics.plot.per_sample
+        self.save_basedir = os.path.join(config.hardware.paths.plots, config.hardware.paths.run_id)
+
         self.enable_plot = config.diagnostics.plot.enabled
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.gnn(x)
+        self.group_id = int(os.environ.get("SLURM_PROCID", "0")) // config.hardware.group_size
+        self.group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.group_size
+        self.num_groups = math.ceil(config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.group_size)
+
+    def forward(self, x: torch.Tensor, mgroupdef) -> torch.Tensor:
+        return self.gnn(x, mgroupdef)
+
+    def set_mgroupdef(self, mgroupdef) -> None:
+        LOGGER.debug("set_mgroupdef: %s", mgroupdef)
+        self.mgroupdef = mgroupdef
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         x = x.roll(-1, dims=1)
@@ -118,6 +138,7 @@ class GraphForecaster(pl.LightningModule):
         batch: torch.Tensor,
         batch_idx: int,
         validation_mode: bool = False,
+        multi_gpu: bool = True,
     ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
         batch = self.normalizer(batch)  # normalized in-place
@@ -125,11 +146,26 @@ class GraphForecaster(pl.LightningModule):
 
         # start rollout
         x = batch[:, 0 : self.multi_step, ...]  # (bs, multi_step, latlon, nvar)
+        # LOGGER.debug(
+        #     "Batch index: %d - Global rank %d, group %d out of %d, group_rank %d got a batch tensor with norm %.8e",
+        #     batch_idx,
+        #     self.global_rank,
+        #     self.group_id,
+        #     self.num_groups,
+        #     self.group_rank,
+        #     torch.linalg.norm(x),
+        # )
 
         y_preds = []
         # with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
-            y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+            if multi_gpu:
+                y_pred = self(x, self.mgroupdef)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+            else:
+                y_pred = self(
+                    x, mgroupdef=(0, self.mgroupdef[1], self.mgroupdef[2])
+                )  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
             loss += self.loss(y_pred, y[..., : self.fcdim])
@@ -182,7 +218,7 @@ class GraphForecaster(pl.LightningModule):
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
         with torch.no_grad():
-            val_loss, metrics, y_preds = self._step(batch, batch_idx, validation_mode=True)
+            val_loss, metrics, y_preds = self._step(batch, batch_idx, validation_mode=True, multi_gpu=True)
         self.log(
             "val_wmse",
             val_loss,

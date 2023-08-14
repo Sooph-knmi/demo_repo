@@ -16,6 +16,7 @@ from torch_geometric.typing import PairTensor
 from torch_geometric.typing import Size
 from torch_geometric.utils import scatter
 
+from aifs.utils.distributed import shard_tensor1, gather_tensor1, reduce_tensor1, get_shape_shards1, change_channels_in_shape1
 from aifs.diagnostics.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -312,11 +313,18 @@ class MessagePassingProcessor(nn.Module):
         if cpu_offload:
             self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
 
-    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor) -> Tensor:
+    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes, mgroupdef) -> Tensor:
+        shapes_edge_idx = get_shape_shards1(edge_index, 1, mgroupdef[0])
+        shapes_edge_attr = get_shape_shards1(edge_attr, 0, mgroupdef[0])
+        edge_index = shard_tensor1(edge_index, 1, shapes_edge_idx, mgroupdef[0])
+        edge_attr = shard_tensor1(edge_attr, 0, shapes_edge_attr, mgroupdef[0])
+
         edge_attr = checkpoint(self.emb_edges, edge_attr, use_reentrant=False)
 
         for i in range(self.hidden_layers):
-            x, edge_attr = checkpoint(self.proc[i], x, edge_index, edge_attr, use_reentrant=False)
+            x, edge_attr = checkpoint(
+                self.proc[i], x, edge_index, edge_attr, (shape_nodes, shape_nodes), mgroupdef, use_reentrant=False
+            )
 
         return x
 
@@ -348,6 +356,7 @@ class MessagePassingMapper(MessagePassingProcessor):
         super().__init__(**kwargs)
 
         self.backward_mapper = backward_mapper
+        self.out_channels_dst = out_channels_dst
 
         if backward_mapper:  # h -> era
             self.node_era_extractor = gen_mlp(
@@ -376,20 +385,33 @@ class MessagePassingMapper(MessagePassingProcessor):
                 activation_func=self.activation,
             )
 
-    def forward(self, x: PairTensor, edge_index: Adj, edge_attr: Tensor) -> PairTensor:
-        if self.backward_mapper:
-            x_src, x_dst = x
-        else:
-            x_src = self.emb_nodes_src(x[0])
-            x_dst = self.emb_nodes_dst(x[1])
-
+    def forward(self, x: PairTensor, edge_index: Adj, edge_attr: Tensor, shape_nodes, size, mgroupdef) -> PairTensor:
+        shapes_edge_idx = get_shape_shards1(edge_index, 1, mgroupdef[0])
+        shapes_edge_attr = get_shape_shards1(edge_attr, 0, mgroupdef[0])
+        edge_index = shard_tensor1(edge_index, 1, shapes_edge_idx, mgroupdef[0])
+        edge_attr = shard_tensor1(edge_attr, 0, shapes_edge_attr, mgroupdef[0])
         edge_attr = self.emb_edges(edge_attr)
 
+        x_src, x_dst = x
+        shapes_src, shapes_dst = shape_nodes
+
+        if not self.backward_mapper:
+            x_src = shard_tensor1(x_src, 0, shapes_src, mgroupdef[0])
+            x_dst = shard_tensor1(x_dst, 0, shapes_dst, mgroupdef[0])
+            x_src = self.emb_nodes_src(x_src)
+            x_dst = self.emb_nodes_dst(x_dst)
+            shapes_src = change_channels_in_shape1(shapes_src, self.hidden_dim)
+            shapes_dst = change_channels_in_shape1(shapes_dst, self.hidden_dim)
+
         for i in range(self.hidden_layers):
-            (x_src, x_dst), edge_attr = self.proc[i]((x_src, x_dst), edge_index, edge_attr, size=(x_src.shape[0], x_dst.shape[0]))
+            (x_src, x_dst), edge_attr = self.proc[i](
+                (x_src, x_dst), edge_index, edge_attr, (shapes_src, shapes_dst), mgroupdef, size=size
+            )
 
         if self.backward_mapper:
             x_dst = self.node_era_extractor(x_dst)
+            x_dst = gather_tensor1(x_dst, 0, change_channels_in_shape1(shapes_dst, self.out_channels_dst), mgroupdef[0])
+            # x_src not gathered because not used ...
 
         return x_src, x_dst
 
@@ -428,15 +450,15 @@ class MessagePassingProcessorChunk(nn.Module):
             ]
         )
 
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, size: Size = None):
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index, edge_attr, shapes, mgroupdef, size: Size = None):
         for i in range(self.hidden_layers):
-            x, edge_attr = self.proc[i](x, edge_index, edge_attr, size=size)
+            x, edge_attr = self.proc[i](x, edge_index, edge_attr, shapes, mgroupdef, size=size)
 
         return x, edge_attr
 
 
-class MessagePassingBlock(MessagePassing):
-    """Message passing block with MLPs for node and edge embeddings."""
+class MessagePassingBlock(nn.Module):
+    """Message passing block with MLPs for node embeddings."""
 
     def __init__(
         self,
@@ -468,6 +490,59 @@ class MessagePassingBlock(MessagePassing):
             n_extra_layers=mlp_extra_layers,
             activation_func=activation,
         )
+
+        self.conv = NodeEdgeInteractions(
+            in_channels=in_channels, out_channels=out_channels, mlp_extra_layers=mlp_extra_layers, activation=activation
+        )
+
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index, edge_attr, shapes, mgroupdef, size: Size = None):
+        if isinstance(x, Tensor):
+            x_in = gather_tensor1(x, 0, shapes[1], mgroupdef[0])
+        else:
+            x_src = gather_tensor1(x[0], 0, shapes[0], mgroupdef[0])
+            x_dst = gather_tensor1(x[1], 0, shapes[1], mgroupdef[0])
+            x_in = (x_src, x_dst)
+
+        out, edges_out = self.conv(x_in, edge_index, edge_attr, size=size)
+        out = reduce_tensor1(out, mgroupdef[0])  # complete aggregation of edges
+        out = shard_tensor1(out, 0, shapes[1], mgroupdef[0])
+
+        if isinstance(x, Tensor):
+            nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x
+        else:
+            nodes_new_dst = self.node_mlp(torch.cat([x[1], out], dim=1)) + x[1]
+            nodes_new_src = self.node_mlp(torch.cat([x[0], x[0]], dim=1)) + x[0]  # todo: only update this in the forward mapper...
+            nodes_new = (nodes_new_src, nodes_new_dst)
+
+        return nodes_new, edges_out
+
+
+class NodeEdgeInteractions(MessagePassing):
+    """Message passing block with MLPs for node and edge embeddings."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        mlp_extra_layers: int = 0,
+        activation: str = "SiLU",
+        **kwargs,
+    ) -> None:
+        """Initialize MessagePassingBlock.
+
+        Parameters
+        ----------
+        in_channels : int
+            Number of input channels.
+        out_channels : int
+            Number of output channels.
+        mlp_extra_layers : int, optional
+            Extra layers in MLP, by default 0
+        activation : str, optional
+            Activation function, by default "SiLU"
+        """
+        super().__init__(**kwargs)
+
         self.edge_mlp = gen_mlp(
             3 * in_channels,
             out_channels,
@@ -477,24 +552,22 @@ class MessagePassingBlock(MessagePassing):
         )
 
     def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, size: Size = None):
-        out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size)
-
         if isinstance(x, Tensor):
-            nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x
+            dim_size = x.shape[0]
         else:
-            nodes_new_dst = self.node_mlp(torch.cat([x[1], out], dim=1)) + x[1]
-            nodes_new_src = self.node_mlp(torch.cat([x[0], x[0]], dim=1)) + x[0]  # todo: only update this in the forward mapper...
-            nodes_new = (nodes_new_src, nodes_new_dst)
+            dim_size = x[1].shape[0]
 
-        return nodes_new, edges_new
+        out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size, dim_size=dim_size)
 
-    def message(self, x_i: Tensor, x_j: Tensor, edge_attr: Tensor) -> Tensor:
+        return out, edges_new
+
+    def message(self, x_i: Tensor, x_j: Tensor, edge_attr: Tensor, dim_size: Optional[int] = None) -> Tensor:
         edges_new = self.edge_mlp(torch.cat([x_i, x_j, edge_attr], dim=1)) + edge_attr
 
         return edges_new
 
     def aggregate(self, edges_new: Tensor, edge_index: Adj, dim_size: Optional[int] = None) -> Tuple[Tensor, Tensor]:
-        out = scatter(edges_new, edge_index[1], dim=0, reduce="sum")
+        out = scatter(edges_new, edge_index[1], dim=0, dim_size=dim_size, reduce="sum")
 
         return out, edges_new
 

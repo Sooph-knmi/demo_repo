@@ -86,11 +86,10 @@ def setup_callbacks(config: DictConfig, timestamp: str) -> List:
             save_on_train_epoch_end=False,
             every_n_epochs=1,
         ),
-        LearningRateMonitor(
-            logging_interval="step",
-            log_momentum=True,
-        ),
     ]
+
+    if config.diagnostics.logging.wandb:
+        trainer_callbacks.append(LearningRateMonitor(logging_interval="step", log_momentum=True))
 
     if config.diagnostics.eval.enabled:
         trainer_callbacks.append(RolloutEval(config))

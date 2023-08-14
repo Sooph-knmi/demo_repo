@@ -6,14 +6,22 @@ import pytorch_lightning as pl
 import torch
 from omegaconf import DictConfig
 from pytorch_lightning.profilers import AdvancedProfiler
+from pytorch_lightning.strategies import DDPStrategy
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.logger import get_logger
+from aifs.train.strategy import DDPGroupStrategy
 from aifs.train.trainer import GraphForecaster
 from aifs.train.utils import setup_callbacks
 from aifs.train.utils import setup_wandb_logger
 
 LOGGER = get_logger(__name__)
+
+
+from pytorch_lightning.trainer.states import TrainerFn
+from pytorch_lightning.overrides.distributed import _sync_module_states
+from lightning_fabric.utilities.optimizer import _optimizers_to_device
+import numpy as np
 
 
 def train(config: DictConfig) -> None:
@@ -89,7 +97,7 @@ def train(config: DictConfig) -> None:
         callbacks=trainer_callbacks,
         deterministic=config.training.deterministic,
         detect_anomaly=config.diagnostics.debug.anomaly_detection,
-        strategy=config.hardware.strategy,  # we should use ddp with find_unused_parameters = False, static_graph = True
+        strategy=DDPGroupStrategy(config.hardware.group_size, static_graph=True),
         devices=config.hardware.num_gpus_per_node if config.hardware.num_gpus_per_node > 0 else None,
         num_nodes=config.hardware.num_nodes,
         precision=config.training.precision,
@@ -109,6 +117,10 @@ def train(config: DictConfig) -> None:
     )
 
     trainer.fit(model, datamodule=dmod, ckpt_path=ckpt_path)
+
+    for idevice in range(torch.cuda.device_count()):
+        LOGGER.debug(f"max memory alloc rank {idevice}: {torch.cuda.max_memory_allocated(torch.device(idevice))/1.e6}")
+
     LOGGER.debug("---- DONE. ----")
 
 
