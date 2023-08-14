@@ -4,7 +4,7 @@ compile: False
 # resume training from a checkpoint
 warm_start: False
 
-# prescribe initial seed, if null generate seed 
+# prescribe initial seed, if null generate seed
 initial_seed: null
 
 # run in deterministic mode ; slows down
@@ -33,6 +33,17 @@ gradient_clip:
 swa:
   enabled: False
   lr: 1.e-4
+
+swag:
+  enabled: True
+  lr: 7.e-5
+  epoch_start: 1
+  annealing:
+    epochs: 15
+    strategy: cos
+  device: cpu
+  k: 5
+  c: 1
 
 # dynamic rescaling of the loss gradient
 # see https://arxiv.org/pdf/2306.06079.pdf, section 4.3.2

@@ -2,6 +2,7 @@ import os
 from typing import List
 
 import numpy as np
+import torch
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from pytorch_lightning.callbacks import LearningRateMonitor
@@ -13,6 +14,7 @@ from aifs.train.callbacks import GraphTrainableFeaturesPlot
 from aifs.train.callbacks import PlotLoss
 from aifs.train.callbacks import PlotSample
 from aifs.train.callbacks import RolloutEval
+from aifs.train.swag import SWAG
 
 LOGGER = get_logger(__name__)
 
@@ -129,5 +131,17 @@ def setup_callbacks(config: DictConfig, timestamp: str) -> List:
     if config.diagnostics.plot.learned_features:
         LOGGER.debug("Setting up a callback to plot the trainable graph node features ...")
         trainer_callbacks.append(GraphTrainableFeaturesPlot(config))
+
+    if config.training.swag.enabled:
+        assert not config.training.swa.enabled, "Can't enable both SWA and SWAG at the same time! Check your config."
+        trainer_callbacks.append(
+            SWAG(
+                swa_lrs=config.training.swa.lr,
+                swa_epoch_start=config.training.swa.epoch_start,
+                annealing_epochs=config.training.swa.annealing.epochs,
+                annealing_strategy=config.training.swa.annealing.strategy,
+                device=torch.device(config.training.swa.device),
+            )
+        )
 
     return trainer_callbacks
