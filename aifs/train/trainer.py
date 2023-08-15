@@ -105,13 +105,6 @@ class GraphForecaster(pl.LightningModule):
         LOGGER.debug("Rollout max : %d", self.rollout_max)
         LOGGER.debug("Multistep: %d", self.multi_step)
 
-        self.log_to_wandb = config.diagnostics.logging.wandb
-        self.plot_frequency = config.diagnostics.plot.frequency
-
-        self.plot_variables = config.diagnostics.plot.parameters
-        self.plot_per_sample = config.diagnostics.plot.per_sample
-        self.save_basedir = os.path.join(config.hardware.paths.plots, config.hardware.paths.run_id)
-
         self.enable_plot = config.diagnostics.plot.enabled
 
         self.group_id = int(os.environ.get("SLURM_PROCID", "0")) // config.hardware.group_size
