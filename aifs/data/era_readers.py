@@ -20,4 +20,7 @@ def read_era_data(
     ds = zarr.open(fname, mode="r")
     # Should we use this?
     # ds = zarr.storage.LRUStoreCache(ds, 1024 * 1024 * 1024)
-    return ds
+    if type(ds) == zarr.hierarchy.Group:
+        return ds.data
+    else:
+        return ds

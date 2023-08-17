@@ -120,6 +120,8 @@ def train(config: DictConfig) -> None:
 
     for idevice in range(torch.cuda.device_count()):
         LOGGER.debug(f"max memory alloc rank {idevice}: {torch.cuda.max_memory_allocated(torch.device(idevice))/1.e6}")
+        LOGGER.debug(f"max memory resv  rank {idevice}: {torch.cuda.max_memory_reserved(torch.device(idevice))/1.e6}")
+    LOGGER.debug(f"memory summary: {torch.cuda.memory_summary()}")
 
     LOGGER.debug("---- DONE. ----")
 

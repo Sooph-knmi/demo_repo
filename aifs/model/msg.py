@@ -11,7 +11,7 @@ from torch_geometric.data import HeteroData
 
 from aifs.diagnostics.logger import get_logger
 from aifs.model.layers import MessagePassingMapper
-from aifs.model.layers import MessagePassingProcessor
+from aifs.model.layers import MessagePassingProcessor, MessagePassingProcessorWraper
 from aifs.utils.distributed import get_shape_shards1, change_channels_in_shape1
 
 LOGGER = get_logger(__name__)
@@ -158,14 +158,35 @@ class GraphMSG(nn.Module):
         )
 
         # Processor H -> H
-        self.h_processor = MessagePassingProcessor(
+        self.h_processor = MessagePassingProcessorWraper(
             hidden_dim=self.encoder_out_channels,
             hidden_layers=config.model.hidden.num_layers,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
-            chunks=2,
+            chunks=1,
             activation=self.activation,
         )
+
+        # self.h_processor0 = MessagePassingProcessor(
+        #     hidden_dim=self.encoder_out_channels,
+        #     hidden_layers=int(config.model.hidden.num_layers/2),
+        #     mlp_extra_layers=mlp_extra_layers,
+        #     edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
+        #     chunks=1,
+        #     activation=self.activation,
+        #     emb_edges=True,
+        # )
+
+        # # Processor H -> H
+        # self.h_processor1 = MessagePassingProcessor(
+        #     hidden_dim=self.encoder_out_channels,
+        #     hidden_layers=int(config.model.hidden.num_layers/2),
+        #     mlp_extra_layers=mlp_extra_layers,
+        #     edge_dim=0,
+        #     chunks=1,
+        #     activation=self.activation,
+        #     emb_edges=False,
+        # )
 
         # Decoder H -> ERA5
         self.backward_mapper = MessagePassingMapper(
@@ -249,6 +270,39 @@ class GraphMSG(nn.Module):
             edge_h_to_h_latent,
             dim=-1,  # feature dimension
         )
+
+        # x_latent_proc0, edge_attr_proc0, edge_index_proc0 = checkpoint(self.h_processor0,  # has skipped connections and checkpoints inside
+        #     x=x_latent,
+        #     edge_index=torch.cat(
+        #         [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bs)],
+        #         dim=1,
+        #     ),
+        #     edge_attr=edge_h_to_h_latent,
+        #     shape_nodes=shape_h_proc,
+        #     mgroupdef=mgroupdef,
+        #     use_reentrant=False,
+        # )
+
+        # x_latent_proc, _, _ = checkpoint(self.h_processor1,  # has skipped connections and checkpoints inside
+        #     x=x_latent_proc0,
+        #     edge_index=edge_index_proc0,
+        #     edge_attr=edge_attr_proc0,
+        #     shape_nodes=shape_h_proc,
+        #     mgroupdef=mgroupdef,
+        #     use_reentrant=False,
+        # )
+
+        # x_latent_proc = self.h_processor(  # has skipped connections and checkpoints inside
+        #     x=x_latent,
+        #     edge_index=torch.cat(
+        #         [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bs)],
+        #         dim=1,
+        #     ),
+        #     edge_attr=edge_h_to_h_latent,
+        #     shape_nodes=shape_h_proc,
+        #     mgroupdef=mgroupdef,
+        # )
+        # x_latent_proc = checkpoint(self.h_processor,  # has skipped connections and checkpoints inside
         x_latent_proc = self.h_processor(  # has skipped connections and checkpoints inside
             x=x_latent,
             edge_index=torch.cat(
@@ -258,7 +312,19 @@ class GraphMSG(nn.Module):
             edge_attr=edge_h_to_h_latent,
             shape_nodes=shape_h_proc,
             mgroupdef=mgroupdef,
+            # use_reentrant=False,
         )
+
+        # x_latent_proc = self.h_processor(  # has skipped connections and checkpoints inside
+        #     x=x_latent,
+        #     edge_index=torch.cat(
+        #         [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bs)],
+        #         dim=1,
+        #     ),
+        #     edge_attr=edge_h_to_h_latent,
+        #     shape_nodes=shape_h_proc,
+        #     mgroupdef=mgroupdef,
+        # )
 
         # add skip connection (H -> H)
         x_latent_proc = x_latent_proc + x_latent
@@ -447,6 +513,8 @@ def test_gnn(rank, world_size):
 
     optimizer = torch.optim.SGD(gnn.parameters(), lr=lr, momentum=0.9)
 
+    torch.autograd.set_detect_anomaly(True)
+
     # ### data:
     _ERA_SIZE = model._era_size
     x_input = torch.randn(
@@ -490,6 +558,7 @@ def test_gnn(rank, world_size):
     print(f"model param sum: {params2.abs().sum():.20f}")
 
     print(f"rank {rank} max memory alloc: {torch.cuda.max_memory_allocated(torch.device(rank))/1.e6}")
+    print(f"rank {rank} max memory reserved: {torch.cuda.max_memory_reserved(torch.device(rank))/1.e6}")
 
     # print("grad check ...")
 
@@ -533,3 +602,14 @@ if __name__ == "__main__":
     # plot debug full rollout test, gpu=4 per node, group size=2 : wandb offline ; aifs-train training.multistep_input=2 dataloader.num_workers.training=1 dataloader.num_workers.validation=1 model.num_channels=128 dataloader.limit_batches.training=20 dataloader.limit_batches.validation=5 dataloader.batch_size.training=1 dataloader.batch_size.validation=1 dataloader.batch_size.test=1 dataloader.batch_size.predict=1 training.max_epochs=10 training.rollout.start=1 training.rollout.epoch_increment=0 training.rollout.max=1 hardware.num_gpus_per_node=4 hardware.num_nodes=1 training.initial_seed=24 hardware.paths.graph=/home/mlx/data/graphs/ hardware.group_size=1 data.resolution=o96 hardware.files.graph=graph_mappings_normed_edge_attrs_2023062700_o96_h_0_1_2_3_4_5.pt
     # broken ... n320 full rollout test, gpu=4 per node, group size=2 : aifs-train training.multistep_input=2 dataloader.num_workers.training=1 dataloader.num_workers.validation=1 diagnostics.logging.wandb=False model.num_channels=512 dataloader.limit_batches.training=1 dataloader.limit_batches.validation=1 dataloader.batch_size.training=1 dataloader.batch_size.validation=1 dataloader.batch_size.test=1 dataloader.batch_size.predict=1 training.max_epochs=1 training.rollout.start=12 training.rollout.epoch_increment=0 training.rollout.max=12 hardware.num_gpus_per_node=4 hardware.num_nodes=1 training.initial_seed=24 hardware.paths.graph=/home/mlx/data/graphs/ hardware.group_size=2 hardware.paths.training=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.validation=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.test=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.predict=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.files.training=aifs_n320_1979_2015_1h.zarr hardware.files.validation=aifs_n320_2016_2017_1h.zarr hardware.files.test=aifs_n320_2016_2017_1h.zarr hardware.files.predict=aifs_n320_2016_2017_1h.zarr data.resolution=n320 hardware.files.graph=graph_mappings_normed_edge_attrs_2023062700_n320_h_0_1_2_3_4_5.pt
     # o160 full rollout test, gpu=4 per node, group size=2 : aifs-train training.multistep_input=2 dataloader.num_workers.training=1 dataloader.num_workers.validation=1 diagnostics.logging.wandb=False model.num_channels=512 dataloader.limit_batches.training=1 dataloader.limit_batches.validation=1 dataloader.batch_size.training=1 dataloader.batch_size.validation=1 dataloader.batch_size.test=1 dataloader.batch_size.predict=1 training.max_epochs=1 training.rollout.start=12 training.rollout.epoch_increment=0 training.rollout.max=12 hardware.num_gpus_per_node=4 hardware.num_nodes=1 training.initial_seed=24 hardware.paths.graph=/home/mlx/data/graphs/ hardware.group_size=2 hardware.paths.training=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.validation=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.test=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.predict=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.files.training=aifs-era5-o160-1979-2015-6h.zarr hardware.files.validation=aifs-era5-o160-2016-2017-6h.zarr hardware.files.test=aifs-era5-o160-2016-2017-6h.zarr hardware.files.predict=aifs-era5-o160-2016-2017-6h.zarr data.resolution=o160 hardware.files.graph=graph_mappings_normed_edge_attrs_2023062700_o160_h_0_1_2_3_4_5_6.pt
+
+
+    # n320 test ; aifs-train dataloader.batch_size.training=1 training.multistep_input=2 dataloader.num_workers.training=1 dataloader.num_workers.validation=1 model.num_channels=512 dataloader.limit_batches.training=1 dataloader.limit_batches.validation=1 dataloader.batch_size.validation=1 dataloader.batch_size.test=1 dataloader.batch_size.predict=1 training.max_epochs=1 training.rollout.start=12 training.rollout.epoch_increment=0 training.rollout.max=12 hardware.group_size=2 hardware.num_gpus_per_node=4 hardware.num_nodes=1 data.resolution=n320 hardware.paths.training=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.validation=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.test=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.predict=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.files.validation=aifs_n320_2016_2017_1h.zarr      hardware.files.training=aifs_n320_1979_2015_1h.zarr       hardware.files.test=aifs_n320_2016_2017_1h.zarr      hardware.files.predict=aifs_n320_2016_2017_1h.zarr       hardware.files.graph=graph_mappings_normed_edge_attrs_2023062700_n320_h_0_1_2_3_4_5.pt
+    #             aifs-train dataloader.batch_size.training=1 training.multistep_input=2 dataloader.num_workers.training=1 dataloader.num_workers.validation=1 model.num_channels=512 dataloader.limit_batches.training=1 dataloader.limit_batches.validation=1 dataloader.batch_size.validation=1 dataloader.batch_size.test=1 dataloader.batch_size.predict=1 training.max_epochs=1 training.rollout.start=12 training.rollout.epoch_increment=0 training.rollout.max=12 hardware.group_size=2 hardware.num_gpus_per_node=4 hardware.num_nodes=1 data.resolution=o160 hardware.paths.training=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.validation=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.test=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.predict=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.files.validation=aifs-era5-o160-2016-2017-6h.zarr hardware.files.training=aifs-era5-o160-1979-2015-6h.zarr  hardware.files.test=aifs-era5-o160-2016-2017-6h.zarr hardware.files.predict=aifs-era5-o160-2016-2017-6h.zarr  hardware.files.graph=graph_mappings_normed_edge_attrs_2023062700_o160_h_0_1_2_3_4_5_6.pt
+
+    # hardware.paths.graph=/home/mlx/data/graphs/
+
+    # latest rollout test:
+    # n320, aifs-train dataloader.batch_size.training=1 hardware.group_size=4 training.multistep_input=2 dataloader.num_workers.training=1 dataloader.num_workers.validation=1 model.num_channels=512 dataloader.limit_batches.training=1 dataloader.limit_batches.validation=0 dataloader.batch_size.validation=1 dataloader.batch_size.test=1 dataloader.batch_size.predict=1 training.max_epochs=1 training.rollout.start=11 training.rollout.epoch_increment=0 training.rollout.max=11 hardware.num_gpus_per_node=4 hardware.num_nodes=1 data.resolution=n320 hardware.paths.training=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.validation=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.test=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.predict=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.files.validation=aifs_n320_2016_2017_1h.zarr      hardware.files.training=aifs_n320_1979_2015_1h.zarr       hardware.files.test=aifs_n320_2016_2017_1h.zarr      hardware.files.predict=aifs_n320_2016_2017_1h.zarr       hardware.files.graph=graph_mappings_normed_edge_attrs_2023062700_n320_h_0_1_2_3_4_5_6.pt
+    # o160, aifs-train dataloader.batch_size.training=1 hardware.group_size=1 training.multistep_input=2 dataloader.num_workers.training=1 dataloader.num_workers.validation=1 model.num_channels=128 dataloader.limit_batches.training=1 dataloader.limit_batches.validation=1 dataloader.batch_size.validation=1 dataloader.batch_size.test=1 dataloader.batch_size.predict=1 training.max_epochs=1 training.rollout.start=1 training.rollout.epoch_increment=0 training.rollout.max=1 hardware.num_gpus_per_node=4 hardware.num_nodes=1 data.resolution=o160 hardware.paths.training=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.validation=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.test=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.paths.predict=/lus/h2resw01/fws4/lb/project/ai-ml/zarrs/ hardware.files.validation=aifs-era5-o160-2016-2017-6h.zarr     hardware.files.training=aifs-era5-o160-1979-2015-6h.zarr   hardware.files.test=aifs-era5-o160-2016-2017-6h.zarr  hardware.files.predict=aifs-era5-o160-2016-2017-6h.zarr   hardware.files.graph=graph_mappings_normed_edge_attrs_2023062700_o160_h_0_1_2_3_4_5_6.pt
+    # o96,  aifs-train dataloader.batch_size.training=1 hardware.group_size=1 training.multistep_input=2 dataloader.num_workers.training=1 dataloader.num_workers.validation=1 model.num_channels=128 dataloader.limit_batches.training=1 dataloader.limit_batches.validation=1 dataloader.batch_size.validation=1 dataloader.batch_size.test=1 dataloader.batch_size.predict=1 training.max_epochs=1 training.rollout.start=1 training.rollout.epoch_increment=0 training.rollout.max=1 hardware.num_gpus_per_node=4 hardware.num_nodes=1 data.resolution=o96  hardware.files.graph=graph_mappings_normed_edge_attrs_2023062700_o160_h_0_1_2_3_4_5_6.pt
