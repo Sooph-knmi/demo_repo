@@ -114,9 +114,10 @@ class GraphForecaster(pl.LightningModule):
     def forward(self, x: torch.Tensor, mgroupdef) -> torch.Tensor:
         return self.gnn(x, mgroupdef)
 
-    def set_mgroupdef(self, mgroupdef) -> None:
-        LOGGER.debug("set_mgroupdef: %s", mgroupdef)
+    def set_mgroupdef(self, mgroupdef, mgroupdef_single) -> None:
+        LOGGER.debug("set_mgroupdef: %s, %s", mgroupdef, mgroupdef_single)
         self.mgroupdef = mgroupdef
+        self.mgroupdef_single = mgroupdef_single
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         x = x.roll(-1, dims=1)
@@ -155,9 +156,7 @@ class GraphForecaster(pl.LightningModule):
             if multi_gpu:
                 y_pred = self(x, self.mgroupdef)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
             else:
-                y_pred = self(
-                    x, mgroupdef=(0, self.mgroupdef[1], self.mgroupdef[2])
-                )  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+                y_pred = self(x, self.mgroupdef_single)# prediction at rollout step rstep, shape = (bs, latlon, nvar)
 
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
@@ -211,7 +210,7 @@ class GraphForecaster(pl.LightningModule):
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
         with torch.no_grad():
-            val_loss, metrics, y_preds = self._step(batch, batch_idx, validation_mode=True, multi_gpu=True)
+            val_loss, metrics, y_preds = self._step(batch, batch_idx, validation_mode=True, multi_gpu=False)
         self.log(
             "val_wmse",
             val_loss,

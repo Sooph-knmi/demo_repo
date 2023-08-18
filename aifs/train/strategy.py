@@ -29,10 +29,11 @@ class DDPGroupStrategy(DDPStrategy):
 
         comms_groups_ranks = np.split(np.array([x for x in range(0, self.world_size)]), int(self.world_size / self.mgroup_size))
         comms_groups = [torch.distributed.new_group(x) for x in comms_groups_ranks]
+        comms_groups_single = [torch.distributed.new_group((x,)) for x in range(self.world_size)]
 
         imgroup, my_mgroup, my_mgroup_rank = self.get_my_mgroup(world_size, my_rank, self.mgroup_size)
         comms_group = comms_groups[imgroup]
-        self.model.set_mgroupdef((comms_group, len(my_mgroup), my_mgroup_rank))
+        self.model.set_mgroupdef((comms_group, len(my_mgroup), my_mgroup_rank), (comms_groups_single[my_rank], 1, 0))
         LOGGER.debug(
             "Rank %d mgroup is %s, group number %d, with local group rank %d and comms_group_ranks %s",
             my_rank,
