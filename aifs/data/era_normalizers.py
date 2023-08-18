@@ -85,8 +85,10 @@ class InputNormalizer(nn.Module):
             persistent=True,
         )
 
-    def normalize(self, x: torch.Tensor) -> torch.Tensor:
+    def normalize(self, x: torch.Tensor, in_place: bool = True) -> torch.Tensor:
         """Normalizes an input tensor x of shape [..., nvars]; normalization done in-place."""
+        if not in_place:
+            x = x.clone()
         x[..., self._max_norm_idx] = x[..., self._max_norm_idx] / self._max_norm
         x[..., self._std_norm_idx] = (x[..., self._std_norm_idx] - self._std_norm_mu) / self._std_norm_sd
         return x
@@ -94,10 +96,12 @@ class InputNormalizer(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.normalize(x)
 
-    def denormalize(self, x: torch.Tensor) -> torch.Tensor:
+    def denormalize(self, x: torch.Tensor, in_place: bool = True) -> torch.Tensor:
         """Denormalizes an input tensor x of shape [..., nvars | nvars_pred]; normalization done in-place."""
         # input and predicted tensors have different shapes
         # hence, we mask out the indices >= x.shape[-1] - i.e. the variables that are not predicted
+        if not in_place:
+            x = x.clone()
         max_denorm_mask = self._max_norm_idx < x.shape[-1]
         std_denorm_mask = self._std_norm_idx < x.shape[-1]
 

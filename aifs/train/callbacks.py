@@ -89,8 +89,8 @@ class RolloutEval(Callback):
                 x = pl_module.advance_input(x, y, y_pred)
 
                 for mkey, (low, high) in pl_module.metric_ranges.items():
-                    y_denorm = pl_module.normalizer.denormalize(y.clone())
-                    y_pred_denorm = pl_module.normalizer.denormalize(x[:, -1, ...].clone())
+                    y_denorm = pl_module.normalizer.denormalize(y, in_place=False)
+                    y_pred_denorm = pl_module.normalizer.denormalize(x[:, -1, ...], in_place=False)
                     metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
 
             # scale loss
@@ -213,7 +213,7 @@ class PlotSample(PlotCallback):
     ) -> None:
         data = (
             pl_module.normalizer.denormalize(
-                batch[self.sample_idx, pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1, ...].clone()
+                batch[self.sample_idx, pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1, ...], in_place=False
             )
             .cpu()
             .numpy()
@@ -226,7 +226,7 @@ class PlotSample(PlotCallback):
                 np.rad2deg(pl_module.era_latlons.numpy()),
                 data[0, ..., : pl_module.fcdim].squeeze(),
                 data[rollout_step + 1, ..., : pl_module.fcdim].squeeze(),
-                pl_module.normalizer.denormalize(outputs[1][rollout_step][self.sample_idx, ..., : pl_module.fcdim])
+                pl_module.normalizer.denormalize(outputs[1][rollout_step][self.sample_idx, ..., : pl_module.fcdim], in_place=False)
                 .squeeze()
                 .cpu()
                 .numpy(),
