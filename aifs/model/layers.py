@@ -576,7 +576,7 @@ class MessagePassingBlock(nn.Module):
             x_dst = gather_tensor1(x[1], 0, shapes[1], mgroupdef[0])
             x_in = (x_src, x_dst)
             out = torch.zeros_like(x_dst)
-            nchunks = 4
+            nchunks = 1
 
         if nchunks > 1:
             edge_index_list = torch.tensor_split(edge_index, nchunks, dim=1)
