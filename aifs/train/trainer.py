@@ -138,8 +138,8 @@ class GraphForecaster(pl.LightningModule):
 
             if validation_mode:
                 for mkey, (low, high) in self.metric_ranges.items():
-                    y_denorm = self.normalizer.denormalize(y.clone())
-                    y_hat_denorm = self.normalizer.denormalize(x[:, -1, ...].clone())
+                    y_denorm = self.normalizer.denormalize(y, in_place=False)
+                    y_hat_denorm = self.normalizer.denormalize(x[:, -1, ...], in_place=False)
                     metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
 
                 if self.enable_plot:
