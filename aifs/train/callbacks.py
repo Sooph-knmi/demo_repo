@@ -46,24 +46,22 @@ class PlotCallback(Callback):
 class RolloutEval(Callback):
     """Evaluates the model performance over a (longer) rollout window."""
 
-    def __init__(self, rollout: int = 12, frequency: int = 20) -> None:
+    def __init__(self, config) -> None:
         """Initialize RolloutEval callback.
 
         Parameters
         ----------
-        rollout : int, optional
-            Number of timesteps to roll out, by default 12
-        frequency : int, optional
-            Frequency of rollout evaluation, in terms of number of batches, by default 20
+        config : dict
+            Dictionary with configuration settings
         """
         super().__init__()
         LOGGER.debug(
             "Setting up RolloutEval callback with rollout = %d, frequency = %d ...",
-            rollout,
-            frequency,
+            config.diagnostics.eval.rollout,
+            config.diagnostics.eval.frequency,
         )
-        self.rollout = rollout
-        self.frequency = frequency
+        self.rollout = config.diagnostics.eval.rollout
+        self.frequency = config.diagnostics.eval.frequency
 
     def _eval(
         self,
@@ -76,7 +74,6 @@ class RolloutEval(Callback):
 
         # start rollout
         x = batch[:, 0 : pl_module.multi_step, ...]  # (bs, multi_step, latlon, nvar)
-
         assert batch.shape[1] >= self.rollout + pl_module.multi_step, "Batch length not sufficient for requested rollout length!"
 
         with torch.no_grad():

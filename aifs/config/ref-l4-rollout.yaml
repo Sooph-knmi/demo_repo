@@ -1,0 +1,36 @@
+defaults:
+  - hardware: atos_slurm
+  - data: zarr
+  - dataloader: rollout
+  - model: gnn
+  - training: default
+  - diagnostics: eval_rollout
+  - _self_
+
+### This file is for local experimentation.
+##  When you commit your changes, assign the new features and keywords
+##  to the correct defaults.
+# For example to change from default GPU count:
+# hardware:
+#   num_gpus_per_node: 1
+hardware:
+  files:
+    graph: graph_mappings_normed_edge_attrs_2023062700_${data.resolution}_h_0_1_2_3_4.pt
+    training: panguweather-${data.resolution}-1979-2015-6h.zarr
+  paths:
+    training: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
+model:
+  num_channels: 256
+dataloader:
+  batch_size:
+    training: 2
+training:
+  initial_seed: 42
+  lr:
+    rate: 0.125e-3
+  rollout:
+    epoch_increment: 1
+    max: 12
+diagnostics:
+  eval:
+    enabled: True
