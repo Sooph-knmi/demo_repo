@@ -153,6 +153,7 @@ class GraphForecaster(pl.LightningModule):
         y_preds = []
         # with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
+            torch.cuda.empty_cache()
             if multi_gpu:
                 y_pred = self(x, self.mgroupdef)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
             else:

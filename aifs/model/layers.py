@@ -16,7 +16,7 @@ from torch_geometric.typing import PairTensor
 from torch_geometric.typing import Size
 from torch_geometric.utils import scatter
 
-from aifs.utils.distributed import shard_tensor1, gather_tensor1, reduce_tensor1, get_shape_shards1, change_channels_in_shape1
+from aifs.utils.distributed import shard_tensor1, gather_tensor1, sync_tensor1, reduce_tensor1, get_shape_shards1, change_channels_in_shape1
 from aifs.diagnostics.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -266,6 +266,8 @@ class MessagePassingProcessorWraper(nn.Module):
 
         super().__init__()
 
+        assert hidden_layers % chunks == 0
+
         self.processor0 = MessagePassingProcessor(
             hidden_dim=hidden_dim,
             hidden_layers=int(hidden_layers/2),
@@ -387,17 +389,12 @@ class MessagePassingProcessor(nn.Module):
             edge_index = shard_tensor1(edge_index, 1, shapes_edge_idx, mgroupdef[0])
             edge_attr = shard_tensor1(edge_attr, 0, shapes_edge_attr, mgroupdef[0])
 
-            edge_attr = checkpoint(self.emb_edges, edge_attr, use_reentrant=False)
-
-        # for i in range(self.hidden_layers):
-            # x, edge_attr = checkpoint(
-            #     self.proc[i], x, edge_index, edge_attr, (shape_nodes, shape_nodes), mgroupdef, use_reentrant=False
-            # )
+            edge_attr = self.emb_edges(edge_attr)
 
         for i in range(self.hidden_layers):
             x, edge_attr = self.proc[i]( x, edge_index, edge_attr, (shape_nodes, shape_nodes), mgroupdef)
 
-        return x, edge_attr, edge_index # x_out[-1]
+        return x, edge_attr, edge_index
 
 
 class MessagePassingMapper(MessagePassingProcessor):
@@ -568,15 +565,21 @@ class MessagePassingBlock(nn.Module):
 
     def forward(self, x: Union[Tensor, OptPairTensor], edge_index, edge_attr, shapes, mgroupdef, size: Size = None):
         if isinstance(x, Tensor):
-            x_in = gather_tensor1(x, 0, shapes[1], mgroupdef[0])
+            # x_in = gather_tensor1(x, 0, shapes[1], mgroupdef[0])
+            # x_in = sync_tensor1(x_in, mgroupdef[0])
+            x_in = sync_tensor1(x, 0, shapes[1], mgroupdef[0])
             # out = torch.zeros_like(x_in)
             nchunks = 1
         else:
-            x_src = gather_tensor1(x[0], 0, shapes[0], mgroupdef[0])
-            x_dst = gather_tensor1(x[1], 0, shapes[1], mgroupdef[0])
+            # x_src = gather_tensor1(x[0], 0, shapes[0], mgroupdef[0])
+            # x_dst = gather_tensor1(x[1], 0, shapes[1], mgroupdef[0])
+            # x_src = sync_tensor1(x_src, mgroupdef[0])
+            # x_dst = sync_tensor1(x_dst, mgroupdef[0])
+            x_src = sync_tensor1(x[0], 0, shapes[0], mgroupdef[0])
+            x_dst = sync_tensor1(x[1], 0, shapes[1], mgroupdef[0])
             x_in = (x_src, x_dst)
             out = torch.zeros_like(x_dst)
-            nchunks = 1
+            nchunks = 4
 
         if nchunks > 1:
             edge_index_list = torch.tensor_split(edge_index, nchunks, dim=1)
@@ -601,7 +604,7 @@ class MessagePassingBlock(nn.Module):
             nodes_new_src = self.node_mlp(torch.cat([x[0], x[0]], dim=1)) + x[0]  # todo: only update this in the forward mapper...
             nodes_new = (nodes_new_src, nodes_new_dst)
 
-        return nodes_new, edges_new #edges_out
+        return nodes_new, edges_new
 
 
 class NodeEdgeInteractions(MessagePassing):

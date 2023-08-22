@@ -22,6 +22,11 @@ def reduce_tensor1(input_, mgroup):
     return _ReduceParallelSection.apply(input_, mgroup)
 
 
+def sync_tensor1(input_, dim, shapes, mgroup):
+    """sync helper"""
+    return _SyncParallelSection.apply(input_, dim, shapes, mgroup)
+
+
 class _ShardParallelSection(torch.autograd.Function):
     """Split the input and keep only the corresponding chuck to the rank."""
 
@@ -85,6 +90,65 @@ class _GatherParallelSection(torch.autograd.Function):
             )
         else:
             return grad_output, None, None, None
+
+
+class _SyncParallelSection(torch.autograd.Function):
+    """Sync the input from parallel section."""
+
+    @staticmethod
+    def symbolic(graph, input_, dim_, shapes_, mgroup_):
+        """"""
+        if mgroup_:
+            return _gather(input_, dim_, shapes_, group=mgroup_)
+        else:
+            return input_
+
+    @staticmethod
+    def forward(ctx, input_, dim_, shapes_, mgroup_):
+        ctx.dim = dim_
+        ctx.comm_group = mgroup_
+        ctx.shapes = shapes_
+        if mgroup_:
+            return _gather(input_, dim_, shapes_, group=mgroup_)
+        else:
+            return input_
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        if ctx.comm_group:
+            grad_output = _reduce(grad_output, group=ctx.comm_group)
+            return (
+                _split(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
+                None,
+                None,
+                None,
+            )
+        else:
+            return grad_output, None, None, None
+
+
+class _SyncParallelSectionOld(torch.autograd.Function):
+    """Sync the input from parallel section."""
+
+    @staticmethod
+    def symbolic(graph, input_, mgroup_):
+        """"""
+        return input_
+
+    @staticmethod
+    def forward(ctx, input_, mgroup_):
+        ctx.comm_group = mgroup_
+        return input_
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        if ctx.comm_group:
+            return (
+                _reduce(grad_output, group=ctx.comm_group),
+                None,
+            )
+        else:
+            return grad_output, None
 
 
 class _ReduceParallelSection(torch.autograd.Function):
