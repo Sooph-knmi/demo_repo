@@ -57,11 +57,11 @@ class RolloutEval(Callback):
         super().__init__()
         LOGGER.debug(
             "Setting up RolloutEval callback with rollout = %d, frequency = %d ...",
-            config.training.rollout.max,
-            config.diagnostics.plot.frequency,
+            config.diagnostics.eval.rollout,
+            config.diagnostics.eval.frequency,
         )
-        self.rollout = config.training.rollout.max
-        self.frequency = config.diagnostics.plot.frequency
+        self.rollout = config.diagnostics.eval.rollout
+        self.frequency = config.diagnostics.eval.frequency
 
     def _eval(
         self,
