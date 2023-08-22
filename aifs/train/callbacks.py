@@ -46,23 +46,21 @@ class PlotCallback(Callback):
 class RolloutEval(Callback):
     """Evaluates the model performance over a (longer) rollout window."""
 
-    def __init__(self, rollout: int = 12, frequency: int = 20) -> None:
+    def __init__(self, config, frequency: int = 20) -> None:
         """Initialize RolloutEval callback.
 
         Parameters
         ----------
-        rollout : int, optional
-            Number of timesteps to roll out, by default 12
         frequency : int, optional
             Frequency of rollout evaluation, in terms of number of batches, by default 20
         """
         super().__init__()
         LOGGER.debug(
             "Setting up RolloutEval callback with rollout = %d, frequency = %d ...",
-            rollout["training"]["rollout"]["max"],
+            config.training.rollout.max,
             frequency,
         )
-        self.rollout = rollout["training"]["rollout"]["max"]
+        self.rollout = config.training.rollout.max
         self.frequency = frequency
 
     def _eval(
