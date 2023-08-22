@@ -1,5 +1,4 @@
 import os
-from typing import Optional
 
 import hydra
 import pytorch_lightning as pl
@@ -9,7 +8,7 @@ from pytorch_lightning.profilers import AdvancedProfiler
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.logger import get_logger
-from aifs.train.trainer import GraphForecaster
+from aifs.train.swag_trainer import SWAGForecaster
 from aifs.train.utils import setup_callbacks
 from aifs.train.utils import setup_wandb_logger
 
@@ -48,21 +47,22 @@ def train(config: DictConfig) -> None:
     LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * config.training.lr.rate)
     LOGGER.debug("Rollout window length: %d", config.training.rollout.start)
 
-    model = GraphForecaster(metadata=dmod.input_metadata, config=config)
+    model = SWAGForecaster(metadata=dmod.input_metadata, config=config)
 
     if config.training.compile:
         # this doesn't work ATM (April 2), don't bother enabling it ...
         LOGGER.debug("torch.compiling the Lightning model ...")
         model = torch.compile(model, mode="default", backend="inductor", fullgraph=False)
 
-    # warm restart?
-    ckpt_path: Optional[str] = None
-    if config.hardware.files.warm_start:
-        ckpt_path = os.path.join(
-            config.hardware.paths.checkpoints,
-            config.hardware.files.warm_start,
-        )
-        LOGGER.debug("Training will resume from %s ...", ckpt_path)
+    # requires a warm restart
+    if config.hardware.files.warm_start is None:
+        LOGGER.error("When using SWAG, you must provide a checkpoint to restart training from! Check your config ...")
+        raise RuntimeError
+    ckpt_path = os.path.join(
+        config.hardware.paths.checkpoints,
+        config.hardware.files.warm_start,
+    )
+    LOGGER.debug("Training will resume from %s ...", ckpt_path)
 
     trainer_callbacks = setup_callbacks(config, config.hardware.paths.run_id)
 

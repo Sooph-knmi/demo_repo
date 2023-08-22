@@ -38,7 +38,7 @@ setup(
     include_package_data=True,
     entry_points={
         "console_scripts": [
-            "aifs-train=aifs.train.train:main",
+            "aifs-swag-train=aifs.train.train:main",
         ]
     },
 )

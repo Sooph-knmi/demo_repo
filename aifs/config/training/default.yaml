@@ -43,7 +43,8 @@ swag:
     strategy: cos
   device: cpu
   k: 5
-  c: 1
+  c: 1  # not used, yet
+  ensemble_size: 7
 
 # dynamic rescaling of the loss gradient
 # see https://arxiv.org/pdf/2306.06079.pdf, section 4.3.2

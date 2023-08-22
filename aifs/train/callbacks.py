@@ -243,3 +243,65 @@ class PlotSample(PlotCallback):
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
             self._plot(trainer, pl_module, outputs, batch, batch_idx)
+
+
+class PlotSwagSampleCallback(PlotCallback):
+    """Plots an ensemble of predictions generated with SWAG.
+
+    See https://arxiv.org/pdf/1902.02476.pdf
+    To be used in conjunction with the SWAGForecaster trainer class.
+    """
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.nens = self.config.training.swag.ensemble_size
+        self.sample_idx = self.config.diagnostics.plot.sample_idx
+        LOGGER.debug("Initialized the SWAG plot callback with nens = %d and sample_index = %d...", self.nens, self.sample_idx)
+
+    def _eval(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        batch: torch.Tensor,
+        batch_idx: int,
+    ) -> None:
+        # start rollout
+        x = batch[:, 0 : pl_module.multi_step, ...]  # (bs, multi_step, latlon, nvar)
+        assert pl_module.rollout == 1, "Rollouts > 1 not yet supported."
+
+        with torch.no_grad():
+            y_preds = []
+            for _ in range(self.nens):
+                y_preds.append(pl_module.forward_swag(x))
+            y_preds: torch.Tensor = torch.stack(y_preds, dim=1)  # (bs, nens, latlon, nvar)
+            y = batch[:, pl_module.multi_step, :, : pl_module.fcdim]  # target, shape = (bs, latlon, nvar)
+            self._plot(y_preds, y, trainer, pl_module, batch_idx)
+
+    def _plot(
+        self,
+        y_preds,
+        y,
+        trainer,
+        pl_module,
+        batch_idx,
+    ) -> None:
+        pl_module.normalizer.denormalize(y_preds, in_place=False).cpu().numpy()
+        pl_module.normalizer.denormalize(y, in_place=False).cpu().numpy()
+
+        # fig = plot_predicted_ensemble(
+        #     self.config.diagnostics.plot.parameters,
+        #     np.rad2deg(pl_module.era_latlons.numpy()),
+        #     predictions[self.sample_idx, ...].squeeze(),
+        #     truth[self.sample_idx, ...].squeeze(),
+        # )
+        # fig.tight_layout()
+        # self._output_figure(
+        #     trainer,
+        #     fig,
+        #     tag=f"gnn_pred_swag_ens_rstep00_batch{batch_idx:04d}_rank0",
+        #     exp_log_tag=f"gnn_pred_swag_ens_rstep00_batch{batch_idx:04d}_rank0",
+        # )
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
+            self._plot(trainer, pl_module, outputs, batch, batch_idx)

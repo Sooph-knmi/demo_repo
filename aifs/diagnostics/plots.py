@@ -338,3 +338,7 @@ def plot_graph_features(
         ax_ = ax[i] if nplots > 1 else ax
         scatter_plot(fig, ax_, pc, lat, lon, features[..., i])
     return fig
+
+
+def plot_predicted_ensemble() -> None:
+    raise NotImplementedError
