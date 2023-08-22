@@ -59,10 +59,10 @@ class RolloutEval(Callback):
         super().__init__()
         LOGGER.debug(
             "Setting up RolloutEval callback with rollout = %d, frequency = %d ...",
-            rollout,
+            rollout["training"]["rollout"]["max"],
             frequency,
         )
-        self.rollout = rollout
+        self.rollout = rollout["training"]["rollout"]["max"]
         self.frequency = frequency
 
     def _eval(
@@ -76,7 +76,6 @@ class RolloutEval(Callback):
 
         # start rollout
         x = batch[:, 0 : pl_module.multi_step, ...]  # (bs, multi_step, latlon, nvar)
-
         assert batch.shape[1] >= self.rollout + pl_module.multi_step, "Batch length not sufficient for requested rollout length!"
 
         with torch.no_grad():
