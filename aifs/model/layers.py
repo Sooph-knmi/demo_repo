@@ -565,16 +565,10 @@ class MessagePassingBlock(nn.Module):
 
     def forward(self, x: Union[Tensor, OptPairTensor], edge_index, edge_attr, shapes, mgroupdef, size: Size = None):
         if isinstance(x, Tensor):
-            # x_in = gather_tensor1(x, 0, shapes[1], mgroupdef[0])
-            # x_in = sync_tensor1(x_in, mgroupdef[0])
             x_in = sync_tensor1(x, 0, shapes[1], mgroupdef[0])
             # out = torch.zeros_like(x_in)
             nchunks = 1
         else:
-            # x_src = gather_tensor1(x[0], 0, shapes[0], mgroupdef[0])
-            # x_dst = gather_tensor1(x[1], 0, shapes[1], mgroupdef[0])
-            # x_src = sync_tensor1(x_src, mgroupdef[0])
-            # x_dst = sync_tensor1(x_dst, mgroupdef[0])
             x_src = sync_tensor1(x[0], 0, shapes[0], mgroupdef[0])
             x_dst = sync_tensor1(x[1], 0, shapes[1], mgroupdef[0])
             x_in = (x_src, x_dst)
