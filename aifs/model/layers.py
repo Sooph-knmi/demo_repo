@@ -16,7 +16,14 @@ from torch_geometric.typing import PairTensor
 from torch_geometric.typing import Size
 from torch_geometric.utils import scatter
 
-from aifs.utils.distributed import shard_tensor1, gather_tensor1, sync_tensor1, reduce_tensor1, get_shape_shards1, change_channels_in_shape1
+from aifs.utils.distributed import (
+    shard_tensor1,
+    gather_tensor1,
+    sync_tensor1,
+    reduce_tensor1,
+    get_shape_shards1,
+    change_channels_in_shape1,
+)
 from aifs.diagnostics.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -263,14 +270,13 @@ class MessagePassingProcessorWraper(nn.Module):
         activation: str = "SiLU",
         cpu_offload: bool = False,
     ) -> None:
-
         super().__init__()
 
         assert hidden_layers % chunks == 0
 
         self.processor0 = MessagePassingProcessor(
             hidden_dim=hidden_dim,
-            hidden_layers=int(hidden_layers/2),
+            hidden_layers=int(hidden_layers / 2),
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=edge_dim,
             chunks=chunks,
@@ -282,7 +288,7 @@ class MessagePassingProcessorWraper(nn.Module):
         # Processor H -> H
         self.processor1 = MessagePassingProcessor(
             hidden_dim=hidden_dim,
-            hidden_layers=int(hidden_layers/2),
+            hidden_layers=int(hidden_layers / 2),
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=0,
             chunks=chunks,
@@ -291,10 +297,9 @@ class MessagePassingProcessorWraper(nn.Module):
             cpu_offload=cpu_offload,
         )
 
-
     def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes, mgroupdef) -> Tensor:
-
-        x0, edge_attr0, edge_index0 = checkpoint(self.processor0,
+        x0, edge_attr0, edge_index0 = checkpoint(
+            self.processor0,
             x=x,
             edge_index=edge_index,
             edge_attr=edge_attr,
@@ -303,7 +308,8 @@ class MessagePassingProcessorWraper(nn.Module):
             use_reentrant=False,
         )
 
-        x1, _, _ = checkpoint(self.processor1,  # has skipped connections and checkpoints inside
+        x1, _, _ = checkpoint(
+            self.processor1,  # has skipped connections and checkpoints inside
             x=x0,
             edge_index=edge_index0,
             edge_attr=edge_attr0,
@@ -382,7 +388,6 @@ class MessagePassingProcessor(nn.Module):
             self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
 
     def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes, mgroupdef) -> Tensor:
-
         if self.emb_edges:
             shapes_edge_idx = get_shape_shards1(edge_index, 1, mgroupdef[0])
             shapes_edge_attr = get_shape_shards1(edge_attr, 0, mgroupdef[0])
@@ -392,7 +397,7 @@ class MessagePassingProcessor(nn.Module):
             edge_attr = self.emb_edges(edge_attr)
 
         for i in range(self.hidden_layers):
-            x, edge_attr = self.proc[i]( x, edge_index, edge_attr, (shape_nodes, shape_nodes), mgroupdef)
+            x, edge_attr = self.proc[i](x, edge_index, edge_attr, (shape_nodes, shape_nodes), mgroupdef)
 
         return x, edge_attr, edge_index
 
@@ -586,7 +591,7 @@ class MessagePassingBlock(nn.Module):
                 out += out1
             edges_new = torch.cat(edges_out, dim=0)
         else:
-            out, edges_new = self.conv(x_in, edge_index, edge_attr, size=size)            
+            out, edges_new = self.conv(x_in, edge_index, edge_attr, size=size)
 
         out = reduce_tensor1(out, mgroupdef[0])  # complete aggregation of edges
         out = shard_tensor1(out, 0, shapes[1], mgroupdef[0])

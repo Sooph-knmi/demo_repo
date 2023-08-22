@@ -89,9 +89,7 @@ class GraphForecaster(pl.LightningModule):
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
         self.multi_step = config.training.multistep_input
-        self.lr = (
-            config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
-        )
+        self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
         self.lr_iterations = config.training.lr.iterations
         self.lr_min = config.training.lr.min
         self.rollout = config.training.rollout.start
@@ -157,7 +155,7 @@ class GraphForecaster(pl.LightningModule):
             if multi_gpu:
                 y_pred = self(x, self.mgroupdef)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
             else:
-                y_pred = self(x, self.mgroupdef_single)# prediction at rollout step rstep, shape = (bs, latlon, nvar)
+                y_pred = self(x, self.mgroupdef_single)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
 
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
