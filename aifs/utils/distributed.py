@@ -27,6 +27,11 @@ def sync_tensor1(input_, dim, shapes, mgroup):
     return _SyncParallelSection.apply(input_, dim, shapes, mgroup)
 
 
+def reduce_shard_tensor1(input_, dim, shapes, mgroup):
+    """reduce shard helper"""
+    return _ReduceShardParallelSection.apply(input_, dim, shapes, mgroup)
+
+
 class _ShardParallelSection(torch.autograd.Function):
     """Split the input and keep only the corresponding chuck to the rank."""
 
@@ -173,6 +178,42 @@ class _ReduceParallelSection(torch.autograd.Function):
     def backward(ctx, grad_output):
         return grad_output, None
 
+
+class _ReduceShardParallelSection(torch.autograd.Function):
+    """All-reduce and shard the input from the parallel section."""
+
+    @staticmethod
+    def symbolic(graph, input_, dim_, shapes_, mgroup_):
+        """"""
+        if mgroup_:
+            input_ = _reduce(input_, group=mgroup_)
+            return _split(input_, dim_, shapes_, group=mgroup_)
+        else:
+            return input_
+
+    @staticmethod
+    def forward(ctx, input_, dim_, shapes_, mgroup_):
+        ctx.dim = dim_
+        ctx.comm_group = mgroup_
+        ctx.shapes = shapes_
+        if mgroup_:
+            input_ = _reduce(input_, group=mgroup_)
+            return _split(input_, dim_, shapes_, group=mgroup_)
+        else:
+            return input_
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        if ctx.comm_group:
+            return (
+                _gather(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
+                None,
+                None,
+                None,
+            )
+        else:
+            return grad_output, None, None, None
+    
 
 def _split(input_, dim_, shapes_, group=None):  # pragma: no cover
     """Split the tensor along dim and keep the corresponding slice."""
