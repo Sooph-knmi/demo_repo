@@ -202,7 +202,7 @@ class GraphMSG(nn.Module):
             activation=self.activation,
         )
 
-    def forward(self, x: torch.Tensor, mgroupdef=(0, 1, 0)) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mgroupdef) -> torch.Tensor:
         # mgroupdef[0] : comms group
         # mgroupdef[1] : lenght of cumms group -> not used .. get via dist.get_world_size(group=mgroupdef[0])
         # mgroupdef[2] : local rank in comms group -> not used .. get via dist.get_rank(group=mgroupdef[0])

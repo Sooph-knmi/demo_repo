@@ -109,7 +109,7 @@ class GraphForecaster(pl.LightningModule):
         self.group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.group_size
         self.num_groups = math.ceil(config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.group_size)
 
-    def forward(self, x: torch.Tensor, mgroupdef) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mgroupdef=(0, 1, 0)) -> torch.Tensor:
         return self.gnn(x, mgroupdef)
 
     def set_mgroupdef(self, mgroupdef, mgroupdef_single) -> None:
