@@ -359,25 +359,8 @@ class GraphMSG(nn.Module):
 
 ############ testing ########
 
-from prettytable import PrettyTable
-
-
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-
-def count_parameters_pretty(model):
-    table = PrettyTable(["Modules", "Parameters"])
-    total_params = 0
-    for name, parameter in model.named_parameters():
-        if not parameter.requires_grad:
-            continue
-        params = parameter.numel()
-        table.add_row([name, params])
-        total_params += params
-    print(table)
-    print(f"Total Trainable Params: {total_params/1.e6}")
-    return total_params
 
 
 def get_my_mgroup(world_size, rank, mgroup_size):
