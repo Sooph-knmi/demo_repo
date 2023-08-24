@@ -307,18 +307,24 @@ def get_shape_shards1(tensor, dim, group=None):
     """Get shape of shards"""
     assert dim < tensor.dim(), f"Error, tensor dimension is {tensor.dim()} which cannot be split along {dim}"
 
-    comm_size = dist.get_world_size(group=group)
-    if comm_size == 1:
-        shape_list = [list(tensor.shape)]
+    if group:
+        comm_size = dist.get_world_size(group=group)
+        if comm_size == 1:
+            shape_list = [list(tensor.shape)]
 
+        else:
+            tensor_list = torch.tensor_split(tensor, comm_size, dim=dim)
+            shape_list = [list(x.shape) for x in tensor_list]
     else:
-        tensor_list = torch.tensor_split(tensor, comm_size, dim=dim)
-        shape_list = [list(x.shape) for x in tensor_list]
+        shape_list = []
 
     return shape_list
 
 
 def change_channels_in_shape1(shape_list, channels):
-    out = [x[:-1] + [channels] for x in shape_list]
+    if shape_list:
+        out = [x[:-1] + [channels] for x in shape_list]
+    else:
+        out = []
 
     return out

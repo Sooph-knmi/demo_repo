@@ -20,7 +20,7 @@ from aifs.utils.distributed import (
     shard_tensor1,
     gather_tensor1,
     sync_tensor1,
-    #reduce_tensor1,
+    reduce_tensor1,
     reduce_shard_tensor1,
     get_shape_shards1,
     change_channels_in_shape1,
@@ -594,9 +594,9 @@ class MessagePassingBlock(nn.Module):
         else:
             out, edges_new = self.conv(x_in, edge_index, edge_attr, size=size)
 
-        # out = reduce_tensor1(out, mgroupdef[0])  # complete aggregation of edges
-        # out = shard_tensor1(out, 0, shapes[1], mgroupdef[0])
-        out = reduce_shard_tensor1(out, 0, shapes[1], mgroupdef[0])
+        out = reduce_tensor1(out, mgroupdef[0])  # complete aggregation of edges
+        out = shard_tensor1(out, 0, shapes[1], mgroupdef[0])
+        # out = reduce_shard_tensor1(out, 0, shapes[1], mgroupdef[0])
 
         if isinstance(x, Tensor):
             nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x
