@@ -41,7 +41,7 @@ class AIFSTrain:
         self.log_information()
 
     @cached_property
-    def datamodule(self) -> "ERA5DataModule":
+    def datamodule(self) -> ERA5DataModule:
         """DataModule instance and DataSets."""
         return ERA5DataModule(self.config)
 
@@ -75,7 +75,7 @@ class AIFSTrain:
         return str(uuid.uuid4())
 
     @cached_property
-    def wandb_logger(self) -> "pl.loggers.WandbLogger":
+    def wandb_logger(self) -> pl.loggers.WandbLogger:
         """WandB logger."""
         return get_wandb_logger(self.config, self.model)
 
@@ -98,7 +98,7 @@ class AIFSTrain:
         LOGGER.warning("Could not find last checkpoint: %s", checkpoint)
 
     @cached_property
-    def callbacks(self) -> List["pl.Callback"]:
+    def callbacks(self) -> List[pl.callbacks.Callback]:
         return get_callbacks(self.config)
 
     @cached_property
