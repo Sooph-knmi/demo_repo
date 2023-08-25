@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Optional
 from typing import Tuple
 
@@ -36,11 +35,7 @@ class GraphMSG(nn.Module):
         """
         super().__init__()
 
-        # create mappings
-        if graph_data is None:
-            self._graph_data = torch.load(Path(config.hardware.paths.graph, config.hardware.files.graph))
-        else:
-            self._graph_data = graph_data
+        self._graph_data = graph_data
 
         self.in_channels = config.data.num_features - config.data.num_aux_features
         self.multi_step = config.training.multistep_input

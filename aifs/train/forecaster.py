@@ -9,11 +9,10 @@ import torch
 from omegaconf import DictConfig
 from timm.scheduler import CosineLRScheduler
 
-from aifs.data.era_normalizers import InputNormalizer
 from aifs.data.scaling import pressure_level
 from aifs.model.losses import grad_scaler
 from aifs.model.losses import WeightedMSELoss
-from aifs.model.msg import GraphMSG
+from aifs.model.model import AIFSModelGNN
 from aifs.utils.logger import get_code_logger
 
 # from torch.autograd.graph import save_on_cpu
@@ -45,14 +44,13 @@ class GraphForecaster(pl.LightningModule):
 
         self.graph_data = torch.load(Path(config.hardware.paths.graph, config.hardware.files.graph))
 
-        self.gnn = GraphMSG(
-            config=config,
+        self.model = AIFSModelGNN(
+            metadata=metadata,
             graph_data=self.graph_data,
+            config=config,
         )
 
         self.save_hyperparameters()
-
-        self.normalizer = InputNormalizer(metadata)
 
         self.era_latlons = self.graph_data[("era", "to", "era")].ecoords_rad
         self.era_weights = self.graph_data[("era", "to", "era")].area_weights
@@ -103,7 +101,7 @@ class GraphForecaster(pl.LightningModule):
         self.enable_plot = config.diagnostics.plot.enabled
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.gnn(x)
+        return self.model(x)
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         x = x.roll(-1, dims=1)
@@ -120,7 +118,7 @@ class GraphForecaster(pl.LightningModule):
         validation_mode: bool = False,
     ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
-        batch = self.normalizer(batch)  # normalized in-place
+        batch = self.model.normalizer(batch)  # normalized in-place
         metrics = {}
 
         # start rollout
@@ -138,8 +136,8 @@ class GraphForecaster(pl.LightningModule):
 
             if validation_mode:
                 for mkey, (low, high) in self.metric_ranges.items():
-                    y_denorm = self.normalizer.denormalize(y, in_place=False)
-                    y_hat_denorm = self.normalizer.denormalize(x[:, -1, ...], in_place=False)
+                    y_denorm = self.model.normalizer.denormalize(y, in_place=False)
+                    y_hat_denorm = self.model.normalizer.denormalize(x[:, -1, ...], in_place=False)
                     metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
 
                 if self.enable_plot:
