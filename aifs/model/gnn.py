@@ -4,13 +4,13 @@ from typing import Tuple
 import einops
 import numpy as np
 import torch
-from omegaconf import DictConfig
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
 
 from aifs.model.layers import MessagePassingMapper
 from aifs.model.layers import MessagePassingProcessor
+from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
@@ -21,7 +21,7 @@ class GraphMSG(nn.Module):
 
     def __init__(
         self,
-        config: DictConfig,
+        config: DotConfig,
         graph_data: HeteroData = None,
     ) -> None:
         """Initializes the graph neural network.

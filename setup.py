@@ -10,22 +10,25 @@ setup(
     author_email="ecmwf-authors@ecmwf.int",
     description="ERA5 forecasting with Graph Neural Networks",
     install_requires=[
+        "torch==2.0.1",
         "torch_geometric==2.3.1",
-        "pytorch-lightning==2.0.3",
-        "timm==0.9.2",
-        "hydra-core==1.3",
         "einops==0.6.1",
     ],
     extras_require={
-        "extras": [
+        "training": [
+            "pytorch-lightning==2.0.3",
+            "timm==0.9.2",
+            "hydra-core==1.3",
             "matplotlib==3.7.1",
             "tqdm==4.65.0",
             "wandb==0.15.0",
             "zarr==2.14.2",
+            "pre-commit==3.3.3",
+        ],
+        "graph": [
             "networkx==3.1",
             "h3==3.7.6",
-            "pre-commit==3.3.3",
-        ]
+        ],
     },
     classifiers=[
         "Development Status :: 4 - Beta",

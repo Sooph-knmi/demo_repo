@@ -7,12 +7,14 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 from omegaconf import DictConfig
+from omegaconf import OmegaConf
 from timm.scheduler import CosineLRScheduler
 
 from aifs.data.scaling import pressure_level
 from aifs.model.losses import grad_scaler
 from aifs.model.losses import WeightedMSELoss
 from aifs.model.model import AIFSModelGNN
+from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
 # from torch.autograd.graph import save_on_cpu
@@ -47,7 +49,7 @@ class GraphForecaster(pl.LightningModule):
         self.model = AIFSModelGNN(
             metadata=metadata,
             graph_data=self.graph_data,
-            config=config,
+            config=DotConfig(OmegaConf.to_container(config, resolve=True)),
         )
 
         self.save_hyperparameters()

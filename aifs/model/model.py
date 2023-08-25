@@ -1,15 +1,13 @@
-from typing import Optional
-
 import torch
-from omegaconf import DictConfig
 from torch_geometric.data import HeteroData
 
 from aifs.data.era_normalizers import InputNormalizer
 from aifs.model.gnn import GraphMSG
+from aifs.utils.config import DotConfig
 
 
 class AIFSModelGNN(torch.nn.Module):
-    def __init__(self, metadata: Optional[dict] = None, graph_data: Optional[HeteroData] = None, config: DictConfig = None):
+    def __init__(self, metadata: dict, graph_data: HeteroData, config: DotConfig):
         super().__init__()
         self.config = config
         self.multi_step = self.config.training.multistep_input
