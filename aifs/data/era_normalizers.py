@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from aifs.utils.logger import get_logger
+from aifs.diagnostics.logger import get_logger
 
 LOGGER = get_logger(__name__, debug=True)
 
@@ -26,7 +26,16 @@ MAX_NORMALIZE = ["sdor", "slor", "z"]
 
 
 class InputNormalizer(nn.Module):
+    """Normalizes input data to zero mean and unit variance."""
+
     def __init__(self, zarr_metadata: Dict) -> None:
+        """Initialize the normalizer.
+
+        Parameters
+        ----------
+        zarr_metadata : Dict
+            Zarr metadata dictionary
+        """
         super().__init__()
         self._zarr_metadata = zarr_metadata
 
@@ -60,12 +69,26 @@ class InputNormalizer(nn.Module):
         # register all buffers - this will ensure they get copied to the correct device(s)
         self.register_buffer("_max_norm_idx", torch.from_numpy(_max_norm_idx), persistent=True)
         self.register_buffer("_max_norm", _max_norm, persistent=True)
-        self.register_buffer("_std_norm_idx", torch.from_numpy(np.array(_std_norm_idx, dtype=np.int32)), persistent=True)
-        self.register_buffer("_std_norm_mu", torch.from_numpy(np.array(_std_norm_mu, dtype=np.float32)), persistent=True)
-        self.register_buffer("_std_norm_sd", torch.from_numpy(np.array(_std_norm_sd, dtype=np.float32)), persistent=True)
+        self.register_buffer(
+            "_std_norm_idx",
+            torch.from_numpy(np.array(_std_norm_idx, dtype=np.int32)),
+            persistent=True,
+        )
+        self.register_buffer(
+            "_std_norm_mu",
+            torch.from_numpy(np.array(_std_norm_mu, dtype=np.float32)),
+            persistent=True,
+        )
+        self.register_buffer(
+            "_std_norm_sd",
+            torch.from_numpy(np.array(_std_norm_sd, dtype=np.float32)),
+            persistent=True,
+        )
 
-    def normalize(self, x: torch.Tensor) -> torch.Tensor:
+    def normalize(self, x: torch.Tensor, in_place: bool = True) -> torch.Tensor:
         """Normalizes an input tensor x of shape [..., nvars]; normalization done in-place."""
+        if not in_place:
+            x = x.clone()
         x[..., self._max_norm_idx] = x[..., self._max_norm_idx] / self._max_norm
         x[..., self._std_norm_idx] = (x[..., self._std_norm_idx] - self._std_norm_mu) / self._std_norm_sd
         return x
@@ -73,10 +96,12 @@ class InputNormalizer(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.normalize(x)
 
-    def denormalize(self, x: torch.Tensor) -> torch.Tensor:
+    def denormalize(self, x: torch.Tensor, in_place: bool = True) -> torch.Tensor:
         """Denormalizes an input tensor x of shape [..., nvars | nvars_pred]; normalization done in-place."""
         # input and predicted tensors have different shapes
         # hence, we mask out the indices >= x.shape[-1] - i.e. the variables that are not predicted
+        if not in_place:
+            x = x.clone()
         max_denorm_mask = self._max_norm_idx < x.shape[-1]
         std_denorm_mask = self._std_norm_idx < x.shape[-1]
 

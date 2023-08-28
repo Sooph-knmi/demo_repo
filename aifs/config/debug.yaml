@@ -1,23 +1,23 @@
 defaults:
   - hardware: atos
-  - paths: atos
-  - files: atos
   - data: zarr
   - dataloader: default
   - model: gnn
   - training: default
   - diagnostics: eval_rollout
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
   - _self_
 
-### This file is for local experimentation. 
+### This file is for local experimentation.
 ##  When you commit your changes, assign the new features and keywords
 ##  to the correct defaults.
 # For example to change from default GPU count:
+# hardware:
+#   num_gpus_per_node: 1
 hardware:
-  num_gpus: 2
-  num_nodes: 1
-files:
-  graph: graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4.pt
+  files:
+    graph: graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4.pt
 model:
   num_channels: 128
   hidden:
@@ -27,4 +27,4 @@ dataloader:
     training: 150
     validation: 150
 training:
-  max_epochs: 2
+  max_epochs: 3

@@ -7,13 +7,13 @@ num_workers:
   predict: 8
 batch_size:
   training: 1
-  validation: 1
+  validation: 4
   test: 4
   predict: 4
 # runs only N training batches [N = integer | null]
 # if null then we run through all the batches
 limit_batches:
-  training: null
-  validation: null
+  training: 2000
+  validation: 2000
   test: 20
   predict: 20

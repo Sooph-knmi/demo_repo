@@ -1,4 +1,5 @@
-from setuptools import find_packages, setup
+from setuptools import find_packages
+from setuptools import setup
 
 setup(
     name="aifs",
@@ -13,17 +14,17 @@ setup(
         "pytorch-lightning==2.0.3",
         "timm==0.9.2",
         "hydra-core==1.3",
+        "einops==0.6.1",
     ],
     extras_require={
         "extras": [
             "matplotlib==3.7.1",
-            "cartopy==0.21.1",
             "tqdm==4.65.0",
             "wandb==0.15.0",
-            "einops==0.6.1",
             "zarr==2.14.2",
             "networkx==3.1",
             "h3==3.7.6",
+            "pre-commit==3.3.3",
         ]
     },
     classifiers=[
@@ -34,6 +35,7 @@ setup(
         "Programming Language :: Python :: 3.9",
     ],
     packages=find_packages(),
+    include_package_data=True,
     entry_points={
         "console_scripts": [
             "aifs-ens-train=aifs.train.train:main",

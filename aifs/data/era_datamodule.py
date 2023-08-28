@@ -1,21 +1,31 @@
-from typing import Optional
 import os
+from typing import Optional
 
-from omegaconf import DictConfig
 import pytorch_lightning as pl
 import zarr
+from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
-from aifs.data.era_dataset import ERA5NativeGridDataset, worker_init_func
+from aifs.data.era_dataset import ERA5NativeGridDataset
+from aifs.data.era_dataset import worker_init_func
 from aifs.data.era_readers import read_era_data
-from aifs.utils.constants import _DL_PREFETCH_FACTOR
-from aifs.utils.logger import get_logger
+from aifs.diagnostics.logger import get_logger
+
 
 LOGGER = get_logger(__name__)
 
 
 class ERA5DataModule(pl.LightningDataModule):
+    """ERA5 data module for PyTorch Lightning."""
+
     def __init__(self, config: DictConfig) -> None:
+        """Initialize ERA5 data module.
+
+        Parameters
+        ----------
+        config : DictConfig
+            Job configuration
+        """
         super().__init__()
         self.bs_train = config.dataloader.batch_size.training
         self.bs_val = config.dataloader.batch_size.validation
@@ -27,18 +37,18 @@ class ERA5DataModule(pl.LightningDataModule):
         # TODO: will this work correctly in multi-node runs?
         self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
-        self.ds_train = self._get_dataset("training")
+        self.ds_train = self._get_dataset("training", shuffle=True)
 
         r = self.config.training.rollout.max
         if config.diagnostics.eval.enabled:
             r = max(r, config.diagnostics.eval.rollout)
-        self.ds_valid = self._get_dataset("validation", rollout=r)
+        self.ds_valid = self._get_dataset("validation", shuffle=False, rollout=r)
 
         ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
         self.input_metadata = ds_tmp.attrs["climetlab"]
         ds_tmp = None
 
-    def _get_dataset(self, stage: str, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
+    def _get_dataset(self, stage: str, shuffle: bool = True, rollout: Optional[int] = None) -> ERA5NativeGridDataset:
         rollout_config = (
             self.config.training.rollout.max
             if self.config.training.rollout.epoch_increment > 0
@@ -52,14 +62,15 @@ class ERA5DataModule(pl.LightningDataModule):
             rollout=r,
             multistep=self.config.training.multistep_input,
             rank=self.local_rank,
-            world_size=self.config.hardware.num_gpus * self.config.hardware.num_nodes,
+            world_size=self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes,
+            shuffle=shuffle,
         )
 
     def _get_data_filename(self, stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation]
         return os.path.join(
-            self.config.paths[stage],
-            self.config.files[stage],
+            self.config.hardware.paths[stage],
+            self.config.hardware.files[stage],
         )
 
     def _get_dataloader(self, ds: ERA5NativeGridDataset, num_workers: int, batch_size: int) -> DataLoader:
@@ -73,8 +84,8 @@ class ERA5DataModule(pl.LightningDataModule):
             pin_memory=True,
             # worker initializer
             worker_init_fn=worker_init_func,
-            # prefetch batches (default prefetch_factor == 2)
-            prefetch_factor=_DL_PREFETCH_FACTOR,
+            # prefetch batches
+            prefetch_factor=self.config.dataloader.prefetch_factor,
             persistent_workers=False,
         )
 
@@ -86,7 +97,16 @@ class ERA5DataModule(pl.LightningDataModule):
 
 
 class ERA5TestDataModule(pl.LightningDataModule):
+    """ERA5 data test module for PyTorch Lightning."""
+
     def __init__(self, config: DictConfig) -> None:
+        """Initialize ERA5 data test module.
+
+        Parameters
+        ----------
+        config : DictConfig
+            Job configuration
+        """
         super().__init__()
         self.bs_test = config.dataloader.batch_size.test
         self.num_workers_test = config.dataloader.num_workers.test
@@ -110,15 +130,15 @@ class ERA5TestDataModule(pl.LightningDataModule):
             rollout=self.config.training.rollout.start,
             multistep=self.config.training.multistep_input,
             rank=self.local_rank,
-            world_size=self.config.hardware.num_gpus * self.config.hardware.num_nodes,
+            world_size=self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes,
             shuffle=False,
         )
 
     def _get_data_filename(self, stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation | test]
         return os.path.join(
-            self.config.paths[stage],
-            self.config.files[stage],
+            self.config.hardware.paths[stage],
+            self.config.hardware.files[stage],
         )
 
     def _get_dataloader(self, ds: ERA5NativeGridDataset, num_workers: int, batch_size: int) -> DataLoader:
@@ -128,7 +148,7 @@ class ERA5TestDataModule(pl.LightningDataModule):
             num_workers=num_workers,
             pin_memory=True,
             worker_init_fn=worker_init_func,
-            prefetch_factor=_DL_PREFETCH_FACTOR,
+            prefetch_factor=self.config.dataloader.prefetch_factor,
             persistent_workers=False,
         )
 

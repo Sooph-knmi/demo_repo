@@ -1,22 +1,29 @@
-from typing import Optional, Tuple, Union
+from typing import Optional
+from typing import Tuple
+from typing import Union
 
 import einops
 import torch
+import torch_geometric.nn as tgnn
 from torch import nn
 from torch import Tensor
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import offload_wrapper
 from torch.utils.checkpoint import checkpoint
-import torch_geometric.nn as tgnn
 from torch_geometric.nn.conv import MessagePassing
-from torch_geometric.typing import Adj, OptPairTensor, Size, PairTensor
+from torch_geometric.typing import Adj
+from torch_geometric.typing import OptPairTensor
+from torch_geometric.typing import PairTensor
+from torch_geometric.typing import Size
 from torch_geometric.utils import scatter
 
-from aifs.utils.logger import get_logger
+from aifs.diagnostics.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
 
 class TransformerMapper(MessagePassing):
+    """Transformer mapper layer."""
+
     def __init__(
         self,
         in_channels: int,
@@ -28,6 +35,27 @@ class TransformerMapper(MessagePassing):
         dropout: float = 0.0,
         edge_dim: int = 3,
     ) -> None:
+        """Initialize the transformer mapper layer.
+
+        Parameters
+        ----------
+        in_channels : int
+            Number of input channels.
+        out_channels : int
+            Number of output channels.
+        context_size : int
+            Size of the context vector.
+        trainable_context_channels : int, optional
+            Number of trainable context channels, by default 1
+        dynamic_context_channels : int, optional
+            Number of dynamic context channels, by default 0
+        num_heads : int, optional
+            Number of attention heads, by default 1
+        dropout : float, optional
+            Dropout probability, by default 0.0
+        edge_dim : int, optional
+            Edge feature dimension, by default 3
+        """
         super().__init__()
         self.dynamic_context_channels = dynamic_context_channels
         context_channels = trainable_context_channels + self.dynamic_context_channels
@@ -79,7 +107,12 @@ class TransformerMapper(MessagePassing):
             if batch_size > 1:
                 context = einops.repeat(context, "n f -> (repeat n) f", repeat=batch_size)
             assert edge_index[0].max() < x.size(0) and edge_index[1].max() < context.size(0), "Your edge index tensor is invalid."
-            out = self.conv(x=(x, context), edge_index=edge_index, edge_attr=edge_attr, size=(x.shape[0], context.shape[0]))
+            out = self.conv(
+                x=(x, context),
+                edge_index=edge_index,
+                edge_attr=edge_attr,
+                size=(x.shape[0], context.shape[0]),
+            )
         else:
             out = self.conv(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
@@ -87,6 +120,8 @@ class TransformerMapper(MessagePassing):
 
 
 class GATEncoder(nn.Module):
+    """Graph Attention Transformer encoder."""
+
     def __init__(
         self,
         num_layers: int,
@@ -99,6 +134,29 @@ class GATEncoder(nn.Module):
         jk_mode: Optional[str] = "last",
         edge_dim: int = 3,
     ) -> None:
+        """Initialize the GAT encoder.
+
+        Parameters
+        ----------
+        num_layers : int
+            Number of layers
+        in_channels : int
+            Number of input channels
+        hidden_channels : int
+            Number of hidden channels
+        out_channels : int
+            Number of output channels
+        num_heads : int, optional
+            Number of heads in transformer, by default 4
+        dropout : float, optional
+            Dropout probability, by default 0.0
+        activation : Optional[str], optional
+            Activation function, by default "gelu"
+        jk_mode : Optional[str], optional
+            Jumping Knowledge mode (None, "last", "cat", "max", "lstm"), by default "last"
+        edge_dim : int, optional
+            Edge dimension of graph, by default 3
+        """
         super().__init__()
 
         act_fn = None
@@ -139,6 +197,37 @@ def gen_mlp(
     layer_norm: bool = True,
     checkpoints: bool = False,
 ) -> nn.Module:
+    """Generate a multi-layer perceptron.
+
+    Parameters
+    ----------
+    in_features : int
+        Number of input features
+    hidden_dim : int
+        Hidden dimensions
+    out_features : int
+        Number of output features
+    n_extra_layers : int, optional
+        Number of extra layers in MLP, by default 0
+    activation_func : str, optional
+        Activation function, by default "SiLU"
+    final_activation : bool, optional
+        Whether to apply a final activation function to last layer, by default True
+    layer_norm : bool, optional
+        Whether to apply layer norm after activation, by default True
+    checkpoints : bool, optional
+        Whether to provide checkpoints, by default False
+
+    Returns
+    -------
+    nn.Module
+        Returns a MLP module
+
+    Raises
+    ------
+    RuntimeError
+        If activation function is not supported
+    """
     try:
         act_func = getattr(nn, activation_func)
     except AttributeError as ae:
@@ -161,6 +250,8 @@ def gen_mlp(
 
 
 class MessagePassingProcessor(nn.Module):
+    """Message Passing Processor Graph Neural Network."""
+
     def __init__(
         self,
         hidden_dim: int,
@@ -171,6 +262,25 @@ class MessagePassingProcessor(nn.Module):
         activation: str = "SiLU",
         cpu_offload: bool = False,
     ) -> None:
+        """Initialize MessagePassingProcessor.
+
+        Parameters
+        ----------
+        hidden_dim : int
+            Hidden dimension
+        hidden_layers : int
+            Number of hidden layers
+        edge_dim : int
+            Input features of MLP
+        chunks : int, optional
+            Number of chunks, by default 2
+        mlp_extra_layers : int, optional
+            Number of extra layers in MLP, by default 0
+        activation : str, optional
+            Activation funciton, by default "SiLU"
+        cpu_offload : bool, optional
+            Whether to offload processing to CPU, by default False
+        """
         super().__init__()
 
         self.hidden_layers = chunks
@@ -212,6 +322,8 @@ class MessagePassingProcessor(nn.Module):
 
 
 class MessagePassingMapper(MessagePassingProcessor):
+    """Mapper from h -> era or era -> h."""
+
     def __init__(
         self,
         in_channels_src: int,
@@ -220,6 +332,19 @@ class MessagePassingMapper(MessagePassingProcessor):
         out_channels_dst: Optional[int] = None,
         **kwargs,
     ) -> None:
+        """Initialize the mapper.
+
+        Parameters
+        ----------
+        in_channels_src : int
+            Input channels of the source node
+        in_channels_dst : int
+            Input channels of the destination node
+        backward_mapper : bool, optional
+            Map from (true) hidden to era or (false) reverse, by default False
+        out_channels_dst : Optional[int], optional
+            Output channels of the destination node, by default None
+        """
         super().__init__(**kwargs)
 
         self.backward_mapper = backward_mapper
@@ -270,7 +395,7 @@ class MessagePassingMapper(MessagePassingProcessor):
 
 
 class MessagePassingProcessorChunk(nn.Module):
-    """Wraps X message passing blocks for checkpointing in Processor / Mapper"""
+    """Wraps X message passing blocks for checkpointing in Processor / Mapper."""
 
     def __init__(
         self,
@@ -279,6 +404,19 @@ class MessagePassingProcessorChunk(nn.Module):
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
     ) -> None:
+        """Initialize MessagePassingProcessorChunk.
+
+        Parameters
+        ----------
+        hidden_dim : int
+            Hidden dimention of the message passing blocks.
+        hidden_layers : int
+            Number of message passing blocks.
+        mlp_extra_layers : int, optional
+            Extra layers in MLP, by default 0
+        activation : str, optional
+            Activation function, by default "SiLU"
+        """
         super().__init__()
 
         self.hidden_layers = hidden_layers
@@ -298,6 +436,8 @@ class MessagePassingProcessorChunk(nn.Module):
 
 
 class MessagePassingBlock(MessagePassing):
+    """Message passing block with MLPs for node and edge embeddings."""
+
     def __init__(
         self,
         in_channels: int,
@@ -306,6 +446,19 @@ class MessagePassingBlock(MessagePassing):
         activation: str = "SiLU",
         **kwargs,
     ) -> None:
+        """Initialize MessagePassingBlock.
+
+        Parameters
+        ----------
+        in_channels : int
+            Number of input channels.
+        out_channels : int
+            Number of output channels.
+        mlp_extra_layers : int, optional
+            Extra layers in MLP, by default 0
+        activation : str, optional
+            Activation function, by default "SiLU"
+        """
         super().__init__(**kwargs)
 
         self.node_mlp = gen_mlp(
@@ -347,6 +500,8 @@ class MessagePassingBlock(MessagePassing):
 
 
 class CheckpointWrapper(nn.Module):
+    """Wrapper for checkpointing a module."""
+
     def __init__(self, module: nn.Module) -> None:
         super().__init__()
         self.module = module

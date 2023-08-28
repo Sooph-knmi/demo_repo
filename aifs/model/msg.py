@@ -1,32 +1,42 @@
 import os
+
 import einops
 import numpy as np
-from omegaconf import DictConfig
 import torch
+from omegaconf import DictConfig
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
 
-from aifs.model.layers import (
-    MessagePassingProcessor,
-    MessagePassingMapper,
-)
-from aifs.utils.logger import get_logger
+from aifs.diagnostics.logger import get_logger
+from aifs.model.layers import MessagePassingMapper
+from aifs.model.layers import MessagePassingProcessor
 
 LOGGER = get_logger(__name__)
 
 
 class GraphMSG(nn.Module):
+    """Message passing graph neural network."""
+
     def __init__(
         self,
         config: DictConfig,
         graph_data: HeteroData = None,
     ) -> None:
+        """Initializes the graph neural network.
+
+        Parameters
+        ----------
+        config : DictConfig
+            Job configuration
+        graph_data : HeteroData, optional
+            Graph definition, by default None
+        """
         super().__init__()
 
         # create mappings
         if graph_data is None:
-            self.graph_data = torch.load(os.path.join(config.paths.graph, config.files.graph))
+            self._graph_data = torch.load(os.path.join(config.hardware.paths.graph, config.hardware.files.graph))
         else:
             self._graph_data = graph_data
 
@@ -61,25 +71,39 @@ class GraphMSG(nn.Module):
 
         self.e2h_trainable_size = config.model.trainable_parameters.era2hidden
         self.e2h_trainable = (
-            nn.Parameter(torch.zeros(self._graph_data[("era", "to", "h")].edge_attr.shape[0], self.e2h_trainable_size))
+            nn.Parameter(
+                torch.zeros(
+                    self._graph_data[("era", "to", "h")].edge_attr.shape[0],
+                    self.e2h_trainable_size,
+                )
+            )
             if self.e2h_trainable_size > 0
             else None
         )
 
         self.h2e_trainable_size = config.model.trainable_parameters.hidden2era
         self.h2e_trainable = (
-            nn.Parameter(torch.zeros(self._graph_data[("h", "to", "era")].edge_attr.shape[0], self.h2e_trainable_size))
+            nn.Parameter(
+                torch.zeros(
+                    self._graph_data[("h", "to", "era")].edge_attr.shape[0],
+                    self.h2e_trainable_size,
+                )
+            )
             if self.h2e_trainable_size > 0
             else None
         )
 
         self.h2h_trainable_size = config.model.trainable_parameters.hidden2hidden
         self.h2h_trainable = (
-            nn.Parameter(torch.zeros(self._graph_data[("h", "to", "h")].edge_attr.shape[0], self.h2h_trainable_size))
+            nn.Parameter(
+                torch.zeros(
+                    self._graph_data[("h", "to", "h")].edge_attr.shape[0],
+                    self.h2h_trainable_size,
+                )
+            )
             if self.h2h_trainable_size > 0
             else None
         )
-
         self.register_buffer(
             "_e2h_edge_inc", torch.from_numpy(np.asarray([[self._era_size], [self._h_size]], dtype=np.int64)), persistent=False
         )
@@ -155,22 +179,9 @@ class GraphMSG(nn.Module):
             activation=self.activation,
         )
 
-        self._init_weights()
-
-    def _init_weights(self) -> None:
-        """Initializes the weights"""
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.kaiming_normal_(m.weight)
-                if m.bias is not None:
-                    m.bias.data.zero_()
-            elif isinstance(m, nn.LayerNorm):
-                m.bias.data.zero_()
-                m.weight.data.fill_(1.0)
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward operator.
+        """Forward operator.
+
         Args:
             x: input tensor, shape (bs, e, m, n, f)
         Returns:

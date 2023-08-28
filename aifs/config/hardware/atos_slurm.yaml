@@ -1,3 +1,4 @@
+
 defaults:
   - paths: atos
   - files: atos
@@ -5,6 +6,7 @@ defaults:
 # parallel strategy
 # if running on a single device set to "null" [Lightning < 2] or "auto" [Lightning 2.0]
 strategy: auto
+
 # number of GPUs per node and number of nodes (for DDP)
-num_gpus_per_node: 1
-num_nodes: 1
+num_gpus_per_node:  ${oc.decode:${oc.env:SLURM_GPUS_PER_NODE}}
+num_nodes:  ${oc.decode:${oc.env:SLURM_NNODES}}

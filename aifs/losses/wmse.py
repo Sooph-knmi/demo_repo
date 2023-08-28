@@ -1,23 +1,48 @@
 from typing import Optional
+from typing import Tuple
 
 import torch
 from torch import nn
 
-from aifs.utils.logger import get_logger
+from aifs.diagnostics.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
 
+def grad_scaler(
+    module: nn.Module, grad_in: Tuple[torch.Tensor, ...], grad_out: Tuple[torch.Tensor, ...]
+) -> Optional[Tuple[torch.Tensor, ...]]:
+    """
+    Scales the loss gradients using the formula in https://arxiv.org/pdf/2306.06079.pdf, section 4.3.2
+    Args:
+        module: nn.Module (the loss object, not used)
+        grad_in: input gradients
+        grad_out: output gradients (not used)
+    Returns:
+        Re-scaled input gradients
+    Use <module>.register_full_backward_hook(grad_scaler, prepend=False) to register this hook.
+    """
+    del module, grad_out  # not needed
+    # loss = module(x_pred, x_true)
+    # so - the first grad_input is that of the predicted state and the second is that of the "ground truth" (== zero)
+    C = grad_in[0].shape[-1]  # number of channels
+    w_c = torch.reciprocal(torch.sum(torch.abs(grad_in[0]), dim=1, keepdim=True))  # channel-wise weights
+    new_grad_in = (C * w_c) / torch.sum(w_c, dim=-1, keepdim=True) * grad_in[0]  # rescaled gradient
+    return new_grad_in, grad_in[1]
+
+
 class WeightedMSELoss(nn.Module):
-    """Latitude-weighted MSE loss"""
+    """Latitude-weighted MSE loss."""
 
     def __init__(self, area_weights: torch.Tensor, data_variances: Optional[torch.Tensor] = None) -> None:
-        """
-        Latitude- and (inverse-)variance-weighted MSE Loss.
-        Args:
-            area_weights: area weights
-            data_variances: precomputed, per-variable stepwise variance estimate
-                            V_{i,t} = E_{i,t} [ x^{t+1} - x^{t} ] (i = lat/lon index, t = time index, x = predicted variable)
+        """Latitude- and (inverse-)variance-weighted MSE Loss.
+
+        Parameters
+        ----------
+        area_weights : torch.Tensor
+            Weights by area
+        data_variances : Optional[torch.Tensor], optional
+            precomputed, per-variable stepwise variance estimate, by default None
         """
         super().__init__()
 
@@ -26,11 +51,21 @@ class WeightedMSELoss(nn.Module):
             self.register_buffer("ivar", data_variances, persistent=True)
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor, squash=True) -> torch.Tensor:
-        """
-        Calculates the lat-weighted MSE loss.
-        Args:
-            pred: Prediction tensor, shape (bs, lat*lon, n_outputs)
-            target: Target tensor, shape (bs, lat*lon, n_outputs)
+        """Calculates the lat-weighted MSE loss.
+
+        Parameters
+        ----------
+        pred : torch.Tensor
+            Prediction tensor, shape (bs, lat*lon, n_outputs)
+        target : torch.Tensor
+            Target tensor, shape (bs, lat*lon, n_outputs)
+        squash : bool, optional
+            Average last dimension, by default True
+
+        Returns
+        -------
+        torch.Tensor
+            Weighted MSE loss
         """
         if hasattr(self, "ivar"):
             if squash:

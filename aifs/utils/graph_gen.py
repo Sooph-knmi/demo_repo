@@ -1,17 +1,13 @@
-import networkx as nx
-
-import numpy as np
-
 import h3
-
-from sklearn.metrics.pairwise import haversine_distances
-from sklearn.neighbors import NearestNeighbors
-from scipy.spatial.transform import Rotation as R
-import trimesh
-
-from torch_geometric.utils import to_networkx
-from torch_geometric.data import Data
+import networkx as nx
+import numpy as np
 import plotly.graph_objects as go
+import trimesh
+from scipy.spatial.transform import Rotation as R
+from sklearn.metrics.pairwise import haversine_distances
+from sklearn.neighbors import BallTree
+from torch_geometric.data import Data
+from torch_geometric.utils import to_networkx
 
 
 def graph_normalise_edge_distance(G1):
@@ -78,7 +74,11 @@ def add_edge(G, idx1, idx2, allow_self_loop=False, add_edge_attrib=False):
     if allow_self_loop or idx1 != idx2:
         if add_edge_attrib:
             direction = directional_edge_features_rotated(loc1, loc2)
-            G.add_edge(idx1, idx2, edge_attr=(haversine_distances([loc1, loc2])[0][1], *direction))
+            G.add_edge(
+                idx1,
+                idx2,
+                edge_attr=(haversine_distances([loc1, loc2])[0][1], *direction),
+            )
 
         else:
             G.add_edge(idx1, idx2, weight=haversine_distances([loc1, loc2])[0][1])
@@ -116,7 +116,9 @@ def multi_mesh1(h3_resolutions, self_loop=True, flat=True, neighbour_children=Fa
             for idx_neighbour in h3.k_ring(idx, k=k):
                 if flat:
                     add_edge(
-                        G, h3.h3_to_center_child(idx, h3_resolutions[-1]), h3.h3_to_center_child(idx_neighbour, h3_resolutions[-1])
+                        G,
+                        h3.h3_to_center_child(idx, h3_resolutions[-1]),
+                        h3.h3_to_center_child(idx_neighbour, h3_resolutions[-1]),
                     )
                 else:
                     add_edge(G, idx, idx_neighbour)
@@ -168,9 +170,6 @@ def to_rad(xyz, radius=1.0):
     return np.array((lat, lon), dtype=np.float32).transpose()
 
 
-from sklearn.neighbors import BallTree
-
-
 def get_one_ring(sp):
     g = nx.from_edgelist(sp.edges_unique)
     one_ring = [list(g[i].keys()) for i in range(len(sp.vertices))]
@@ -211,7 +210,8 @@ def multi_mesh2(resolutions):
                     loc_dst = sp2_rad[ii]
                     loc_neigh = sp2_rad[ineighb]
                     # direction = directional_edge_features_rotated(loc_neigh, loc_dst)
-                    # G.add_edge(ind1[ineighb][0], ind1[ii][0], edge_attr=(haversine_distances([loc_neigh, loc_dst])[0][1], *direction))
+                    # G.add_edge(ind1[ineighb][0], ind1[ii][0], \
+                    # edge_attr=(haversine_distances([loc_neigh, loc_dst])[0][1], *direction))
                     G.add_edge(ind1[ineighb][0], ind1[ii][0], weight=haversine_distances([loc_neigh, loc_dst])[0][1])
 
     return G, sp1_rad
@@ -248,7 +248,13 @@ def edge_list(grph_in, plt_ids):
 
 def plot_graph_from_graphdata(title, grph_in, coord_id):
     # only used for adjacency
-    G1 = to_networkx(Data(x=grph_in[coord_id], edge_index=grph_in["edge_index"], edge_attr=grph_in["edge_attr"]))
+    G1 = to_networkx(
+        Data(
+            x=grph_in[coord_id],
+            edge_index=grph_in["edge_index"],
+            edge_attr=grph_in["edge_attr"],
+        )
+    )
 
     edge_x, edge_y = edge_list(grph_in, (coord_id, coord_id))
     node_x, node_y = node_list(grph_in[coord_id])
@@ -266,7 +272,12 @@ def plot_graph_from_graphdata(title, grph_in, coord_id):
             reversescale=True,
             color=[],
             size=10,
-            colorbar=dict(thickness=15, title="Node Connections", xanchor="left", titleside="right"),
+            colorbar=dict(
+                thickness=15,
+                title="Node Connections",
+                xanchor="left",
+                titleside="right",
+            ),
             line_width=2,
         ),
     )
@@ -288,7 +299,16 @@ def plot_graph_from_graphdata(title, grph_in, coord_id):
             showlegend=False,
             hovermode="closest",
             margin=dict(b=20, l=5, r=5, t=40),
-            annotations=[dict(text="", showarrow=False, xref="paper", yref="paper", x=0.005, y=-0.002)],
+            annotations=[
+                dict(
+                    text="",
+                    showarrow=False,
+                    xref="paper",
+                    yref="paper",
+                    x=0.005,
+                    y=-0.002,
+                )
+            ],
             xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         ),
@@ -301,7 +321,13 @@ def plot_bipartite_from_graphdata(title, colour, grph_in, edges_to_plot, nodes1,
     node1_x, node1_y = node_list(nodes1)
     node2_x, node2_y = node_list(nodes2)
 
-    edge_trace = go.Scattergeo(lat=edge_x, lon=edge_y, line=dict(width=0.5, color="#888"), hoverinfo="none", mode="lines")
+    edge_trace = go.Scattergeo(
+        lat=edge_x,
+        lon=edge_y,
+        line=dict(width=0.5, color="#888"),
+        hoverinfo="none",
+        mode="lines",
+    )
 
     node_trace1 = go.Scattergeo(
         lat=node1_x, lon=node1_y, mode="markers", hoverinfo="text", marker=dict(showscale=True, color="red", size=2, line_width=2)
@@ -319,7 +345,16 @@ def plot_bipartite_from_graphdata(title, colour, grph_in, edges_to_plot, nodes1,
             showlegend=False,
             hovermode="closest",
             margin=dict(b=20, l=5, r=5, t=40),
-            annotations=[dict(text="", showarrow=False, xref="paper", yref="paper", x=0.005, y=-0.002)],
+            annotations=[
+                dict(
+                    text="",
+                    showarrow=False,
+                    xref="paper",
+                    yref="paper",
+                    x=0.005,
+                    y=-0.002,
+                )
+            ],
             xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         ),
@@ -385,7 +420,16 @@ def plot_graph_from_networkx(title, H3):
             showlegend=False,
             hovermode="closest",
             margin=dict(b=20, l=5, r=5, t=40),
-            annotations=[dict(text="", showarrow=False, xref="paper", yref="paper", x=0.005, y=-0.002)],
+            annotations=[
+                dict(
+                    text="",
+                    showarrow=False,
+                    xref="paper",
+                    yref="paper",
+                    x=0.005,
+                    y=-0.002,
+                )
+            ],
             xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         ),
