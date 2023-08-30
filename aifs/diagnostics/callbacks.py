@@ -303,39 +303,33 @@ def get_callbacks(config: DictConfig) -> List:
         A list of PyTorch Lightning callbacks
     """
 
+    checkpoint_settings = dict(
+        monitor="val_wmse",
+        verbose=False,
+        save_top_k=config.training.save_top_k,
+        # save weights, optimizer states, LR-schedule states, hyperparameters etc.
+        # https://pytorch-lightning.readthedocs.io/en/stable/common/checkpointing_basic.html#contents-of-a-checkpoint
+        save_weights_only=False,
+        mode="min",
+        auto_insert_metric_name=False,
+        # save after every validation epoch, if we've improved
+        save_on_train_epoch_end=False,
+        every_n_epochs=1,
+    )
+
     trainer_callbacks = [
         ModelCheckpoint(
             dirpath=config.hardware.paths.checkpoints,
             filename=config.hardware.files.checkpoint,
-            monitor="val_wmse",
-            verbose=False,
             save_last=True,
-            save_top_k=config.training.save_top_k,
-            # save weights, optimizer states, LR-schedule states, hyperparameters etc.
-            # https://pytorch-lightning.readthedocs.io/en/stable/common/checkpointing_basic.html#contents-of-a-checkpoint
-            save_weights_only=False,
-            mode="min",
-            auto_insert_metric_name=False,
-            # save after every validation epoch, if we've improved
-            save_on_train_epoch_end=False,
-            every_n_epochs=1,
+            **checkpoint_settings,
         ),
         InferenceCheckpoint(
             config=config,
             dirpath=config.hardware.paths.checkpoints,
             filename="inference-" + config.hardware.files.checkpoint,
-            monitor="val_wmse",
-            verbose=False,
             save_last=False,
-            save_top_k=config.training.save_top_k,
-            # save weights, optimizer states, LR-schedule states, hyperparameters etc.
-            # https://pytorch-lightning.readthedocs.io/en/stable/common/checkpointing_basic.html#contents-of-a-checkpoint
-            save_weights_only=False,
-            mode="min",
-            auto_insert_metric_name=False,
-            # save after every validation epoch, if we've improved
-            save_on_train_epoch_end=False,
-            every_n_epochs=1,
+            **checkpoint_settings,
         ),
     ]
 
