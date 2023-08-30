@@ -28,8 +28,11 @@ debug:
 profiler: False
 
 logging:
-  wandb: True
-  # logger options (these probably come with some overhead)
-  gradients: False
-  parameters: False
+  wandb:
+    enabled: True
+    offline: False
+    log_model: False
+    # logger options (these probably come with some overhead)
+    gradients: False
+    parameters: False
   interval: 100

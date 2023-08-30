@@ -1,21 +1,23 @@
-import os
+from pathlib import Path
 from typing import Any
 from typing import Dict
+from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pytorch_lightning as pl
 import torch
+from omegaconf import DictConfig
 from pytorch_lightning.callbacks import Callback
+from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 
-import wandb
-from aifs.diagnostics.logger import get_logger
 from aifs.diagnostics.plots import init_plot_settings
 from aifs.diagnostics.plots import plot_graph_features
 from aifs.diagnostics.plots import plot_loss
 from aifs.diagnostics.plots import plot_predicted_multilevel_flat_sample
+from aifs.utils.logger import get_code_logger
 
-LOGGER = get_logger(__name__)
+LOGGER = get_code_logger(__name__)
 
 
 class PlotCallback(Callback):
@@ -24,21 +26,24 @@ class PlotCallback(Callback):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.save_basedir = os.path.join(config.hardware.paths.plots, config.hardware.paths.run_id)
+        self.save_basedir = config.hardware.paths.plots
         self.plot_frequency = config.diagnostics.plot.frequency
         init_plot_settings()
 
     def _output_figure(self, trainer, fig, tag: str = "gnn", exp_log_tag: str = "val_pred_sample") -> None:
         """Figure output: save to file and/or display in notebook."""
         if self.save_basedir is not None:
-            save_path = os.path.join(
+            save_path = Path(
                 self.save_basedir,
-                f"plots/{tag}_epoch{trainer.current_epoch:03d}.png",
+                "plots",
+                f"{tag}_epoch{trainer.current_epoch:03d}.png",
             )
 
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(save_path, dpi=100)
-            if self.config.diagnostics.logging.wandb:
+            if self.config.diagnostics.logging.wandb.enabled:
+                import wandb
+
                 trainer.logger.experiment.log({exp_log_tag: wandb.Image(fig)})
         plt.close(fig)  # cleanup
 
@@ -240,3 +245,81 @@ class PlotSample(PlotCallback):
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
             self._plot(trainer, pl_module, outputs, batch, batch_idx)
+
+
+def get_callbacks(config: DictConfig) -> List:
+    """Setup callbacks for PyTorch Lightning trainer.
+
+    Parameters
+    ----------
+    config : DictConfig
+        Job configuration
+
+    Returns
+    -------
+    List
+        A list of PyTorch Lightning callbacks
+    """
+
+    trainer_callbacks = [
+        ModelCheckpoint(
+            dirpath=config.hardware.paths.checkpoints,
+            filename=config.hardware.files.checkpoint,
+            monitor="val_wmse",
+            verbose=False,
+            save_last=True,
+            save_top_k=config.training.save_top_k,
+            # save weights, optimizer states, LR-schedule states, hyperparameters etc.
+            # https://pytorch-lightning.readthedocs.io/en/stable/common/checkpointing_basic.html#contents-of-a-checkpoint
+            save_weights_only=False,
+            mode="min",
+            auto_insert_metric_name=False,
+            # save after every validation epoch, if we've improved
+            save_on_train_epoch_end=False,
+            every_n_epochs=1,
+        ),
+    ]
+
+    if config.diagnostics.logging.wandb.enabled:
+        from pytorch_lightning.callbacks import LearningRateMonitor
+
+        trainer_callbacks.append(
+            LearningRateMonitor(
+                logging_interval="step",
+                log_momentum=False,
+            )
+        )
+
+    if config.diagnostics.eval.enabled:
+        trainer_callbacks.append(RolloutEval(config))
+
+    if config.diagnostics.plot.enabled:
+        trainer_callbacks.extend(
+            [
+                PlotLoss(config),
+                PlotSample(config),
+            ]
+        )
+
+    if config.training.swa.enabled:
+        from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAveraging
+
+        trainer_callbacks.append(
+            StochasticWeightAveraging(
+                swa_lrs=config.training.swa.lr,
+                swa_epoch_start=min(
+                    int(0.75 * config.training.max_epochs),
+                    config.training.max_epochs - 1,
+                ),
+                annealing_epochs=max(int(0.25 * config.training.max_epochs), 1),
+                annealing_strategy="cos",
+                # TODO: do we want the averaging to happen on the CPU, to save memory?
+                device=None,
+            )
+        )
+
+    if config.diagnostics.plot.learned_features:
+        LOGGER.debug("Setting up a callback to plot the trainable graph node features ...")
+        trainer_callbacks.append(GraphTrainableFeaturesPlot(config))
+
+    return trainer_callbacks

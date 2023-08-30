@@ -8,11 +8,11 @@ from matplotlib import cm
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.figure import Figure
 
-from aifs.diagnostics.logger import get_logger
 from aifs.diagnostics.maps import Coastlines
 from aifs.diagnostics.maps import EquirectangularProjection
+from aifs.utils.logger import get_code_logger
 
-LOGGER = get_logger(__name__)
+LOGGER = get_code_logger(__name__)
 
 continents = Coastlines()
 

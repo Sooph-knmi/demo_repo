@@ -4,9 +4,9 @@ import numpy as np
 import torch
 from torch import nn
 
-from aifs.diagnostics.logger import get_logger
+from aifs.utils.logger import get_code_logger
 
-LOGGER = get_logger(__name__, debug=True)
+LOGGER = get_code_logger(__name__, debug=True)
 
 # these variables have sensible ranges so we leave them untouched
 DO_NOT_NORMALIZE = [

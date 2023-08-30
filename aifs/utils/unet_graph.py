@@ -10,9 +10,9 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import normalize
 from torch_geometric.data import HeteroData
 
-from aifs.diagnostics.logger import get_logger
+from aifs.utils.logger import get_code_logger
 
-LOGGER = get_logger(__name__)
+LOGGER = get_code_logger(__name__)
 
 
 DS_METADATA = {
