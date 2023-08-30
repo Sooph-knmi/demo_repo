@@ -136,13 +136,7 @@ class AIFSTrainer:
         self.config.hardware.paths.plots = Path(self.config.hardware.paths.plots, self.run_id)
 
     def train(self) -> None:
-        """Training entry point.
-
-        Parameters
-        ----------
-        config : DictConfig
-            Job configuration
-        """
+        """Training entry point."""
 
         trainer = pl.Trainer(
             accelerator=self.accelerator,
