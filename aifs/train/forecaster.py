@@ -20,10 +20,6 @@ from aifs.metrics.spread import SpreadSkill
 from aifs.model.msg import GraphMSG
 from aifs.utils.logger import get_code_logger
 
-# from aifs.model import grad_scaler
-
-# from torch.autograd.graph import save_on_cpu
-
 LOGGER = get_code_logger(__name__)
 
 

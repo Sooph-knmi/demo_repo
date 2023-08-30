@@ -3,9 +3,9 @@ from typing import Optional
 import torch
 from torch import nn
 
-from aifs.diagnostics.logger import get_logger
+from aifs.utils.logger import get_code_logger
 
-LOGGER = get_logger(__name__)
+LOGGER = get_code_logger(__name__)
 
 
 class WeightedMAELoss(nn.Module):

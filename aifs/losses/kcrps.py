@@ -3,9 +3,9 @@ from typing import Optional
 import torch
 from torch import nn
 
-from aifs.diagnostics.logger import get_logger
+from aifs.utils.logger import get_code_logger
 
-LOGGER = get_logger(__name__, debug=False)
+LOGGER = get_code_logger(__name__, debug=False)
 
 
 class KernelCRPS(nn.Module):
@@ -63,22 +63,3 @@ class KernelCRPS(nn.Module):
             return kcrps_.sum() / (npoints * bs_)
         # sum only across the batch dimension; useful when looking to plot CRPS "maps"
         return kcrps_.sum(dim=0) / bs_
-
-
-if __name__ == "__main__":
-    from aifs.utils.constants import _ERA_O96_LATLON
-
-    graph_data = torch.load("/ec/res4/hpcperm/pamc/gnn/graph_mappings_normed_edge_attrs_o96_h3_2.pt")
-    era_weights = graph_data[("era", "to", "era")].area_weights
-
-    bs, nvar, nlatlon, nens = 2, 4, _ERA_O96_LATLON, 8
-
-    yt = torch.randn(bs, nvar, nlatlon)
-    yp = torch.randn(bs, nvar, nlatlon, nens)
-
-    kcrps = KernelCRPS(area_weights=era_weights, loss_scaling=torch.ones(nvar), fair=False)
-    pointwise_kcrps = kcrps(yp, yt, reduce_sum=False).squeeze()
-    assert pointwise_kcrps.shape == (nvar, nlatlon)
-
-    total_kcrps = kcrps(yp, yt, reduce_sum=True).squeeze()
-    assert total_kcrps.numel() == 1  # scalar value

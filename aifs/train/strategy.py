@@ -6,9 +6,9 @@ from pytorch_lightning.overrides.distributed import _sync_module_states
 from pytorch_lightning.strategies.ddp import DDPStrategy
 from pytorch_lightning.trainer.states import TrainerFn
 
-from aifs.diagnostics.logger import get_logger
+from aifs.utils.logger import get_code_logger
 
-LOGGER = get_logger(__name__)
+LOGGER = get_code_logger(__name__)
 
 
 class DDPGroupStrategy(DDPStrategy):
