@@ -1,5 +1,3 @@
-<<<<<<< HEAD
-=======
 from functools import cached_property
 from pathlib import Path
 from typing import List
@@ -21,7 +19,7 @@ from aifs.utils.logger import get_code_logger
 LOGGER = get_code_logger(__name__)
 
 
-class AIFSTrain:
+class AIFSTrainer:
     """Utility class for training the model."""
 
     def __init__(self, config: DictConfig):
@@ -184,5 +182,4 @@ class AIFSTrain:
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(config: DictConfig):
-    AIFSTrain(config).train()
->>>>>>> 85d1254 (trainer.py 🠒 forecaster.py)
+    AIFSTrainer(config).train()
