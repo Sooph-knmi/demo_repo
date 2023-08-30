@@ -14,7 +14,6 @@ from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from aifs.diagnostics.plots import init_plot_settings
 from aifs.diagnostics.plots import plot_graph_features
 from aifs.diagnostics.plots import plot_kcrps
-from aifs.diagnostics.plots import plot_loss
 from aifs.diagnostics.plots import plot_predicted_ensemble
 from aifs.diagnostics.plots import plot_predicted_multilevel_flat_sample
 from aifs.diagnostics.plots import plot_rank_histograms
@@ -121,9 +120,6 @@ class RolloutEval(Callback):
                     # mean spread (ensemble stdev)
                     spread[rstep, midx] = y_pred_denorm[..., pidx : pidx + 1].std(dim=1).mean()
 
-                    LOGGER.debug("%s mean RMSE at roll step %d: %.3e", pname, rstep, rmse[rstep, midx])
-                    LOGGER.debug("%s spread at roll step %d: %.3e", pname, rstep, spread[rstep, midx])
-
             # update spread-skill metric state
             _ = pl_module.spread_skill(rmse, spread)
 
@@ -202,8 +198,6 @@ class KCRPSPlot(PlotCallback):
 
     def _plot(self, trainer, pl_module, outputs, batch, batch_idx) -> None:
         del batch  # not used
-        LOGGER.debug("len(outputs) = %d", len(outputs))
-        LOGGER.debug("Output types: %s", [type(o) for o in outputs])
         LOGGER.debug("Parameters to plot: %s", self.config.diagnostics.plot.parameters)
 
         for rollout_step in range(pl_module.rollout):
@@ -252,39 +246,39 @@ class GraphTrainableFeaturesPlot(PlotCallback):
                 self._output_figure(trainer, fig, tag="h_trainable", exp_log_tag="h_trainable")
 
 
-class PlotLoss(PlotCallback):
-    """Plots the unsqueezed loss over rollouts."""
+# class PlotLoss(PlotCallback):
+#     """Plots the unsqueezed loss over rollouts."""
 
-    def __init__(self, config):
-        super().__init__(config)
+#     def __init__(self, config):
+#         super().__init__(config)
 
-    def _plot(
-        # self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int
-        self,
-        trainer,
-        pl_module,
-        outputs,
-        batch,
-        batch_idx,
-    ) -> None:
-        del batch_idx
-        for rollout_step in range(pl_module.rollout):
-            y_hat = outputs[1][rollout_step]
-            y_true = batch[:, pl_module.multi_step + rollout_step, :, : pl_module.fcdim]
-            loss = pl_module.loss(y_hat, y_true, squash=False).cpu().numpy()
+#     def _plot(
+#         # self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int
+#         self,
+#         trainer,
+#         pl_module,
+#         outputs,
+#         batch,
+#         batch_idx,
+#     ) -> None:
+#         del batch_idx
+#         for rollout_step in range(pl_module.rollout):
+#             y_hat = outputs[1][rollout_step]
+#             y_true = batch[:, pl_module.multi_step + rollout_step, :, : pl_module.fcdim]
+#             loss = pl_module.kcrps(y_hat, y_true, squash=False).cpu().numpy()
 
-            fig = plot_loss(loss)
-            fig.tight_layout()
-            self._output_figure(
-                trainer,
-                fig,
-                tag=f"loss_rstep_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
-                exp_log_tag=f"loss_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
-            )
+#             fig = plot_loss(loss)
+#             fig.tight_layout()
+#             self._output_figure(
+#                 trainer,
+#                 fig,
+#                 tag=f"loss_rstep_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
+#                 exp_log_tag=f"loss_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
+#             )
 
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
-            self._plot(trainer, pl_module, outputs, batch, batch_idx)
+#     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+#         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
+#             self._plot(trainer, pl_module, outputs, batch, batch_idx)
 
 
 class PlotSample(PlotCallback):
@@ -403,7 +397,7 @@ def get_callbacks(config: DictConfig) -> List:
         ModelCheckpoint(
             dirpath=config.hardware.paths.checkpoints,
             filename=config.hardware.files.checkpoint,
-            monitor="val_wmse",
+            monitor="val_kcrps_epoch",
             verbose=False,
             save_last=True,
             save_top_k=config.training.save_top_k,
@@ -434,8 +428,11 @@ def get_callbacks(config: DictConfig) -> List:
     if config.diagnostics.plot.enabled:
         trainer_callbacks.extend(
             [
-                PlotLoss(config),
-                PlotSample(config),
+                RankHistogramPlot(config),
+                GraphTrainableFeaturesPlot(config),
+                PredictedEnsemblePlot(config),
+                KCRPSPlot(config),
+                SpreadSkillPlot(config),
             ]
         )
 

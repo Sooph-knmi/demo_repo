@@ -47,7 +47,7 @@ class KernelCRPS(nn.Module):
         ens_var = coef * torch.sum(torch.abs(preds.unsqueeze(dim=-1) - preds.unsqueeze(dim=-2)), dim=(-1, -2))
         return mae + ens_var
 
-    def forward(self, y_pred: torch.Tensor, y_target: torch.Tensor, reduce_sum: bool = True) -> torch.Tensor:
+    def forward(self, y_pred: torch.Tensor, y_target: torch.Tensor, squash: bool = True) -> torch.Tensor:
         bs_ = y_pred.shape[0]  # batch size
         kcrps_ = self._kernel_crps(y_pred, y_target, fair=self.fair)
         LOGGER.debug(
@@ -59,7 +59,7 @@ class KernelCRPS(nn.Module):
         kcrps_ = (kcrps_ * self.scale[:, None]) * self.weights
         # divide by (weighted point count) * (batch size)
         npoints = torch.sum(self.weights)
-        if reduce_sum:
+        if squash:
             return kcrps_.sum() / (npoints * bs_)
         # sum only across the batch dimension; useful when looking to plot CRPS "maps"
         return kcrps_.sum(dim=0) / bs_

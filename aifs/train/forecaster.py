@@ -116,12 +116,12 @@ class GraphForecaster(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.gnn(x)
 
-    def calculate_kcrps(self, y_pred: torch.Tensor, y_target: torch.Tensor, reduce_sum: bool = True) -> torch.Tensor:
+    def calculate_kcrps(self, y_pred: torch.Tensor, y_target: torch.Tensor, squash: bool = True) -> torch.Tensor:
         """Rearranges the prediction and ground truth tensors and then computes the
         KCRPS loss."""
         y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs v latlon e", e=self.ensemble_size)
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
-        return self.kcrps(y_pred, y_target, reduce_sum=reduce_sum)
+        return self.kcrps(y_pred, y_target, squash=squash)
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         # left-shift along the step dimension
@@ -157,7 +157,7 @@ class GraphForecaster(pl.LightningModule):
                 # rank histograms - update metric state
                 _ = self.ranks(y[..., : self.fcdim], y_pred)
                 # pointwise KCRPS
-                pkcrps = self.calculate_kcrps(y_pred, y[..., : self.fcdim], reduce_sum=False)
+                pkcrps = self.calculate_kcrps(y_pred, y[..., : self.fcdim], squash=False)
                 # WMSE ensemble mean metrics
                 for mkey, (low, high) in self.metric_ranges.items():
                     y_denorm = self.normalizer.denormalize(y, in_place=False)
