@@ -261,7 +261,6 @@ class InferenceCheckpoint(ModelCheckpoint):
 
     def _sanitise_checkpoints(self, model) -> None:
         # Delete paths from checkpoint
-
         for path in model.config.hardware.paths.keys():
             model.config.hardware.paths[path] = "/"
         # Delete filenames from checkpoint
