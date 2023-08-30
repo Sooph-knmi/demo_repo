@@ -135,11 +135,6 @@ class AIFSTrainer:
         self.config.hardware.paths.checkpoints = Path(self.config.hardware.paths.checkpoints, self.run_id)
         self.config.hardware.paths.plots = Path(self.config.hardware.paths.plots, self.run_id)
 
-    def compile(self) -> None:
-        # this doesn't work ATM (April 2), don't bother enabling it ...
-        LOGGER.debug("torch.compiling the Lightning model ...")
-        self.model = torch.compile(self.model, mode="default", backend="inductor", fullgraph=False)
-
     def train(self) -> None:
         """Training entry point.
 
@@ -148,9 +143,6 @@ class AIFSTrainer:
         config : DictConfig
             Job configuration
         """
-
-        if self.config.training.compile:
-            self.compile()
 
         trainer = pl.Trainer(
             accelerator=self.accelerator,
