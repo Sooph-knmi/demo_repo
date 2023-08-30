@@ -12,7 +12,7 @@ from pytorch_lightning.profilers import AdvancedProfiler
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.callbacks import get_callbacks
-from aifs.diagnostics.log import get_wandb_logger
+from aifs.diagnostics.logging import get_wandb_logger
 from aifs.train.forecaster import GraphForecaster
 from aifs.utils.logger import get_code_logger
 
