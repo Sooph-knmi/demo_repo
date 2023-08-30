@@ -16,7 +16,7 @@ defaults:
 # hardware:
 #   num_gpus_per_node: 1
 diagnostics:
-  logging:
+  log:
     wandb:
       offline: true
 hardware:
