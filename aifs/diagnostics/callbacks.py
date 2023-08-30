@@ -259,10 +259,25 @@ class InferenceCheckpoint(ModelCheckpoint):
     def _torch_drop_down(self, trainer: "pl.Trainer") -> torch.nn.Module:
         return trainer.model.model
 
+    def _sanitise_checkpoints(self, model) -> None:
+        # Delete paths from checkpoint
+        for path in model.config.hardware.paths.keys():
+            model.config.hardware.paths[path] = "/"
+        # Delete filenames from checkpoint
+        for file in model.config.hardware.files.keys():
+            model.config.hardware.files[file] = "/"
+        # Disable logging and plotting
+        model.config.plot.enabled = False
+        model.config.log.wandb.enabled = False
+        return model
+
     def _save_checkpoint(self, trainer: "pl.Trainer", filepath: str) -> None:
         # trainer.save_checkpoint(filepath, self.save_weights_only)
 
-        torch.save(self._torch_drop_down(trainer), filepath)
+        model = self._torch_drop_down(trainer)
+        model = self._sanitise_checkpoints(model)
+
+        torch.save(model, filepath)
 
         self._last_global_step_saved = trainer.global_step
 
