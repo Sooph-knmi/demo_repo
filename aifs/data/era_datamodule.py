@@ -9,10 +9,10 @@ from torch.utils.data import DataLoader
 from aifs.data.era_dataset import ERA5NativeGridDataset
 from aifs.data.era_dataset import worker_init_func
 from aifs.data.era_readers import read_era_data
-from aifs.diagnostics.logger import get_logger
+from aifs.utils.logger import get_code_logger
 
 
-LOGGER = get_logger(__name__)
+LOGGER = get_code_logger(__name__)
 
 
 class ERA5DataModule(pl.LightningDataModule):

@@ -1,6 +1,6 @@
 import copy
 import json
-import os
+from pathlib import Path
 
 import numpy as np
 from matplotlib.collections import LineCollection
@@ -27,7 +27,7 @@ class EquirectangularProjection:
 class Coastlines:
     def __init__(self, projection=None):
         # Get the path to "continents.json" within your library
-        self.continents_file = os.path.join(os.path.dirname(__file__), "continents.json")
+        self.continents_file = Path(Path(__file__).parent, "continents.json")
 
         # Load GeoJSON data from the file
         with open(self.continents_file) as file:

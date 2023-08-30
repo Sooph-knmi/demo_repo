@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 from typing import Dict
 from typing import List
 from typing import Mapping
@@ -12,19 +12,19 @@ from omegaconf import DictConfig
 from timm.scheduler import CosineLRScheduler
 
 from aifs.data.era_normalizers import InputNormalizer
-from aifs.diagnostics.logger import get_logger
+from aifs.data.scaling import pressure_level
 from aifs.losses.kcrps import KernelCRPS
 from aifs.losses.wmse import WeightedMSELoss
 from aifs.metrics.ranks import RankHistogram
 from aifs.metrics.spread import SpreadSkill
 from aifs.model.msg import GraphMSG
-from aifs.train.utils import pl_scaling
+from aifs.utils.logger import get_code_logger
 
 # from aifs.model import grad_scaler
 
 # from torch.autograd.graph import save_on_cpu
 
-LOGGER = get_logger(__name__)
+LOGGER = get_code_logger(__name__)
 
 
 class GraphForecaster(pl.LightningModule):
@@ -49,7 +49,7 @@ class GraphForecaster(pl.LightningModule):
         self.fcdim = config.data.num_features - config.data.num_aux_features
         num_levels = len(config.data.pl.levels)
 
-        self.graph_data = torch.load(os.path.join(config.hardware.paths.graph, config.hardware.files.graph))
+        self.graph_data = torch.load(Path(config.hardware.paths.graph, config.hardware.files.graph))
 
         self.gnn = GraphMSG(
             config=config,
@@ -70,7 +70,7 @@ class GraphForecaster(pl.LightningModule):
             else:
                 scl = 1
                 LOGGER.debug("Parameter %s was not scaled.", pl_name)
-            loss_scaling = np.append(loss_scaling, [scl] * pl_scaling(config.data.pl.levels))
+            loss_scaling = np.append(loss_scaling, [scl] * pressure_level(config.data.pl.levels))
         for sfc_name in config.data.sfc.parameters:
             if sfc_name in config.training.loss_scaling.sfc:
                 scl = config.training.loss_scaling.sfc[sfc_name]
@@ -234,6 +234,15 @@ class GraphForecaster(pl.LightningModule):
                 sync_dist=True,
             )
         return val_loss, y_preds, pkcrps
+
+    def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
+        batch = self.normalizer(batch, in_place=False)
+
+        with torch.no_grad():
+            x = batch[:, 0 : self.multi_step, ...]
+            y_hat = self(x)
+
+        return self.normalizer.denormalize(y_hat, in_place=False)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)

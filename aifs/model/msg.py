@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 
 import einops
 import numpy as np
@@ -8,11 +8,11 @@ from torch import nn
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
 
-from aifs.diagnostics.logger import get_logger
 from aifs.model.layers import MessagePassingMapper
 from aifs.model.layers import MessagePassingProcessor
+from aifs.utils.logger import get_code_logger
 
-LOGGER = get_logger(__name__)
+LOGGER = get_code_logger(__name__)
 
 
 class GraphMSG(nn.Module):
@@ -36,7 +36,7 @@ class GraphMSG(nn.Module):
 
         # create mappings
         if graph_data is None:
-            self._graph_data = torch.load(os.path.join(config.hardware.paths.graph, config.hardware.files.graph))
+            self._graph_data = torch.load(Path(config.hardware.paths.graph, config.hardware.files.graph))
         else:
             self._graph_data = graph_data
 

@@ -16,9 +16,9 @@ from torch_geometric.typing import PairTensor
 from torch_geometric.typing import Size
 from torch_geometric.utils import scatter
 
-from aifs.diagnostics.logger import get_logger
+from aifs.utils.logger import get_code_logger
 
-LOGGER = get_logger(__name__)
+LOGGER = get_code_logger(__name__)
 
 
 class TransformerMapper(MessagePassing):

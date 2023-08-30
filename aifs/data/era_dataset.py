@@ -11,9 +11,9 @@ from torch.utils.data import get_worker_info
 from torch.utils.data import IterableDataset
 from zarr.core import Array
 
-from aifs.diagnostics.logger import get_logger
+from aifs.utils.logger import get_code_logger
 
-LOGGER = get_logger(__name__, debug=False)
+LOGGER = get_code_logger(__name__, debug=False)
 
 
 class ERA5NativeGridDataset(IterableDataset):
