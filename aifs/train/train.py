@@ -12,7 +12,7 @@ from pytorch_lightning.profilers import AdvancedProfiler
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.callbacks import get_callbacks
-from aifs.diagnostics.logging import get_wandb_logger
+from aifs.diagnostics.log import get_wandb_logger
 from aifs.train.forecaster import GraphForecaster
 from aifs.utils.logger import get_code_logger
 
@@ -63,7 +63,7 @@ class AIFSTrainer:
             # Return the provided run ID
             return self.config.training.run_id
 
-        if self.config.diagnostics.logging.wandb.enabled:
+        if self.config.diagnostics.log.wandb.enabled:
             # Return the WandB run ID
             return self.wandb_logger.experiment.id
 
@@ -110,7 +110,7 @@ class AIFSTrainer:
     @cached_property
     def loggers(self) -> List:
         loggers = []
-        if self.config.diagnostics.logging.wandb.enabled:
+        if self.config.diagnostics.log.wandb.enabled:
             loggers.append(self.wandb_logger)
         return loggers
 
@@ -155,7 +155,7 @@ class AIFSTrainer:
             precision=self.config.training.precision,
             max_epochs=self.config.training.max_epochs,
             logger=self.loggers,
-            log_every_n_steps=self.config.diagnostics.logging.interval,
+            log_every_n_steps=self.config.diagnostics.log.interval,
             # run a fixed no of batches per epoch (helpful when debugging)
             limit_train_batches=self.config.dataloader.limit_batches.training,
             limit_val_batches=self.config.dataloader.limit_batches.validation,

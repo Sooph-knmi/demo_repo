@@ -27,7 +27,7 @@ debug:
 # activate the pytorch profiler (disable this in production)
 profiler: False
 
-logging:
+log:
   wandb:
     enabled: True
     offline: False

@@ -22,7 +22,7 @@ def get_wandb_logger(config: DictConfig, model: pl.LightningModule):
     _type_
         Logger object or False
     """
-    if not config.diagnostics.logging.wandb.enabled:
+    if not config.diagnostics.log.wandb.enabled:
         LOGGER.debug("Weights & Biases logging is disabled.")
         return None
 
@@ -33,18 +33,18 @@ def get_wandb_logger(config: DictConfig, model: pl.LightningModule):
         entity="ecmwf-ml",
         id=config.training.run_id,
         save_dir=config.hardware.paths.logs,
-        offline=config.diagnostics.logging.wandb.offline,
-        log_model=config.diagnostics.logging.wandb.log_model,
+        offline=config.diagnostics.log.wandb.offline,
+        log_model=config.diagnostics.log.wandb.log_model,
         resume=config.training.run_id is not None,
     )
     logger.log_hyperparams(OmegaConf.to_container(config, resolve=True))
-    if config.diagnostics.logging.wandb.gradients or config.diagnostics.logging.wandb.parameters:
-        if config.diagnostics.logging.wandb.gradients and config.diagnostics.logging.wandb.parameters:
+    if config.diagnostics.log.wandb.gradients or config.diagnostics.log.wandb.parameters:
+        if config.diagnostics.log.wandb.gradients and config.diagnostics.log.wandb.parameters:
             log_ = "all"
-        elif config.diagnostics.logging.wandb.gradients:
+        elif config.diagnostics.log.wandb.gradients:
             log_ = "gradients"
         else:
             log_ = "parameters"
-        logger.watch(model, log=log_, log_freq=config.diagnostics.logging.interval, log_graph=False)
+        logger.watch(model, log=log_, log_freq=config.diagnostics.log.interval, log_graph=False)
 
     return logger

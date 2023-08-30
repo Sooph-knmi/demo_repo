@@ -57,6 +57,8 @@ class GraphForecaster(pl.LightningModule):
         self.era_latlons = self.graph_data[("era", "to", "era")].ecoords_rad
         self.era_weights = self.graph_data[("era", "to", "era")].area_weights
 
+        self.logger_enabled = config.diagnostics.log.wandb.enabled
+
         loss_scaling = np.array([], dtype=np.float32)
         for pl_name in config.data.pl.parameters:
             if pl_name in config.training.loss_scaling.pl:
@@ -157,7 +159,7 @@ class GraphForecaster(pl.LightningModule):
             on_epoch=True,
             on_step=True,
             prog_bar=True,
-            logger=True,
+            logger=self.logger_enabled,
             batch_size=batch.shape[0],
             sync_dist=True,
         )
@@ -165,7 +167,7 @@ class GraphForecaster(pl.LightningModule):
             "rollout",
             float(self.rollout),
             on_step=True,
-            logger=True,
+            logger=self.logger_enabled,
             rank_zero_only=True,
             sync_dist=False,
         )
@@ -189,7 +191,7 @@ class GraphForecaster(pl.LightningModule):
             on_epoch=True,
             on_step=True,
             prog_bar=True,
-            logger=True,
+            logger=self.logger_enabled,
             batch_size=batch.shape[0],
             sync_dist=True,
         )
@@ -200,7 +202,7 @@ class GraphForecaster(pl.LightningModule):
                 on_epoch=True,
                 on_step=False,
                 prog_bar=False,
-                logger=True,
+                logger=self.logger_enabled,
                 batch_size=batch.shape[0],
                 sync_dist=True,
             )

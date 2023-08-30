@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
-from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -42,7 +41,7 @@ class PlotCallback(Callback):
 
             save_path.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(save_path, dpi=100)
-            if self.config.diagnostics.logging.wandb.enabled:
+            if self.config.diagnostics.log.wandb.enabled:
                 import wandb
 
                 trainer.logger.experiment.log({exp_log_tag: wandb.Image(fig)})
@@ -107,7 +106,7 @@ class RolloutEval(Callback):
             on_epoch=True,
             on_step=True,
             prog_bar=False,
-            logger=True,
+            logger=pl_module.logger_enabled,
             batch_size=bs,
             sync_dist=False,
             rank_zero_only=True,
@@ -119,7 +118,7 @@ class RolloutEval(Callback):
                 on_epoch=True,
                 on_step=False,
                 prog_bar=False,
-                logger=True,
+                logger=pl_module.logger_enabled,
                 batch_size=bs,
                 sync_dist=False,
                 rank_zero_only=True,
@@ -325,7 +324,7 @@ def get_callbacks(config: DictConfig) -> List:
         ),
     ]
 
-    if config.diagnostics.logging.wandb.enabled:
+    if config.diagnostics.log.wandb.enabled:
         from pytorch_lightning.callbacks import LearningRateMonitor
 
         trainer_callbacks.append(
