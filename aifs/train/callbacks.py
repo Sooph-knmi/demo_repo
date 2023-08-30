@@ -12,9 +12,12 @@ import wandb
 from aifs.diagnostics.logger import get_logger
 from aifs.diagnostics.plots import init_plot_settings
 from aifs.diagnostics.plots import plot_graph_features
+from aifs.diagnostics.plots import plot_kcrps
 from aifs.diagnostics.plots import plot_loss
+from aifs.diagnostics.plots import plot_predicted_ensemble
 from aifs.diagnostics.plots import plot_predicted_multilevel_flat_sample
 from aifs.diagnostics.plots import plot_rank_histograms
+from aifs.diagnostics.plots import plot_spread_skill
 
 LOGGER = get_logger(__name__)
 
@@ -61,6 +64,7 @@ class RolloutEval(Callback):
             config.diagnostics.eval.rollout,
             config.diagnostics.eval.frequency,
         )
+        self.eval_plot_parameters = config.diagnostics.plot.parameters
         self.rollout = config.diagnostics.eval.rollout
         self.frequency = config.diagnostics.eval.frequency
 
@@ -70,8 +74,11 @@ class RolloutEval(Callback):
         batch: torch.Tensor,
     ) -> None:
         loss = torch.zeros(1, dtype=batch.dtype, device=pl_module.device, requires_grad=False)
-        # NB! the batch is already normalized in-place - see pl_model.validation_step()
         metrics = {}
+
+        assert hasattr(
+            pl_module, "spread_skill"
+        ), "To use this callback, you must define a `spread_skill` attribute of type SpreadSkill in your Forecaster class!"
 
         # start rollout
         x = batch[:, 0 : pl_module.multi_step, ...]  # (bs, multistep, latlon, nvar)
@@ -80,6 +87,9 @@ class RolloutEval(Callback):
         assert batch.shape[1] >= self.rollout + pl_module.multi_step, "Batch length not sufficient for requested rollout length!"
 
         with torch.no_grad():
+            rmse = torch.zeros((self.rollout, len(self.eval_plot_parameters)), dtype=batch.dtype, device=pl_module.device)
+            spread = torch.zeros_like(rmse)
+
             for rstep in range(self.rollout):
                 y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
                 y = batch[:, pl_module.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
@@ -88,10 +98,29 @@ class RolloutEval(Callback):
 
                 x = pl_module.advance_input(x, y, y_pred)
 
+                # training metrics
                 for mkey, (low, high) in pl_module.metric_ranges.items():
                     y_denorm = pl_module.normalizer.denormalize(y, in_place=False)
-                    y_pred_denorm = pl_module.normalizer.denormalize(x[:, -1, ...], in_place=False)
+                    # ensemble mean
+                    y_pred_denorm = pl_module.normalizer.denormalize(x[:, :, -1, ...].mean(dim=1), in_place=False)
                     metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
+
+                # eval diagnostic metrics
+                for midx, (pidx, pname) in enumerate(self.eval_plot_parameters.items()):
+                    y_denorm = pl_module.normalizer.denormalize(y, in_place=False)
+                    y_pred_denorm = pl_module.normalizer.denormalize(x[:, :, -1, ...], in_place=False)
+                    # ensemble mean RMSE
+                    rmse[rstep, midx] = torch.sqrt(
+                        pl_module.metrics(y_pred_denorm[..., pidx : pidx + 1].mean(dim=1), y_denorm[..., pidx : pidx + 1])
+                    )
+                    # mean spread (ensemble stdev)
+                    spread[rstep, midx] = y_pred_denorm[..., pidx : pidx + 1].std(dim=1).mean()
+
+                    LOGGER.debug("%s mean RMSE at roll step %d: %.3e", pname, rstep, rmse[rstep, midx])
+                    LOGGER.debug("%s spread at roll step %d: %.3e", pname, rstep, spread[rstep, midx])
+
+            # update spread-skill metric state
+            _ = pl_module.spread_skill(rmse, spread)
 
             # scale loss
             loss *= 1.0 / self.rollout
@@ -135,13 +164,61 @@ class RolloutEval(Callback):
             self._eval(pl_module, batch)
 
 
-class RankHistogramPlotCallback(Callback):
+class RankHistogramPlot(PlotCallback):
+    def __init__(self, config):
+        super().__init__(config)
+
     def on_validation_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
-        del trainer  # not used
-        assert hasattr(pl_module, "ranks"), "To use this, you must set up a ranks attribute in your pl.LightningModule class!"
-        fig = plot_rank_histograms(pl_module.ranks.compute().cpu().numpy())
-        pl_module.output_figure(fig, tag="ens_rank_hist", exp_log_tag=f"val_rank_hist_{pl_module.global_rank}")
+        assert hasattr(
+            pl_module, "ranks"
+        ), "To use this callback, you must define a `ranks` attribute of type RankHistogram in your Forecaster class!"
+        fig = plot_rank_histograms(self.config.diagnostics.plot.parameters, pl_module.ranks.compute().cpu().numpy())
+        self._output_figure(trainer, fig, tag="ens_rank_hist", exp_log_tag=f"val_rank_hist_{pl_module.global_rank}")
         pl_module.ranks.reset()
+
+
+class SpreadSkillPlot(PlotCallback):
+    def __init__(self, config):
+        super().__init__(config)
+
+    def on_validation_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        assert hasattr(
+            pl_module, "spread_skill"
+        ), "To use this callback, you must define a `spread_skill` attribute of type SpreadSkill in your Forecaster class!"
+        rmse, spread = (r.cpu().numpy() for r in pl_module.spread_skill.compute())
+        fig = plot_spread_skill(self.config.diagnostics.plot.parameters, (rmse, spread), pl_module.spread_skill.time_step)
+        self._output_figure(trainer, fig, tag="ens_spread_skill", exp_log_tag=f"val_spread_skill_{pl_module.global_rank}")
+        pl_module.ranks.reset()
+
+
+class KCRPSPlot(PlotCallback):
+    def __init__(self, config) -> None:
+        super().__init__(config)
+
+    def _plot(self, trainer, pl_module, outputs, batch, batch_idx) -> None:
+        del batch  # not used
+        LOGGER.debug("len(outputs) = %d", len(outputs))
+        LOGGER.debug("Output types: %s", [type(o) for o in outputs])
+        LOGGER.debug("Parameters to plot: %s", self.config.diagnostics.plot.parameters)
+
+        for rollout_step in range(pl_module.rollout):
+            fig = plot_kcrps(
+                self.config.diagnostics.plot.parameters,
+                np.rad2deg(pl_module.era_latlons.numpy()),
+                outputs[2][rollout_step].cpu().numpy(),
+            )
+
+            fig.tight_layout()
+            self._output_figure(
+                trainer,
+                fig,
+                tag=f"gnn_kcrps_val_rstep{rollout_step:02d}_batch{batch_idx:05d}_rank{pl_module.global_rank:02d}",
+                exp_log_tag=f"val_kcrps_rstep{rollout_step:02d}_rank{pl_module.global_rank:02d}",
+            )
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx) -> None:
+        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
+            self._plot(trainer, pl_module, outputs, batch, batch_idx)
 
 
 class GraphTrainableFeaturesPlot(PlotCallback):
@@ -185,6 +262,7 @@ class PlotLoss(PlotCallback):
         batch,
         batch_idx,
     ) -> None:
+        del batch_idx
         for rollout_step in range(pl_module.rollout):
             y_hat = outputs[1][rollout_step]
             y_true = batch[:, pl_module.multi_step + rollout_step, :, : pl_module.fcdim]
@@ -245,8 +323,56 @@ class PlotSample(PlotCallback):
             self._output_figure(
                 trainer,
                 fig,
-                tag=f"gnn_pred_val_sample_rstep{rollout_step:02d}_batch{batch_idx:04d}_rank0",
+                tag=f"gnn_pred_val_sample_rstep{rollout_step:02d}_batch{batch_idx:05d}_rank0",
                 exp_log_tag=f"val_pred_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
+            )
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
+            self._plot(trainer, pl_module, outputs, batch, batch_idx)
+
+
+class PredictedEnsemblePlot(PlotCallback):
+    def __init__(self, config):
+        super().__init__(config)
+        self.sample_idx = self.config.diagnostics.plot.sample_idx
+
+    def _plot(
+        # batch_idx: int, rollout_step: int, x: torch.Tensor, y_true: torch.Tensor, y_pred: torch.Tensor,
+        self,
+        trainer,
+        pl_module,
+        outputs,
+        batch,
+        batch_idx,
+    ) -> None:
+        data = (
+            pl_module.normalizer.denormalize(
+                batch[self.sample_idx, pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1, ...], in_place=False
+            )
+            .cpu()
+            .numpy()
+        )
+
+        LOGGER.debug("Fields to plot: %s", [v for _, v in self.config.diagnostics.plot.parameters.items()])
+
+        for rollout_step in range(pl_module.rollout):
+            fig = plot_predicted_ensemble(
+                self.config.diagnostics.plot.parameters,
+                np.rad2deg(pl_module.era_latlons.numpy()),
+                data[rollout_step + 1, ..., : pl_module.fcdim].squeeze(),
+                pl_module.normalizer.denormalize(outputs[1][rollout_step][self.sample_idx, ..., : pl_module.fcdim], in_place=False)
+                .squeeze()
+                .cpu()
+                .numpy(),
+            )
+
+            fig.tight_layout()
+            self._output_figure(
+                trainer,
+                fig,
+                tag=f"gnn_pred_ens_val_rstep{rollout_step:02d}_batch{batch_idx:05d}_rank{pl_module.global_rank:02d}",
+                exp_log_tag=f"val_pred_ens_rstep{rollout_step:02d}_rank{pl_module.global_rank:02d}",
             )
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):

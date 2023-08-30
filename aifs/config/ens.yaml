@@ -1,0 +1,47 @@
+defaults:
+  - hardware: atos
+  - data: zarr
+  - dataloader: default
+  - model: gnn
+  - training: default
+  - diagnostics: eval_rollout
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+  - _self_
+
+### This file is for local experimentation.
+##  When you commit your changes, assign the new features and keywords
+##  to the correct defaults.
+
+hardware:
+  files:
+    graph: graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4.pt
+
+model:
+  num_channels: 128
+
+dataloader:
+  limit_batches:
+    training: 75
+    validation: 50
+
+training:
+  max_epochs: 2
+  rollout:
+    start: 1
+    epoch_increment: 1
+    max: 2
+  ensemble_size: 4
+
+diagnostics:
+  eval:
+    enabled: True
+    rollout: 4
+    frequency: 5
+  plot:
+    parameters:
+      23: t_850
+      72: z_500
+
+  logging:
+    interval: 50

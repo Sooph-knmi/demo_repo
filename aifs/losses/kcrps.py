@@ -3,13 +3,13 @@ from typing import Optional
 import torch
 from torch import nn
 
-from aifs.utils.logger import get_logger
+from aifs.diagnostics.logger import get_logger
 
 LOGGER = get_logger(__name__, debug=False)
 
 
 class KernelCRPS(nn.Module):
-    """Area-weighted kernel CRPS loss"""
+    """Area-weighted kernel CRPS loss."""
 
     def __init__(self, area_weights: torch.Tensor, loss_scaling: Optional[torch.Tensor] = None, fair: bool = False) -> None:
         """
@@ -27,8 +27,8 @@ class KernelCRPS(nn.Module):
             self.register_buffer("scale", loss_scaling, persistent=True)
 
     def _kernel_crps(self, preds: torch.Tensor, targets: torch.Tensor, fair: bool = False) -> torch.Tensor:
-        """
-        Kernel (ensemble) CRPS.
+        """Kernel (ensemble) CRPS.
+
         Args:
             targets: ground truth, shape (batch_size, n_vars, latlon)
             preds: predicted ensemble, shape (batch_size, n_vars, latlon, ens_size)

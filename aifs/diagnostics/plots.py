@@ -1,5 +1,6 @@
 from typing import Dict
 from typing import Optional
+from typing import Tuple
 
 import matplotlib.pyplot as plt
 import matplotlib.style as mplstyle
@@ -309,7 +310,7 @@ def scatter_plot(
 
 
 def plot_rank_histograms(
-    parameters: Dict[str, int],
+    parameters: Dict[int, str],
     rh: np.ndarray,
 ) -> Figure:
     """Plots one rank histogram per target variable."""
@@ -329,7 +330,7 @@ def plot_rank_histograms(
 
 
 def plot_predicted_ensemble(
-    parameters: Dict[str, int],
+    parameters: Dict[int, str],
     latlons: np.ndarray,
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -374,7 +375,8 @@ def plot_kcrps(parameters: Dict[str, int], latlons: np.ndarray, pkcrps: np.ndarr
 
     for plot_idx, (variable_idx, variable_name) in enumerate(parameters.items()):
         pkcrps_ = pkcrps[variable_idx, :].squeeze()
-        scatter_plot(fig, ax[plot_idx], pc, lat, lon, pkcrps_, title=f"{variable_name} kCRPS")
+        ax_ = ax[plot_idx] if len(parameters) > 1 else ax
+        scatter_plot(fig, ax_, pc, lat, lon, pkcrps_, title=f"{variable_name} kCRPS")
     return fig
 
 
@@ -400,9 +402,9 @@ def plot_ensemble(
     # ensemble mean
     scatter_plot(fig, ax[1], pc, lat, lon, ens_mean, title=f"{vname} pred mean")
     # ensemble spread
-    scatter_plot(fig, ax[2], pc, lat, lon, ens_mean - truth, cmap="bwr", title=f"{vname} mean err")
+    scatter_plot(fig, ax[2], pc, lat, lon, ens_mean - truth, cmap="bwr", title=f"{vname} ens mean err")
     # ensemble mean error
-    scatter_plot(fig, ax[3], pc, lat, lon, ens_sd, title=f"{vname} pred sd")
+    scatter_plot(fig, ax[3], pc, lat, lon, ens_sd, title=f"{vname} ens sd")
     # ensemble members (difference from mean)
     for i_ens in range(nens):
         scatter_plot(
@@ -445,4 +447,38 @@ def plot_graph_features(
     for i in range(nplots):
         ax_ = ax[i] if nplots > 1 else ax
         scatter_plot(fig, ax_, pc, lat, lon, features[..., i])
+    return fig
+
+
+def plot_spread_skill(
+    parameters: Dict[int, str],
+    ss_metric: Tuple[np.ndarray, np.ndarray],
+    time_step: int,
+) -> Figure:
+    nplots = len(parameters)
+    figsize = (nplots * 5, 4)
+    fig, ax = plt.subplots(1, nplots, figsize=figsize)
+
+    assert isinstance(ss_metric, tuple), f"Expected a tuple and got {type(ss_metric)}!"
+    assert len(ss_metric) == 2, f"Expected a 2-tuple and got a {len(ss_metric)}-tuple!"
+    assert (
+        ss_metric[0].shape[1] == nplots
+    ), f"Shape mismatch in the RMSE metric: expected (..., {nplots}) and got {ss_metric[0].shape}!"
+    assert (
+        ss_metric[0].shape == ss_metric[1].shape
+    ), f"RMSE and spread metric shapes do not match! {ss_metric[0].shape} and {ss_metric[1].shape}"
+
+    rmse, spread = ss_metric[0], ss_metric[1]
+    rollout = rmse.shape[0]
+    x = np.arange(1, rollout + 1) * time_step
+
+    for i, (_, pname) in enumerate(parameters.items()):
+        ax_ = ax[i] if nplots > 1 else ax
+        ax_.plot(x, rmse[:, i], "-o", color="red", label="mean RMSE")
+        ax_.plot(x, spread[:, i], "-o", color="blue", label="spread")
+        ax_.legend()
+        ax_.set_title(f"{pname} spread-skill")
+        ax_.set_xticks(x)
+        ax_.set_xlabel("Lead time [hrs]")
+
     return fig

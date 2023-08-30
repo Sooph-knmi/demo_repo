@@ -1,12 +1,12 @@
 #!/bin/bash
 
 #SBATCH --qos=ng
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256G
-#SBATCH --time=48:00:00
+#SBATCH --time=06:00:00
 #SBATCH --account=ecaifs
 #SBATCH --output=ens-kcrps.%j
 

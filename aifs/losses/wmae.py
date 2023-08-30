@@ -3,17 +3,17 @@ from typing import Optional
 import torch
 from torch import nn
 
-from aifs.utils.logger import get_logger
+from aifs.diagnostics.logger import get_logger
 
 LOGGER = get_logger(__name__)
 
 
 class WeightedMAELoss(nn.Module):
-    """Weighted MAE loss"""
+    """Weighted MAE loss."""
 
     def __init__(self, area_weights: torch.Tensor, loss_scaling: Optional[torch.Tensor] = None) -> None:
-        """
-        Area-weighted + component-scaled MAE Loss.
+        """Area-weighted + component-scaled MAE Loss.
+
         Args:
             area_weights: area weights
             loss_scaling: weight loss components to ensure all vars contribute ~ equally to the total value
@@ -25,8 +25,8 @@ class WeightedMAELoss(nn.Module):
             self.register_buffer("scale", loss_scaling, persistent=True)
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor, squash: bool = True) -> torch.Tensor:
-        """
-        Calculates the area-weighted MAE loss.
+        """Calculates the area-weighted MAE loss.
+
         Args:
             pred: Prediction tensor, shape (bs, lat*lon, n_outputs)
             target: Target tensor, shape (bs, lat*lon, n_outputs)

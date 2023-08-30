@@ -1,5 +1,6 @@
 import os
 from typing import Dict
+from typing import List
 from typing import Mapping
 from typing import Tuple
 
@@ -15,6 +16,7 @@ from aifs.diagnostics.logger import get_logger
 from aifs.losses.kcrps import KernelCRPS
 from aifs.losses.wmse import WeightedMSELoss
 from aifs.metrics.ranks import RankHistogram
+from aifs.metrics.spread import SpreadSkill
 from aifs.model.msg import GraphMSG
 from aifs.train.utils import pl_scaling
 
@@ -88,14 +90,14 @@ class GraphForecaster(pl.LightningModule):
         for key in config.training.metrics:
             idx = metadata["name_to_index"][key]
             self.metric_ranges[key] = [idx, idx + 1]
+        LOGGER.debug("metric_ranges: %s", self.metric_ranges)
 
         # Validation metric(s)
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
         self.ensemble_size = config.training.ensemble_size
         # Rank histogram
-        if config:
-            self.ranks = RankHistogram(nens=self.ensemble_size, nvar=self.fcdim)
+        self.ranks = RankHistogram(nens=self.ensemble_size, nvar=self.fcdim)
 
         self.multi_step = config.training.multistep_input
         self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
@@ -104,6 +106,9 @@ class GraphForecaster(pl.LightningModule):
         self.rollout = config.training.rollout.start
         self.rollout_epoch_increment = config.training.rollout.epoch_increment
         self.rollout_max = config.training.rollout.max
+
+        # Spread-skill metric (eval-mode only - see the RolloutEval callback)
+        self.spread_skill = SpreadSkill(rollout=config.diagnostics.eval.rollout, nvar=len(config.diagnostics.plot.parameters))
 
         LOGGER.debug("Rollout window length: %d", self.rollout)
         LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
@@ -134,7 +139,6 @@ class GraphForecaster(pl.LightningModule):
     def _step(
         self,
         batch: torch.Tensor,
-        batch_idx: int,
         validation_mode: bool = False,
     ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
@@ -145,38 +149,36 @@ class GraphForecaster(pl.LightningModule):
         x = batch[:, 0 : self.multi_step, ...]  # (bs, multistep, latlon, nvar)
         x = torch.stack([x] * self.ensemble_size, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
 
-        y_preds = []
+        y_preds: List[torch.Tensor] = []
+        kcrps_preds: List[torch.Tensor] = []
         for rstep in range(self.rollout):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             loss += self.calculate_kcrps(y_pred, y[..., : self.fcdim])
-
-            # THIS NOW HAPPENS IN A CALLBACK
-            # if plot and self.global_rank == 0:
-            #     self.plot_sample(batch_idx, rstep, y[..., : self.fcdim], y_pred)
-            #     pointwise_kcrps = self.calculate_kcrps(y_pred, y[..., : self.fcdim], reduce_sum=False)  # shape (nvar, latlon)
-            #     self.plot_pointwise_kcrps(batch_idx, rstep, pointwise_kcrps)
-
             x = self.advance_input(x, y, y_pred)
 
             if validation_mode:
                 # rank histograms - update metric state
                 _ = self.ranks(y[..., : self.fcdim], y_pred)
+                # pointwise KCRPS
+                pkcrps = self.calculate_kcrps(y_pred, y[..., : self.fcdim], reduce_sum=False)
                 # WMSE ensemble mean metrics
                 for mkey, (low, high) in self.metric_ranges.items():
                     y_denorm = self.normalizer.denormalize(y, in_place=False)
                     y_hat_denorm = self.normalizer.denormalize(x[:, :, -1, ...].mean(dim=1), in_place=False)  # ensemble mean
-                    metrics[f"{mkey}_{rstep+1}"] = self.metric(y_hat_denorm[..., low:high], y_denorm[..., low:high])
+                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
 
                 if self.enable_plot:
                     y_preds.append(y_pred)
+                    kcrps_preds.append(pkcrps)
 
         # scale loss
         loss *= 1.0 / self.rollout
-        return loss, metrics, y_preds
+        return loss, metrics, y_preds, kcrps_preds
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        train_loss, _, _ = self._step(batch, batch_idx)
+        del batch_idx  # not used
+        train_loss, _, _, _ = self._step(batch)
         self.log(
             "train_kcrps",
             train_loss,
@@ -207,8 +209,9 @@ class GraphForecaster(pl.LightningModule):
         self.rollout = min(self.rollout, self.rollout_max)
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
+        del batch_idx  # not used
         with torch.no_grad():
-            val_loss, metrics, y_preds = self._step(batch, batch_idx, validation_mode=True)
+            val_loss, metrics, y_preds, pkcrps = self._step(batch, validation_mode=True)
         self.log(
             "val_kcrps",
             val_loss,
@@ -230,7 +233,7 @@ class GraphForecaster(pl.LightningModule):
                 batch_size=batch.shape[0],
                 sync_dist=True,
             )
-        return val_loss, y_preds
+        return val_loss, y_preds, pkcrps
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)

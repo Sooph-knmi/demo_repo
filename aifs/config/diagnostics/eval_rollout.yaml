@@ -2,22 +2,23 @@ eval:
   enabled: False
   # use this to evaluate the model over longer rollouts, every so many validation batches
   rollout: 12
-  frequency: 20
+  frequency: 5
 plot:
   enabled: True
   frequency: 750
   sample_idx: 0
   per_sample: 6
   parameters:
-    10: q_850
     23: t_850
-    36: u_850
-    49: v_850
-    75: z_850
-    83: 2t
-    81: 10u
-    82: 10v
-    79: msl
+    72: z_500
+    # 10: q_850
+    # 36: u_850
+    # 49: v_850
+    # 75: z_850
+    # 83: 2t
+    # 81: 10u
+    # 82: 10v
+    # 79: msl
   learned_features: True
 
 debug:
