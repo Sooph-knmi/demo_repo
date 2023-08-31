@@ -34,7 +34,9 @@ setup(
         "License :: OSI Approved :: Apache Software License",
         "Programming Language :: Python :: 3.9",
     ],
-    packages=find_packages(),
+    packages=find_packages(where="aifs"),
+    package_dir={"": "aifs"},
+    package_data={"": ["continents.json"],
     include_package_data=True,
     entry_points={
         "console_scripts": [
