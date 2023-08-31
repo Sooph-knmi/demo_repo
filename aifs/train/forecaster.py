@@ -18,6 +18,7 @@ from aifs.losses.wmse import WeightedMSELoss
 from aifs.metrics.ranks import RankHistogram
 from aifs.metrics.spread import SpreadSkill
 from aifs.model.msg import GraphMSG
+from aifs.utils.distributed import gather_tensor
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
@@ -91,9 +92,12 @@ class GraphForecaster(pl.LightningModule):
         # Validation metric(s)
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
-        self.ensemble_size = config.training.ensemble_size
+        self.nens_per_device = config.training.ensemble_size
+        self.nens_per_group = self.nens_per_device * config.hardware.group_size
+        LOGGER.debug("Ensemble size: per device = %d, per group = %d", self.nens_per_device, self.nens_per_group)
+
         # Rank histogram
-        self.ranks = RankHistogram(nens=self.ensemble_size, nvar=self.fcdim)
+        self.ranks = RankHistogram(nens=self.nens_per_group, nvar=self.fcdim)
 
         self.multi_step = config.training.multistep_input
         self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
@@ -113,13 +117,18 @@ class GraphForecaster(pl.LightningModule):
 
         self.enable_plot = config.diagnostics.plot.enabled
 
+    def set_mgroupdef(self, mgroupdef, mgroupdef_single) -> None:
+        LOGGER.debug("set_mgroupdef: %s, %s", mgroupdef, mgroupdef_single)
+        self.mgroupdef = mgroupdef
+        self.mgroupdef_single = mgroupdef_single
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.gnn(x)
 
     def calculate_kcrps(self, y_pred: torch.Tensor, y_target: torch.Tensor, squash: bool = True) -> torch.Tensor:
         """Rearranges the prediction and ground truth tensors and then computes the
         KCRPS loss."""
-        y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs v latlon e", e=self.ensemble_size)
+        y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs v latlon e", e=self.nens_per_group)
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
         return self.kcrps(y_pred, y_target, squash=squash)
 
@@ -143,25 +152,41 @@ class GraphForecaster(pl.LightningModule):
 
         # start rollout
         x = batch[:, 0 : self.multi_step, ...]  # (bs, multistep, latlon, nvar)
-        x = torch.stack([x] * self.ensemble_size, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
+        x = torch.stack([x] * self.nens_per_device, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
 
         y_preds: List[torch.Tensor] = []
         kcrps_preds: List[torch.Tensor] = []
         for rstep in range(self.rollout):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
-            loss += self.calculate_kcrps(y_pred, y[..., : self.fcdim])
+
+            # gather all predictions from the device group, along the ensemble dim
+            y_pred_group = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.mgroupdef[1], mgroup=self.mgroupdef[0])
+            assert (
+                y_pred_group.shape[1] == self.nens_per_group
+            ), f"Group ensemble shape mismatch: got {y_pred_group.shape[1]} -- expected {self.nens_per_group}!"
+
+            LOGGER.debug("Shape of y_pred tensor after gather: y_pred_group.shape = %s", y_pred_group.shape)
+
+            # loss calculated over the group ensemble (size = self.nens_per_group)
+            loss += self.calculate_kcrps(y_pred_group, y[..., : self.fcdim])
+
+            # retain only my slice of the larger ensemble
+            # this is needed to make sure the gradients flow correctly during backward()
+            myrange_start, myrange_end = self.mgroupdef[2] * self.nens_per_device, (self.mgroupdef[2] + 1) * self.nens_per_device
+            LOGGER.debug("Device with group rank %d has start = %d, end = %d", self.mgroupdef[2], myrange_start, myrange_end)
+            y_pred = y_pred_group[:, myrange_start:myrange_end, ...]
             x = self.advance_input(x, y, y_pred)
 
             if validation_mode:
                 # rank histograms - update metric state
-                _ = self.ranks(y[..., : self.fcdim], y_pred)
+                _ = self.ranks(y[..., : self.fcdim], y_pred_group)
                 # pointwise KCRPS
-                pkcrps = self.calculate_kcrps(y_pred, y[..., : self.fcdim], squash=False)
+                pkcrps = self.calculate_kcrps(y_pred_group, y[..., : self.fcdim], squash=False)
                 # WMSE ensemble mean metrics
                 for mkey, (low, high) in self.metric_ranges.items():
                     y_denorm = self.normalizer.denormalize(y, in_place=False)
-                    y_hat_denorm = self.normalizer.denormalize(x[:, :, -1, ...].mean(dim=1), in_place=False)  # ensemble mean
+                    y_hat_denorm = self.normalizer.denormalize(y_pred_group.mean(dim=1), in_place=False)  # ensemble mean
                     metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
 
                 if self.enable_plot:

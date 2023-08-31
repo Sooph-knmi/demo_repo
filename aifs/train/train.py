@@ -1,5 +1,6 @@
 from functools import cached_property
 from pathlib import Path
+from typing import Any
 from typing import List
 from typing import Optional
 
@@ -14,6 +15,7 @@ from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.callbacks import get_callbacks
 from aifs.diagnostics.logging import get_wandb_logger
 from aifs.train.forecaster import GraphForecaster
+from aifs.train.strategy import DDPGroupStrategy
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
@@ -31,7 +33,7 @@ class AIFSTrainer:
 
         # Default to not warm-starting from a checkpoint
         self.start_from_checkpoint = bool(self.config.training.run_id) or bool(self.config.training.fork_run_id)
-        self.config.training.run_id = self.run_id
+        self.config.training.run_id = "abcd"  # self.wandb_logger.experiment.id
 
         # Update paths to contain the run ID
         self.update_paths()
@@ -126,6 +128,7 @@ class AIFSTrainer:
 
         # Log learning rate multiplier when running single-node, multi-GPU and/or multi-node
         total_gpu_count = self.config.hardware.num_nodes * self.config.hardware.num_gpus_per_node
+        LOGGER.debug("Number of GPUs per group: %d", self.config.hardware.group_size)
         LOGGER.debug("Total GPU count: %d - NB: the learning rate will be scaled by this factor!", total_gpu_count)
         LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * self.config.training.lr.rate)
         LOGGER.debug("Rollout window length: %d", self.config.training.rollout.start)
@@ -140,6 +143,10 @@ class AIFSTrainer:
         LOGGER.debug("torch.compiling the Lightning model ...")
         self.model = torch.compile(self.model, mode="default", backend="inductor", fullgraph=False)
 
+    @cached_property
+    def strategy(self) -> Any:
+        return DDPGroupStrategy(self.config.hardware.group_size, static_graph=True)
+
     def train(self) -> None:
         """Training entry point."""
 
@@ -151,7 +158,7 @@ class AIFSTrainer:
             callbacks=self.callbacks,
             deterministic=self.config.training.deterministic,
             detect_anomaly=self.config.diagnostics.debug.anomaly_detection,
-            strategy=self.config.hardware.strategy,  # we should use ddp with find_unused_parameters = False, static_graph = True
+            strategy=self.strategy,
             devices=self.config.hardware.num_gpus_per_node,
             num_nodes=self.config.hardware.num_nodes,
             precision=self.config.training.precision,

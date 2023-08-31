@@ -110,7 +110,7 @@ class RolloutEval(Callback):
                     metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
 
                 # eval diagnostic metrics
-                for midx, (pidx, pname) in enumerate(self.eval_plot_parameters.items()):
+                for midx, (pidx, _) in enumerate(self.eval_plot_parameters.items()):
                     y_denorm = pl_module.normalizer.denormalize(y, in_place=False)
                     y_pred_denorm = pl_module.normalizer.denormalize(x[:, :, -1, ...], in_place=False)
                     # ensemble mean RMSE
@@ -428,11 +428,11 @@ def get_callbacks(config: DictConfig) -> List:
     if config.diagnostics.plot.enabled:
         trainer_callbacks.extend(
             [
-                RankHistogramPlot(config),
+                # RankHistogramPlot(config),
                 GraphTrainableFeaturesPlot(config),
                 PredictedEnsemblePlot(config),
                 KCRPSPlot(config),
-                SpreadSkillPlot(config),
+                # SpreadSkillPlot(config),
             ]
         )
 

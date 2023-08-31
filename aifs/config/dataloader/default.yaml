@@ -1,4 +1,4 @@
-prefetch_factor: 2
+prefetch_factor: 1
 
 num_workers:
   training: 8

@@ -8,7 +8,7 @@ from pytorch_lightning.trainer.states import TrainerFn
 
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__)
+LOGGER = get_code_logger(__name__, debug=True)
 
 
 class DDPGroupStrategy(DDPStrategy):
@@ -35,6 +35,7 @@ class DDPGroupStrategy(DDPStrategy):
         imgroup, my_mgroup, my_mgroup_rank = self.get_my_mgroup(world_size, my_rank, self.mgroup_size)
         comms_group = comms_groups[imgroup]
         self.model.set_mgroupdef((comms_group, len(my_mgroup), my_mgroup_rank), (comms_groups_single[my_rank], 1, 0))
+
         LOGGER.debug(
             "Rank %d mgroup is %s, group number %d, with local group rank %d and comms_group_ranks %s",
             my_rank,

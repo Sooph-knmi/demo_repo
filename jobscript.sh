@@ -1,14 +1,14 @@
 #!/bin/bash
 
 #SBATCH --qos=ng
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=4
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=256G
-#SBATCH --time=06:00:00
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=2
+#SBATCH --gpus-per-node=2
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=01:00:00
 #SBATCH --account=ecaifs
-#SBATCH --output=ens-kcrps.%j
+#SBATCH --output=ens-kcrps-mp.out.%j
 
 # debugging flags (optional)
 export NCCL_DEBUG=INFO
@@ -20,8 +20,8 @@ export HYDRA_FULL_ERROR=1
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="ens-kcrps"
-export WANDB_NOTES="KCRPS optimized ensemble forecasting"
+export WANDB_NAME="ens-kcrps-modelparallel"
+export WANDB_NOTES="KCRPS optimized ensemble forecasting (updated code)"
 
 # generic settings
 CONDA_ENV=gnn-pyg-2.3
@@ -31,4 +31,4 @@ WORKDIR=$GITDIR
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-srun aifs-ens-train hardware=atos_slurm
+srun aifs-ens-train hardware=atos_slurm --config-name=ens-ddmp
