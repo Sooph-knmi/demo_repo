@@ -1,5 +1,5 @@
 defaults:
-  - hardware: atos
+  - hardware: leo
   - data: zarr
   - dataloader: default
   - model: gnn

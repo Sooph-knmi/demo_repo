@@ -1,0 +1,9 @@
+training: /leonardo_scratch/large/userexternal/malexe00/aifs-input/${data.resolution}
+validation: /leonardo_scratch/large/userexternal/malexe00/aifs-input/${data.resolution}
+test: /leonardo_scratch/large/userexternal/malexe00/aifs-input/${data.resolution}
+predict: /leonardo_scratch/large/userexternal/malexe00/aifs-input/${data.resolution}
+output: ${oc.env:SCRATCH}/aifs-output/${data.resolution}/
+logs: ${hardware.paths.output}/logs
+checkpoints: ${hardware.paths.output}/checkpoint
+plots: ${hardware.paths.output}/plots
+graph: /leonardo_scratch/large/userexternal/malexe00/aifs-graphs
