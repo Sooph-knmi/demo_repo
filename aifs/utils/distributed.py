@@ -1,6 +1,8 @@
 # following / adapted from https://github.com/NVIDIA/modulus/blob/main/modulus/utils/sfno/distributed/helpers.py
+# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
 # Apache License -> http://www.apache.org/licenses/LICENSE-2.0
-# License: https://github.com/NVIDIA/modulus/blob/b18419e9460f6acd3cd3d175f5d6caf6bbc9d2da/modulus/utils/sfno/distributed/helpers.py#L1C6-L1C6
+# License:
+# https://github.com/NVIDIA/modulus/blob/b18419e9460f6acd3cd3d175f5d6caf6bbc9d2da/modulus/utils/sfno/distributed/helpers.py#L1C6-L1C6
 import torch
 import torch.distributed as dist
 
@@ -28,8 +30,7 @@ class _GatherParallelSection(torch.autograd.Function):
         """"""
         if mgroup_:
             return _gather(input_, dim_, shapes_, group=mgroup_)
-        else:
-            return input_
+        return input_
 
     @staticmethod
     def forward(ctx, input_, dim_, shapes_, mgroup_):
@@ -38,8 +39,7 @@ class _GatherParallelSection(torch.autograd.Function):
         ctx.shapes = shapes_
         if mgroup_:
             return _gather(input_, dim_, shapes_, group=mgroup_)
-        else:
-            return input_
+        return input_
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -50,8 +50,7 @@ class _GatherParallelSection(torch.autograd.Function):
                 None,
                 None,
             )
-        else:
-            return grad_output, None, None, None
+        return grad_output, None, None, None
 
 
 class _SyncParallelSection(torch.autograd.Function):
@@ -62,8 +61,7 @@ class _SyncParallelSection(torch.autograd.Function):
         """"""
         if mgroup_:
             return _gather(input_, dim_, shapes_, group=mgroup_)
-        else:
-            return input_
+        return input_
 
     @staticmethod
     def forward(ctx, input_, dim_, shapes_, mgroup_):
@@ -72,8 +70,7 @@ class _SyncParallelSection(torch.autograd.Function):
         ctx.shapes = shapes_
         if mgroup_:
             return _gather(input_, dim_, shapes_, group=mgroup_)
-        else:
-            return input_
+        return input_
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -85,8 +82,7 @@ class _SyncParallelSection(torch.autograd.Function):
                 None,
                 None,
             )
-        else:
-            return grad_output, None, None, None
+        return grad_output, None, None, None
 
 
 class _ReduceParallelSection(torch.autograd.Function):
@@ -97,15 +93,13 @@ class _ReduceParallelSection(torch.autograd.Function):
         """Symbolic method."""
         if mgroup_:
             return _reduce(input_, group=mgroup_)
-        else:
-            return input_
+        return input_
 
     @staticmethod
     def forward(ctx, input_, mgroup_):
         if mgroup_:
             return _reduce(input_, group=mgroup_)
-        else:
-            return input_
+        return input_
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -195,32 +189,4 @@ def get_memory_format(tensor):
     """Helper routine to get the memory format."""
     if tensor.is_contiguous(memory_format=torch.channels_last):
         return torch.channels_last
-    else:
-        return torch.contiguous_format
-
-
-def get_shape_shards1(tensor, dim, group=None):
-    """Get shape of shards."""
-    assert dim < tensor.dim(), f"Error, tensor dimension is {tensor.dim()} which cannot be split along {dim}"
-
-    if group:
-        comm_size = dist.get_world_size(group=group)
-        if comm_size == 1:
-            shape_list = [list(tensor.shape)]
-
-        else:
-            tensor_list = torch.tensor_split(tensor, comm_size, dim=dim)
-            shape_list = [list(x.shape) for x in tensor_list]
-    else:
-        shape_list = []
-
-    return shape_list
-
-
-def change_channels_in_shape1(shape_list, channels):
-    if shape_list:
-        out = [x[:-1] + [channels] for x in shape_list]
-    else:
-        out = []
-
-    return out
+    return torch.contiguous_format

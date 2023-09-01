@@ -41,12 +41,12 @@ class ERA5DataModule(pl.LightningDataModule):
         self.num_groups = math.ceil(
             self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes / self.config.hardware.group_size
         )
-        LOGGER.debug(
-            "Rank %d group number %d, with local group rank %d",
-            self.global_rank,
-            self.group_id,
-            self.group_rank,
-        )
+        # LOGGER.debug(
+        #     "Rank %d group number %d, with local group rank %d",
+        #     self.global_rank,
+        #     self.group_id,
+        #     self.group_rank,
+        # )
 
         self.ds_train = self._get_dataset("training", shuffle=True)
 

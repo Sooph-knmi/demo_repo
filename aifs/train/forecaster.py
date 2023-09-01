@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Dict
 from typing import List
 from typing import Mapping
+from typing import Optional
 from typing import Tuple
 
 import einops
@@ -117,7 +118,11 @@ class GraphForecaster(pl.LightningModule):
 
         self.enable_plot = config.diagnostics.plot.enabled
 
-    def set_mgroupdef(self, mgroupdef, mgroupdef_single) -> None:
+        # DDP group definitions; TODO: add better documentation!
+        self.mgroupdef: Optional[Tuple] = None
+        self.mgroupdef_single: Optional[Tuple] = None
+
+    def set_mgroupdef(self, mgroupdef: Tuple, mgroupdef_single: Tuple) -> None:
         LOGGER.debug("set_mgroupdef: %s, %s", mgroupdef, mgroupdef_single)
         self.mgroupdef = mgroupdef
         self.mgroupdef_single = mgroupdef_single
@@ -153,6 +158,15 @@ class GraphForecaster(pl.LightningModule):
         # start rollout
         x = batch[:, 0 : self.multi_step, ...]  # (bs, multistep, latlon, nvar)
         x = torch.stack([x] * self.nens_per_device, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
+
+        LOGGER.debug(
+            "Epoch %d: GPU with global_rank %d, group size %d, group_rank %d received a batch with norm %.5e",
+            self.current_epoch,
+            self.global_rank,
+            self.mgroupdef[1],
+            self.mgroupdef[2],
+            torch.linalg.norm(x).cpu().item(),
+        )
 
         y_preds: List[torch.Tensor] = []
         kcrps_preds: List[torch.Tensor] = []
@@ -190,7 +204,7 @@ class GraphForecaster(pl.LightningModule):
                     metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
 
                 if self.enable_plot:
-                    y_preds.append(y_pred)
+                    y_preds.append(y_pred_group)
                     kcrps_preds.append(pkcrps)
 
         # scale loss

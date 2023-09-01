@@ -1,19 +1,24 @@
 #!/bin/bash
 
 #SBATCH --qos=ng
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=2
 #SBATCH --gpus-per-node=2
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
-#SBATCH --time=01:00:00
+#SBATCH --mem=48G
+#SBATCH --time=00:30:00
 #SBATCH --account=ecaifs
 #SBATCH --output=ens-kcrps-mp.out.%j
+#SBATCH --exclude=ac6-311,ac6-307
 
 # debugging flags (optional)
-export NCCL_DEBUG=INFO
+# export NCCL_DEBUG=INFO
 export PYTHONFAULTHANDLER=1
 export HYDRA_FULL_ERROR=1
+export NCCL_DEBUG=TRACE
+export TORCH_CPP_LOG_LEVEL=INFO
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+export CUDA_LAUNCH_BLOCKING=1
 
 # on your cluster you might need these:
 # set the network interface

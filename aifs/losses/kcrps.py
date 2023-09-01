@@ -11,7 +11,7 @@ LOGGER = get_code_logger(__name__, debug=False)
 class KernelCRPS(nn.Module):
     """Area-weighted kernel CRPS loss."""
 
-    def __init__(self, area_weights: torch.Tensor, loss_scaling: Optional[torch.Tensor] = None, fair: bool = False) -> None:
+    def __init__(self, area_weights: torch.Tensor, loss_scaling: Optional[torch.Tensor] = None, fair: bool = True) -> None:
         """
         Latitude- and (inverse-)variance-weighted kernel CRPS loss.
         Args:
@@ -26,7 +26,7 @@ class KernelCRPS(nn.Module):
         if loss_scaling is not None:
             self.register_buffer("scale", loss_scaling, persistent=True)
 
-    def _kernel_crps(self, preds: torch.Tensor, targets: torch.Tensor, fair: bool = False) -> torch.Tensor:
+    def _kernel_crps(self, preds: torch.Tensor, targets: torch.Tensor, fair: bool = True) -> torch.Tensor:
         """Kernel (ensemble) CRPS.
 
         Args:
@@ -39,8 +39,6 @@ class KernelCRPS(nn.Module):
         ens_size = preds.shape[-1]
         mae = torch.mean(torch.abs(targets[..., None] - preds), dim=-1)
         if fair:
-            # Note (Mat): do not train only on this loss
-            # Best to use in combination with another loss, like WMSE or MS_SSIM
             coef = -1.0 / (2.0 * ens_size * (ens_size - 1))
         else:
             coef = -1.0 / (2.0 * ens_size**2)

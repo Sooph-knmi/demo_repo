@@ -18,6 +18,7 @@ from aifs.diagnostics.plots import plot_predicted_ensemble
 from aifs.diagnostics.plots import plot_predicted_multilevel_flat_sample
 from aifs.diagnostics.plots import plot_rank_histograms
 from aifs.diagnostics.plots import plot_spread_skill
+from aifs.utils.distributed import gather_tensor
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
@@ -86,7 +87,7 @@ class RolloutEval(Callback):
 
         # start rollout
         x = batch[:, 0 : pl_module.multi_step, ...]  # (bs, multistep, latlon, nvar)
-        x = torch.stack([x] * pl_module.ensemble_size, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
+        x = torch.stack([x] * pl_module.nens_per_device, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
 
         assert batch.shape[1] >= self.rollout + pl_module.multi_step, "Batch length not sufficient for requested rollout length!"
 
@@ -97,8 +98,26 @@ class RolloutEval(Callback):
             for rstep in range(self.rollout):
                 y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
                 y = batch[:, pl_module.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
-                # y includes the auxiliary variables, so we must leave those out when computing the loss
-                loss += pl_module.calculate_kcrps(y_pred, y[..., : pl_module.fcdim])
+
+                # gather all predictions from the device group, along the ensemble dim
+                y_pred_group = gather_tensor(
+                    y_pred, dim=1, shapes=[y_pred.shape] * pl_module.mgroupdef[1], mgroup=pl_module.mgroupdef[0]
+                )
+                assert (
+                    y_pred_group.shape[1] == pl_module.nens_per_group
+                ), f"Group ensemble shape mismatch: got {y_pred_group.shape[1]} -- expected {pl_module.nens_per_group}!"
+
+                loss += pl_module.calculate_kcrps(y_pred_group, y[..., : pl_module.fcdim])
+
+                # retain only my slice of the larger ensemble
+                myrange_start, myrange_end = (
+                    pl_module.mgroupdef[2] * pl_module.nens_per_device,
+                    (pl_module.mgroupdef[2] + 1) * pl_module.nens_per_device,
+                )
+                LOGGER.debug(
+                    "Device with group rank %d has start = %d, end = %d", pl_module.mgroupdef[2], myrange_start, myrange_end
+                )
+                y_pred = y_pred_group[:, myrange_start:myrange_end, ...]
 
                 x = pl_module.advance_input(x, y, y_pred)
 
@@ -106,13 +125,13 @@ class RolloutEval(Callback):
                 for mkey, (low, high) in pl_module.metric_ranges.items():
                     y_denorm = pl_module.normalizer.denormalize(y, in_place=False)
                     # ensemble mean
-                    y_pred_denorm = pl_module.normalizer.denormalize(x[:, :, -1, ...].mean(dim=1), in_place=False)
+                    y_pred_denorm = pl_module.normalizer.denormalize(y_pred_group.mean(dim=1), in_place=False)
                     metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
 
                 # eval diagnostic metrics
                 for midx, (pidx, _) in enumerate(self.eval_plot_parameters.items()):
                     y_denorm = pl_module.normalizer.denormalize(y, in_place=False)
-                    y_pred_denorm = pl_module.normalizer.denormalize(x[:, :, -1, ...], in_place=False)
+                    y_pred_denorm = pl_module.normalizer.denormalize(y_pred_group, in_place=False)
                     # ensemble mean RMSE
                     rmse[rstep, midx] = torch.sqrt(
                         pl_module.metrics(y_pred_denorm[..., pidx : pidx + 1].mean(dim=1), y_denorm[..., pidx : pidx + 1])
@@ -129,14 +148,14 @@ class RolloutEval(Callback):
 
     def _log(self, pl_module: pl.LightningModule, loss: torch.Tensor, metrics: Dict, bs: int) -> None:
         pl_module.log(
-            f"val_r{self.rollout}_wmse",
+            f"val_r{self.rollout}_kcrps",
             loss,
             on_epoch=True,
             on_step=True,
             prog_bar=False,
             logger=True,
             batch_size=bs,
-            sync_dist=False,
+            sync_dist=True,
             rank_zero_only=True,
         )
         for mname, mvalue in metrics.items():
@@ -148,7 +167,7 @@ class RolloutEval(Callback):
                 prog_bar=False,
                 logger=True,
                 batch_size=bs,
-                sync_dist=False,
+                sync_dist=True,
                 rank_zero_only=True,
             )
 
@@ -161,7 +180,8 @@ class RolloutEval(Callback):
         batch_idx: int,
     ) -> None:
         del trainer, outputs  # not used
-        if batch_idx % self.frequency == 3 and pl_module.global_rank == 0:
+        # this must happen on ALL devices!
+        if batch_idx % self.frequency == 3:
             self._eval(pl_module, batch)
 
 
@@ -375,7 +395,9 @@ class PredictedEnsemblePlot(PlotCallback):
             )
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
+        # plotting happens only on device 0
+        # device 0 has already gathered all ensemble members generated by its group
+        if batch_idx % self.plot_frequency == 3 and pl_module.global_rank == 0:
             self._plot(trainer, pl_module, outputs, batch, batch_idx)
 
 
@@ -428,11 +450,11 @@ def get_callbacks(config: DictConfig) -> List:
     if config.diagnostics.plot.enabled:
         trainer_callbacks.extend(
             [
-                # RankHistogramPlot(config),
+                RankHistogramPlot(config),
                 GraphTrainableFeaturesPlot(config),
                 PredictedEnsemblePlot(config),
                 KCRPSPlot(config),
-                # SpreadSkillPlot(config),
+                SpreadSkillPlot(config),
             ]
         )
 
