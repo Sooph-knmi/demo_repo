@@ -29,7 +29,7 @@ def get_wandb_logger(config: DictConfig, model: pl.LightningModule):
     from pytorch_lightning.loggers.wandb import WandbLogger
 
     logger = WandbLogger(
-        project="aifs-fc",
+        project="aifs-ens",
         entity="ecmwf-ml",
         id=config.training.run_id,
         save_dir=config.hardware.paths.logs,
