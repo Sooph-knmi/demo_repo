@@ -1,8 +1,8 @@
 prefetch_factor: 1
 
 num_workers:
-  training: 8
-  validation: 8
+  training: 6
+  validation: 6
   test: 8
   predict: 8
 batch_size:

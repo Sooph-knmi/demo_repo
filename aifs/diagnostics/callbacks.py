@@ -114,9 +114,9 @@ class RolloutEval(Callback):
                     pl_module.mgroupdef[2] * pl_module.nens_per_device,
                     (pl_module.mgroupdef[2] + 1) * pl_module.nens_per_device,
                 )
-                LOGGER.debug(
-                    "Device with group rank %d has start = %d, end = %d", pl_module.mgroupdef[2], myrange_start, myrange_end
-                )
+                # LOGGER.debug(
+                #     "Device with group rank %d has start = %d, end = %d", pl_module.mgroupdef[2], myrange_start, myrange_end
+                # )
                 y_pred = y_pred_group[:, myrange_start:myrange_end, ...]
 
                 x = pl_module.advance_input(x, y, y_pred)

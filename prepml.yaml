@@ -1,0 +1,29 @@
+description: |
+   kCRPS ensembles forecasting
+ 
+dates:
+    start: "2023-06-01"
+    end: "2023-06-30"
+    frequency: 24
+ 
+model:
+    name: kcrps-test
+    version: 0.6
+    checkpoint:
+
+runner:
+   name: ai-models-dev
+   conda:
+      clone: /perm/syma/conda-envs/shared/gnn-pyg-2.3
+
+ensemble:
+  input:
+    number:
+      loop: [1, 2, 3, 4, 5]
+
+input:
+  name: enfo
+
+output:
+  stream: enfo
+  type: pf

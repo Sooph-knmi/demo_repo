@@ -22,7 +22,7 @@ from aifs.model.msg import GraphMSG
 from aifs.utils.distributed import gather_tensor
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__)
+LOGGER = get_code_logger(__name__, debug=False)
 
 
 class GraphForecaster(pl.LightningModule):
@@ -159,15 +159,6 @@ class GraphForecaster(pl.LightningModule):
         x = batch[:, 0 : self.multi_step, ...]  # (bs, multistep, latlon, nvar)
         x = torch.stack([x] * self.nens_per_device, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
 
-        LOGGER.debug(
-            "Epoch %d: GPU with global_rank %d, group size %d, group_rank %d received a batch with norm %.5e",
-            self.current_epoch,
-            self.global_rank,
-            self.mgroupdef[1],
-            self.mgroupdef[2],
-            torch.linalg.norm(x).cpu().item(),
-        )
-
         y_preds: List[torch.Tensor] = []
         kcrps_preds: List[torch.Tensor] = []
         for rstep in range(self.rollout):
@@ -274,10 +265,12 @@ class GraphForecaster(pl.LightningModule):
         batch = self.normalizer(batch, in_place=False)
 
         with torch.no_grad():
-            x = batch[:, 0 : self.multi_step, ...]
+            # add dummy ensemble dimension (of size 1)
+            x = batch[:, None, 0 : self.multi_step, ...]
+            LOGGER.debug("Input shape x.shape = %s", x.shape)
             y_hat = self(x)
 
-        return self.normalizer.denormalize(y_hat, in_place=False)
+        return self.normalizer.denormalize(y_hat.squeeze(dim=1), in_place=False)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)

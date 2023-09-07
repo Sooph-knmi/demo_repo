@@ -78,8 +78,6 @@ class ERA5NativeGridDataset(IterableDataset):
         self._read_era = era_data_reader
 
         # lazy init
-        self.n_samples_per_epoch_total: int = 0
-        self.n_samples_per_epoch_per_worker: int = 0
         self.rng: Optional[int] = None
 
         # DDP-relevant info
@@ -132,11 +130,12 @@ class ERA5NativeGridDataset(IterableDataset):
         low = shard_start + worker_id * self.n_samples_per_worker
         high = min(shard_start + (worker_id + 1) * self.n_samples_per_worker, shard_end)
         LOGGER.debug(
-            "Worker %d (pid %d, global_rank %d, group %d) has low/high range %d / %d",
+            "Worker %d (pid %d, global_rank %d, group %d) has num_samples=%d, low/high range %d / %d",
             worker_id,
             os.getpid(),
             self.global_rank,
             self.group_id,
+            self.n_samples_per_worker,
             low,
             high,
         )
@@ -158,15 +157,15 @@ class ERA5NativeGridDataset(IterableDataset):
         random.seed(seed)
         self.rng = np.random.default_rng(seed=seed)
 
-        LOGGER.debug(
-            "Worker %d (pid %d, global_rank %d, group %d, group_rank %d) using seed %d",
-            worker_id,
-            os.getpid(),
-            self.global_rank,
-            self.group_id,
-            self.group_rank,
-            seed,
-        )
+        # LOGGER.debug(
+        #     "Worker %d (pid %d, global_rank %d, group %d, group_rank %d) using seed %d",
+        #     worker_id,
+        #     os.getpid(),
+        #     self.global_rank,
+        #     self.group_id,
+        #     self.group_rank,
+        #     seed,
+        # )
 
     def seed_worker_random_gen(self, worker_id: int, rank: Optional[int] = None) -> None:
         # taken from https://github.com/Lightning-AI/lightning/blob/master/src/lightning/fabric/utilities/seed.py
@@ -207,14 +206,14 @@ class ERA5NativeGridDataset(IterableDataset):
         else:
             shuffled_chunk_indices = self.chunk_index_range
 
-        LOGGER.debug(
-            "Worker pid %d, global_rank %d, group %d, group_rank %d using indices[0:10]: %s",
-            os.getpid(),
-            self.global_rank,
-            self.group_id,
-            self.group_rank,
-            shuffled_chunk_indices[:10],
-        )
+        # LOGGER.debug(
+        #     "Worker pid %d, global_rank %d, group %d, group_rank %d using indices[0:10]: %s",
+        #     os.getpid(),
+        #     self.global_rank,
+        #     self.group_id,
+        #     self.group_rank,
+        #     shuffled_chunk_indices[:10],
+        # )
 
         for i in shuffled_chunk_indices:
             start, end = (
