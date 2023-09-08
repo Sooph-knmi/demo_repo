@@ -1,14 +1,31 @@
+from pathlib import Path
+
 from setuptools import find_packages
 from setuptools import setup
 
+
+def read(fname):
+    file_path = Path(Path(__file__).parent, fname)
+    return open(file_path, encoding="utf-8").read()
+
+
+version = None
+for line in read(Path("aifs", "__init__.py")).split("\n"):
+    if line.startswith("__version__"):
+        version = line.split("=")[-1].strip()[1:-1]
+
+assert version
+
 setup(
     name="aifs",
-    version="0.6",
-    url="https://github.com/ecmwf-lab/aifs-model",
+    version=version,
+    long_description=read("README.md"),
+    long_description_content_type="text/markdown",
     license="Apache Lincense Version 2.0",
     author="European Centre for Medium-Range Weather Forecasts (ECMWF)",
     author_email="ecmwf-authors@ecmwf.int",
     description="ERA5 forecasting with Graph Neural Networks",
+    url="https://github.com/ecmwf-lab/aifs-mono",
     install_requires=[
         "torch==2.0.1",
         "torch_geometric==2.3.1",
