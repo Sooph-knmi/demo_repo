@@ -38,6 +38,7 @@ setup(
         "Programming Language :: Python :: 3.9",
     ],
     packages=find_packages(),
+    package_data={"": ["continents.json"]},
     include_package_data=True,
     entry_points={
         "console_scripts": [

@@ -63,10 +63,6 @@ class AIFSTrainer:
             # Return the provided run ID
             return self.config.training.run_id
 
-        if self.config.diagnostics.log.wandb.enabled:
-            # Return the WandB run ID
-            return self.wandb_logger.experiment.id
-
         # Generate a random UUID
         import uuid
 
