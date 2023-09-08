@@ -33,9 +33,6 @@ class AIFSTrainer:
 
         # Default to not warm-starting from a checkpoint
         self.start_from_checkpoint = bool(self.config.training.run_id) or bool(self.config.training.fork_run_id)
-
-        #!!! HACK
-        self.run_id = "slfuwr124zf"
         self.config.training.run_id = self.run_id
 
         # Update paths to contain the run ID
@@ -60,22 +57,18 @@ class AIFSTrainer:
         """Provide the model instance."""
         return GraphForecaster(metadata=self.datamodule.input_metadata, config=self.config)
 
-    # @cached_property
-    # def run_id(self) -> str:
-    #     """Unique identifier for the current run."""
+    @cached_property
+    def run_id(self) -> str:
+        """Unique identifier for the current run."""
 
-    #     if self.config.training.run_id and not self.config.training.fork_run_id:
-    #         # Return the provided run ID
-    #         return self.config.training.run_id
+        if self.config.training.run_id and not self.config.training.fork_run_id:
+            # Return the provided run ID
+            return self.config.training.run_id
 
-    #     if self.config.diagnostics.logging.wandb.enabled:
-    #         # Return the WandB run ID
-    #         return self.wandb_logger.experiment.id
+        # Generate a random UUID
+        import uuid
 
-    #     # Generate a random UUID
-    #     import uuid
-
-    #     return str(uuid.uuid4())
+        return str(uuid.uuid4())
 
     @cached_property
     def wandb_logger(self) -> pl.loggers.WandbLogger:
