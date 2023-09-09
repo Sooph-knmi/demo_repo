@@ -4,7 +4,7 @@ eval:
   rollout: 12
   frequency: 20
 plot:
-  enabled: True
+  enabled: False
   frequency: 750
   sample_idx: 0
   per_sample: 6

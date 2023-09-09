@@ -30,8 +30,9 @@ class AIFSTrainer:
         self.config = config
 
         # Default to not warm-starting from a checkpoint
+        self.run_id = "4"
         self.start_from_checkpoint = bool(self.config.training.run_id) or bool(self.config.training.fork_run_id)
-        self.config.training.run_id = self.run_id
+        # self.config.training.run_id = self.run_id()
 
         # Update paths to contain the run ID
         self.update_paths()

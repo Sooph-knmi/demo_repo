@@ -9,6 +9,7 @@ from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
 
 from aifs.model.layers import MessagePassingMapper
+from aifs.model.layers import MessagePassingMapperBackwardEnsemble
 from aifs.model.layers import MessagePassingProcessor
 from aifs.utils.logger import get_code_logger
 
@@ -166,7 +167,8 @@ class GraphMSG(nn.Module):
         )
 
         # Decoder H -> ERA5
-        self.backward_mapper = MessagePassingMapper(
+        # self.backward_mapper = MessagePassingMapper(
+        self.backward_mapper = MessagePassingMapperBackwardEnsemble(
             in_channels_src=encoder_out_channels,
             in_channels_dst=encoder_out_channels,
             out_channels_dst=self.in_channels,
@@ -174,7 +176,7 @@ class GraphMSG(nn.Module):
             hidden_layers=config.model.decoder.num_layers,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
-            backward_mapper=True,
+            # backward_mapper=True,
             chunks=1,
             activation=self.activation,
         )
@@ -259,7 +261,16 @@ class GraphMSG(nn.Module):
             use_reentrant=False,
         )
 
-        x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=bs)
+        (means, vars, ens) = x_out
 
-        # residual connection (just for the predicted variables)
-        return x_out + x[:, -1, :, : self.in_channels]
+        # recover batch dimension
+        means = einops.rearrange(means, "(b n) f -> b n f", b=bs)
+        vars = einops.rearrange(vars, "(b n) f -> b n f", b=bs)
+        ens = einops.rearrange(ens, "(b n) a f -> b a n f", b=bs)
+
+        # residual connection
+        means = means + x[:, -1, :, : self.in_channels]
+        for i in range(ens.shape[1]):
+            ens[:, i] = ens[:, i] + x[:, -1, :, : self.in_channels]
+
+        return (means, vars, ens)
