@@ -13,7 +13,7 @@ batch_size:
 # runs only N training batches [N = integer | null]
 # if null then we run through all the batches
 limit_batches:
-  training: null
-  validation: null
+  training: 100
+  validation: 100
   test: 20
   predict: 20

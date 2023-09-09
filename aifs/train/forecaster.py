@@ -12,6 +12,7 @@ from timm.scheduler import CosineLRScheduler
 from aifs.data.era_normalizers import InputNormalizer
 from aifs.data.scaling import pressure_level
 from aifs.model.losses import grad_scaler
+from aifs.model.losses import WeightedMSEEnsembleLoss
 from aifs.model.losses import WeightedMSELoss
 from aifs.model.msg import GraphMSG
 from aifs.utils.logger import get_code_logger
@@ -39,6 +40,12 @@ class GraphForecaster(pl.LightningModule):
             Job configuration
         """
         super().__init__()
+
+        # self.config = config
+        # print( self.config.data.zarr.pl.parameters )
+        # code.interact(local=locals())
+        self.fields = config["data"]["pl"]["parameters"]
+        self.levels = config["data"]["pl"]["levels"]
 
         self.fcdim = config.data.num_features - config.data.num_aux_features
         num_levels = len(config.data.pl.levels)
@@ -75,7 +82,8 @@ class GraphForecaster(pl.LightningModule):
         assert len(loss_scaling) == self.fcdim
         loss_scaling = torch.from_numpy(loss_scaling)
 
-        self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
+        # self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
+        self.loss = WeightedMSEEnsembleLoss(area_weights=self.era_weights, data_variances=loss_scaling)
         if config.training.loss_gradient_scaling:
             self.loss.register_full_backward_hook(grad_scaler, prepend=False)
 
@@ -99,6 +107,8 @@ class GraphForecaster(pl.LightningModule):
         LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
         LOGGER.debug("Rollout max : %d", self.rollout_max)
         LOGGER.debug("Multistep: %d", self.multi_step)
+
+        print("self.rollout : {}".format(self.rollout))
 
         self.enable_plot = config.diagnostics.plot.enabled
 
@@ -132,9 +142,15 @@ class GraphForecaster(pl.LightningModule):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
-            loss += self.loss(y_pred, y[..., : self.fcdim])
+            # TODO, TODO, TODO: Adding for roll out
+            # loss += self.loss(y_pred, y[..., : self.fcdim])
+            loss = self.loss(y_pred, y[..., : self.fcdim])
 
-            x = self.advance_input(x, y, y_pred)
+            if not validation_mode:
+                y_preds.append(y_pred)
+
+            # TODO, TODO, TODO: re-enable
+            # x = self.advance_input(x, y, y_pred)
 
             if validation_mode:
                 for mkey, (low, high) in self.metric_ranges.items():
@@ -143,17 +159,17 @@ class GraphForecaster(pl.LightningModule):
                     metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
 
                 if self.enable_plot:
-                    y_preds.append(y_pred)
+                    y_preds.append(y_pred[0])
 
         # scale loss
-        loss *= 1.0 / self.rollout
+        # loss *= 1.0 / self.rollout
         return loss, metrics, y_preds
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        train_loss, _, _ = self._step(batch, batch_idx)
+        train_loss, _, y_preds = self._step(batch, batch_idx)
         self.log(
             "train_wmse",
-            train_loss,
+            train_loss[1],
             on_epoch=True,
             on_step=True,
             prog_bar=True,
@@ -162,6 +178,41 @@ class GraphForecaster(pl.LightningModule):
             sync_dist=True,
         )
         self.log(
+            "stats-loss",
+            train_loss[2][0],
+            on_epoch=True,
+            on_step=True,
+            prog_bar=True,
+            logger=True,
+            batch_size=batch.shape[0],
+            sync_dist=True,
+        )
+        self.log(
+            "std-dev",
+            train_loss[2][1],
+            on_epoch=True,
+            on_step=True,
+            prog_bar=True,
+            logger=True,
+            batch_size=batch.shape[0],
+            sync_dist=True,
+        )
+        # std-dev per variable and level
+        idx_p = 0
+        for field in self.fields:
+            for level in self.levels:
+                self.log(
+                    f"std-dev-{field}-{level}",
+                    y_preds[0][2][:, :, :, idx_p].std(1).mean(),
+                    on_epoch=True,
+                    on_step=True,
+                    prog_bar=False,
+                    logger=True,
+                    batch_size=batch.shape[0],
+                    sync_dist=True,
+                )
+                idx_p += 1
+        self.log(
             "rollout",
             float(self.rollout),
             on_step=True,
@@ -169,7 +220,7 @@ class GraphForecaster(pl.LightningModule):
             rank_zero_only=True,
             sync_dist=False,
         )
-        return train_loss
+        return train_loss[0]
 
     def lr_scheduler_step(self, scheduler, metric):
         scheduler.step(epoch=self.trainer.global_step)
@@ -185,7 +236,7 @@ class GraphForecaster(pl.LightningModule):
             val_loss, metrics, y_preds = self._step(batch, batch_idx, validation_mode=True)
         self.log(
             "val_wmse",
-            val_loss,
+            val_loss[1],
             on_epoch=True,
             on_step=True,
             prog_bar=True,
@@ -204,7 +255,7 @@ class GraphForecaster(pl.LightningModule):
                 batch_size=batch.shape[0],
                 sync_dist=True,
             )
-        return val_loss, y_preds
+        return val_loss[0], y_preds
 
     def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
         batch = self.normalizer(batch, in_place=False)

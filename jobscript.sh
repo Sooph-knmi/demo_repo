@@ -6,7 +6,7 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=256G
-#SBATCH --time=48:00:00
+#SBATCH --time=00:09:00
 #SBATCH --account=ecaifs
 #SBATCH --output=outputs/o160-h3_3-msg-torch-swa.out.%j
 
@@ -23,11 +23,12 @@
 # export WANDB_NOTES="TEST: SWA + gradient accumulation"
 
 # generic settings
-CONDA_ENV=aifs-dev
-GITDIR=/perm/madj/software/aifs-dev
-WORKDIR=$GITDIR
+# CONDA_ENV=aifs-dev
+# GITDIR=/perm/madj/software/aifs-dev
+# WORKDIR=$GITDIR
 
-cd $WORKDIR
-module load conda
-conda activate $CONDA_ENV
+# cd $WORKDIR
+# module load conda
+# conda activate $CONDA_ENV
+source pyenv/bin/activate
 srun aifs-train hardware=atos_slurm

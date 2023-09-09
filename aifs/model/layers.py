@@ -394,6 +394,77 @@ class MessagePassingMapper(MessagePassingProcessor):
         return x_src, x_dst
 
 
+class MessagePassingMapperBackwardEnsemble(MessagePassingProcessor):
+    """Mapper from h -> era."""
+
+    def __init__(
+        self,
+        in_channels_src: int,
+        in_channels_dst: int,
+        out_channels_dst: Optional[int] = None,
+        **kwargs,
+    ) -> None:
+        """Initialize the mapper.
+
+        Parameters
+        ----------
+        in_channels_src : int
+            Input channels of the source node
+        in_channels_dst : int
+            Input channels of the destination node
+        backward_mapper : bool, optional
+            Map from (true) hidden to era or (false) reverse, by default False
+        out_channels_dst : Optional[int], optional
+            Output channels of the destination node, by default None
+        """
+        super().__init__(**kwargs)
+
+        self.node_era_extractor = gen_mlp(
+            in_features=self.hidden_dim,
+            hidden_dim=self.hidden_dim,
+            # out_features=out_channels_dst,
+            out_features=self.hidden_dim,
+            n_extra_layers=self.mlp_extra_layers + 1,
+            activation_func=self.activation,
+            layer_norm=False,
+            final_activation=False,
+        )
+
+        self.num_tail_nets = 10
+        dim = self.hidden_dim
+        torch.nn.GELU()
+        self.tail_nets = torch.nn.ModuleList()
+        for inet in range(self.num_tail_nets):
+            self.tail_nets.append(torch.nn.ModuleList())
+            self.tail_nets[-1].append(torch.nn.LayerNorm(dim, elementwise_affine=True))
+            self.tail_nets[-1].append(torch.nn.Linear(dim, out_channels_dst, bias=True))
+
+    def forward(self, x: PairTensor, edge_index: Adj, edge_attr: Tensor) -> PairTensor:
+        x_src, x_dst = x
+
+        edge_attr = self.emb_edges(edge_attr)
+
+        for i in range(self.hidden_layers):
+            (x_src, x_dst), edge_attr = self.proc[i]((x_src, x_dst), edge_index, edge_attr, size=(x_src.shape[0], x_dst.shape[0]))
+
+        x_dst = self.node_era_extractor(x_dst)
+
+        preds = []
+        for tail_net in self.tail_nets:
+            cpred = x_dst
+            for block in tail_net:
+                cpred = block(cpred)
+            preds.append(cpred.unsqueeze(1))
+        preds = torch.cat(preds, 1)
+
+        # code.interact(local=locals())
+
+        x_dst = (torch.mean(preds, 1), torch.std(preds, 1), preds)
+        # x_dst = preds
+
+        return x_src, x_dst
+
+
 class MessagePassingProcessorChunk(nn.Module):
     """Wraps X message passing blocks for checkpointing in Processor / Mapper."""
 
