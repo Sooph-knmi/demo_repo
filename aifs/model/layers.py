@@ -431,7 +431,6 @@ class MessagePassingMapperBackwardEnsemble(MessagePassingProcessor):
 
         self.num_tail_nets = 10
         dim = self.hidden_dim
-
         self.tail_nets = torch.nn.ModuleList()
         for inet in range(self.num_tail_nets):
             self.tail_nets.append(torch.nn.ModuleList())
