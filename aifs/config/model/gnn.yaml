@@ -1,6 +1,6 @@
 # specific GNN encoder settings
 activation: SiLU
-num_channels: 512
+num_channels: 1024
 
 mlp:
   extra_layers: 0

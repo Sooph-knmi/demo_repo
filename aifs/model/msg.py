@@ -261,16 +261,10 @@ class GraphMSG(nn.Module):
             use_reentrant=False,
         )
 
-        (means, vars, ens) = x_out
-
-        # recover batch dimension
-        means = einops.rearrange(means, "(b n) f -> b n f", b=bs)
-        vars = einops.rearrange(vars, "(b n) f -> b n f", b=bs)
-        ens = einops.rearrange(ens, "(b n) a f -> b a n f", b=bs)
-
+        # recover batch dimension b (a is ensemble dimension)
+        x_out = einops.rearrange(x_out, "(b n) a f -> b a n f", b=bs)
         # residual connection
-        means = means + x[:, -1, :, : self.in_channels]
-        for i in range(ens.shape[1]):
-            ens[:, i] = ens[:, i] + x[:, -1, :, : self.in_channels]
+        for i in range(x_out.shape[1]):
+            x_out[:, i] = x_out[:, i] + x[:, -1, :, : self.in_channels]
 
-        return (means, vars, ens)
+        return x_out

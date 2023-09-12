@@ -422,7 +422,6 @@ class MessagePassingMapperBackwardEnsemble(MessagePassingProcessor):
         self.node_era_extractor = gen_mlp(
             in_features=self.hidden_dim,
             hidden_dim=self.hidden_dim,
-            # out_features=out_channels_dst,
             out_features=self.hidden_dim,
             n_extra_layers=self.mlp_extra_layers + 1,
             activation_func=self.activation,
@@ -432,7 +431,7 @@ class MessagePassingMapperBackwardEnsemble(MessagePassingProcessor):
 
         self.num_tail_nets = 10
         dim = self.hidden_dim
-        torch.nn.GELU()
+
         self.tail_nets = torch.nn.ModuleList()
         for inet in range(self.num_tail_nets):
             self.tail_nets.append(torch.nn.ModuleList())
@@ -449,6 +448,7 @@ class MessagePassingMapperBackwardEnsemble(MessagePassingProcessor):
 
         x_dst = self.node_era_extractor(x_dst)
 
+        # evaluate ensemble of tail nets
         preds = []
         for tail_net in self.tail_nets:
             cpred = x_dst
@@ -457,10 +457,7 @@ class MessagePassingMapperBackwardEnsemble(MessagePassingProcessor):
             preds.append(cpred.unsqueeze(1))
         preds = torch.cat(preds, 1)
 
-        # code.interact(local=locals())
-
-        x_dst = (torch.mean(preds, 1), torch.std(preds, 1), preds)
-        # x_dst = preds
+        x_dst = preds
 
         return x_src, x_dst
 

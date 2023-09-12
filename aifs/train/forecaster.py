@@ -96,7 +96,8 @@ class GraphForecaster(pl.LightningModule):
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
         self.multi_step = config.training.multistep_input
-        self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
+        # self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
+        self.lr = config.hardware.num_gpus_per_node * config.training.lr.rate
         self.lr_iterations = config.training.lr.iterations
         self.lr_min = config.training.lr.min
         self.rollout = config.training.rollout.start
@@ -198,20 +199,22 @@ class GraphForecaster(pl.LightningModule):
             sync_dist=True,
         )
         # std-dev per variable and level
-        idx_p = 0
-        for field in self.fields:
-            for level in self.levels:
-                self.log(
-                    f"std-dev-{field}-{level}",
-                    y_preds[0][2][:, :, :, idx_p].std(1).mean(),
-                    on_epoch=True,
-                    on_step=True,
-                    prog_bar=False,
-                    logger=True,
-                    batch_size=batch.shape[0],
-                    sync_dist=True,
-                )
-                idx_p += 1
+        for ir, y_pred in enumerate(y_preds):
+            idx_p = 0
+            for field in self.fields:
+                for level in self.levels:
+                    str_tail = f"-rollout{ir}" if ir > 0 else ""
+                    self.log(
+                        f"std-dev-{field}-{level}" + str_tail,
+                        y_pred[:, :, :, idx_p].std(1).mean(),
+                        on_epoch=True,
+                        on_step=True,
+                        prog_bar=False,
+                        logger=True,
+                        batch_size=batch.shape[0],
+                        sync_dist=True,
+                    )
+                    idx_p += 1
         self.log(
             "rollout",
             float(self.rollout),
