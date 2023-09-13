@@ -3,7 +3,7 @@ activation: SiLU
 num_channels: 512
 
 mlp:
-  extra_layers: 0
+  extra_layers: 1
 
 encoder:
   num_layers: 1

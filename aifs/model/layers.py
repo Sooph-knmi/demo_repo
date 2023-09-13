@@ -193,7 +193,7 @@ def gen_mlp(
     out_features: int,
     n_extra_layers: int = 0,
     activation_func: str = "SiLU",
-    final_activation: bool = True,
+    final_activation: bool = False,
     layer_norm: bool = True,
     checkpoints: bool = False,
 ) -> nn.Module:
@@ -354,10 +354,9 @@ class MessagePassingMapper(MessagePassingProcessor):
                 in_features=self.hidden_dim,
                 hidden_dim=self.hidden_dim,
                 out_features=out_channels_dst,
-                n_extra_layers=self.mlp_extra_layers + 1,
+                n_extra_layers=self.mlp_extra_layers,
                 activation_func=self.activation,
                 layer_norm=False,
-                final_activation=False,
             )
         else:  # era -> h
             self.emb_nodes_src = gen_mlp(
