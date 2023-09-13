@@ -153,6 +153,7 @@ class GraphMSG(nn.Module):
             edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
             chunks=1,
             activation=self.activation,
+            ptype="fmapper",
         )
 
         # Processor H -> H
@@ -177,6 +178,7 @@ class GraphMSG(nn.Module):
             backward_mapper=True,
             chunks=1,
             activation=self.activation,
+            ptype="bmapper",
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -263,3 +265,88 @@ class GraphMSG(nn.Module):
 
         # residual connection (just for the predicted variables)
         return x_out + x[:, -1, :, : self.in_channels]
+
+if __name__ == "__main__":
+    # you'll need to run this test on a worker node
+    import os
+    from torch_geometric import seed_everything
+    from prettytable import PrettyTable
+    from hydra import compose, initialize
+    # from torch.profiler import profile, record_function, ProfilerActivity
+
+    from timeit import default_timer as timer
+
+    initialize(config_path="../config", job_name="test_msg")
+    config = compose(config_name="config", overrides=[
+        'model.trainable_parameters.era=8',
+        'model.trainable_parameters.hidden=8',
+        'model.trainable_parameters.era2hidden=8',
+        'model.trainable_parameters.hidden2era=8',
+        'model.trainable_parameters.hidden2hidden=8',
+        'model.num_channels=768', #1024',
+        'dataloader.batch_size.training=1',
+        'dataloader.batch_size.validation=1',
+        'data.num_features=98',
+        'data.num_aux_features=13',
+        'training.multistep_input=2',
+        'hardware.paths.graph="/home/mlx/data/graphs/"',
+        'hardware.files.graph="graph_mappings_normed_edge_attrs_2023062700_o96_h_0_1_2_3_4_5.pt"',
+        #'hardware.files.graph="graph_mappings_normed_edge_attrs_2023062700_n320_h_0_1_2_3_4_5_6.pt"',
+        # 'hardware.files.graph="graph_mappings_normed_edge_attrs_2023062700_n320_h_0_1_2_3_4_5.pt"',
+    ])
+    
+    seed_everything(1234)
+
+    def count_parameters(model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    def count_parameters_pretty(model):
+        table = PrettyTable(["Modules", "Parameters"])
+        total_params = 0
+        for name, parameter in model.named_parameters():
+            if not parameter.requires_grad: continue
+            params = parameter.numel()
+            table.add_row([name, params])
+            total_params+=params
+        print(table)
+        print(f"Total Trainable Params: {total_params/1.e6}")
+        return total_params
+
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    LOGGER.debug("Running on device: %s ...", device)
+
+    gnn = GraphMSG(
+        config,
+    ).to(device)
+
+    # count_parameters_pretty(gnn)
+
+    _ERA_SIZE = gnn._era_size
+    x_input = torch.randn(config.dataloader.batch_size.training, config.training.multistep_input, 
+                          _ERA_SIZE, config.data.num_features).to(device)  # input tensor
+    LOGGER.debug("Input shape: %s", x_input.shape)
+    start = timer()
+    # with profile(activities=[ProfilerActivity.CUDA], record_shapes=True, profile_memory=True, with_stack=True) as prof:
+    y_pred = gnn(x_input)
+    LOGGER.debug("Output shape: %s", y_pred.shape)
+    LOGGER.debug("Model parameter count: %d", count_parameters(gnn)/1.e6)
+    loss = y_pred.sum()
+    LOGGER.debug("Running backward on a dummy loss ...")
+    loss.backward()
+    end = timer()
+    LOGGER.debug("Ran backward. All good!")
+    # print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=50))
+
+    LOGGER.debug("Runtime %f", (end - start))
+    for name, param in gnn.named_parameters():
+        if param.grad is None:
+            print(name)
+
+    LOGGER.debug(f"max memory alloc:    {torch.cuda.max_memory_allocated(torch.device(0))/(1000.*1024)}")
+    LOGGER.debug(f"max memory reserved: {torch.cuda.max_memory_reserved(torch.device(0))/(1000.*1024)}")
+    
+
+# aifs-train dataloader.num_workers.training=1 dataloader.num_workers.validation=1 diagnostics.logging.wandb=False model.num_channels=128 dataloader.limit_batches.training=1 dataloader.limit_batches.validation=1 dataloader.batch_size.training=1 dataloader.batch_size.validation=1 dataloader.batch_size.test=1 dataloader.batch_size.predict=1 training.max_epochs=1 training.rollout.start=1 training.rollout.epoch_increment=1 training.rollout.max=1 hardware.num_gpus_per_node=2 hardware.num_nodes=1 training.initial_seed=24 hardware.paths.graph=/home/mlx/data/graphs/ hardware.files.graph=graph_mappings_normed_edge_attrs_2023062700_o96_h_0_1_2_3_4.pt
+# aifs-train dataloader.num_workers.training=8 dataloader.num_workers.validation=4 diagnostics.logging.wandb=True model.num_channels=256 dataloader.batch_size.training=1 dataloader.batch_size.validation=1 dataloader.batch_size.test=1 dataloader.batch_size.predict=1 training.rollout.start=1 training.rollout.epoch_increment=1 training.rollout.max=1 hardware.num_gpus_per_node=2 hardware.num_nodes=1 training.initial_seed=24 hardware.paths.graph=/home/mlx/data/graphs/ hardware.files.graph=graph_mappings_normed_edge_attrs_2023062700_o96_h_0_1_2_3_4.pt
+# aifs-train data.resolution=o160 dataloader.num_workers.training=1 dataloader.num_workers.validation=1 diagnostics.logging.wandb=False model.num_channels=1024 dataloader.limit_batches.training=1 dataloader.limit_batches.validation=1 dataloader.batch_size.training=1 dataloader.batch_size.validation=1 dataloader.batch_size.test=1 dataloader.batch_size.predict=1 training.max_epochs=1 training.rollout.start=12 training.rollout.epoch_increment=1 training.rollout.max=12 hardware.num_gpus_per_node=2 hardware.num_nodes=1 training.initial_seed=24 hardware.paths.graph=/home/mlx/data/graphs/ hardware.files.graph=graph_mappings_normed_edge_attrs_2023062700_o160_h_0_1_2_3_4_5.pt
+# aifs-train data.resolution=o160 dataloader.num_workers.training=1 dataloader.num_workers.validation=1 diagnostics.logging.wandb=False model.num_channels=1024 dataloader.limit_batches.training=2 dataloader.limit_batches.validation=1 dataloader.batch_size.training=1 dataloader.batch_size.validation=1 dataloader.batch_size.test=1 dataloader.batch_size.predict=1 training.max_epochs=1 training.rollout.start=1 training.rollout.epoch_increment=1 training.rollout.max=1 hardware.num_gpus_per_node=2 hardware.num_nodes=1 training.initial_seed=24 hardware.paths.graph=/home/mlx/data/graphs/ hardware.files.graph=graph_mappings_normed_edge_attrs_2023062700_o160_h_0_1_2_3_4_5.pt
