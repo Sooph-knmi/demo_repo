@@ -41,9 +41,6 @@ class GraphForecaster(pl.LightningModule):
         """
         super().__init__()
 
-        # self.config = config
-        # print( self.config.data.zarr.pl.parameters )
-        # code.interact(local=locals())
         self.fields = config["data"]["pl"]["parameters"]
         self.levels = config["data"]["pl"]["levels"]
 
@@ -96,8 +93,7 @@ class GraphForecaster(pl.LightningModule):
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
         self.multi_step = config.training.multistep_input
-        # self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
-        self.lr = config.hardware.num_gpus_per_node * config.training.lr.rate
+        self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
         self.lr_iterations = config.training.lr.iterations
         self.lr_min = config.training.lr.min
         self.rollout = config.training.rollout.start
@@ -150,8 +146,8 @@ class GraphForecaster(pl.LightningModule):
             if not validation_mode:
                 y_preds.append(y_pred)
 
-            # TODO, TODO, TODO: re-enable
-            # x = self.advance_input(x, y, y_pred)
+            # integrate y_pred for roll-out
+            x = self.advance_input(x, y, y_pred.mean(axis=1))
 
             if validation_mode:
                 for mkey, (low, high) in self.metric_ranges.items():
@@ -206,7 +202,7 @@ class GraphForecaster(pl.LightningModule):
                     str_tail = f"-rollout{ir}" if ir > 0 else ""
                     self.log(
                         f"std-dev-{field}-{level}" + str_tail,
-                        y_pred[:, :, :, idx_p].std(1).mean(),
+                        y_preds[0][:, :, :, idx_p].std(1).mean(),
                         on_epoch=True,
                         on_step=True,
                         prog_bar=False,
@@ -241,8 +237,8 @@ class GraphForecaster(pl.LightningModule):
             "val_wmse",
             val_loss[1],
             on_epoch=True,
-            on_step=True,
-            prog_bar=True,
+            on_step=False,
+            prog_bar=False,
             logger=True,
             batch_size=batch.shape[0],
             sync_dist=True,
@@ -258,6 +254,7 @@ class GraphForecaster(pl.LightningModule):
                 batch_size=batch.shape[0],
                 sync_dist=True,
             )
+
         return val_loss[0], y_preds
 
     def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
@@ -272,7 +269,7 @@ class GraphForecaster(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
         scheduler = CosineLRScheduler(
-            optimizer,
+            self.optimizer,
             lr_min=self.lr_min,
             t_initial=self.lr_iterations,
             warmup_t=1000,
