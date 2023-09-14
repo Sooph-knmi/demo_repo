@@ -1,11 +1,11 @@
 import copy
 import json
-from pathlib import Path
 
 import numpy as np
-from aifs import diagnostics
-from importlib import resources as impresources
 from matplotlib.collections import LineCollection
+
+from aifs import diagnostics
+
 
 class EquirectangularProjection:
     def __init__(self):
@@ -27,8 +27,17 @@ class EquirectangularProjection:
 
 class Coastlines:
     def __init__(self, projection=None):
+        try:
+            # this requires python 3.9 or newer
+            from importlib.resources import files
+        except ImportError:
+            try:
+                from importlib_resources import files
+            except ModuleNotFoundError as e:
+                raise ModuleNotFoundError("Please install importlib_resources on Python <=3.8.") from e
+
         # Get the path to "continents.json" within your library
-        self.continents_file = (impresources.files(diagnostics) / "continents.json")
+        self.continents_file = files(diagnostics) / "continents.json"
 
         # Load GeoJSON data from the file
         with self.continents_file.open("rt") as file:
