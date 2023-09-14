@@ -18,6 +18,7 @@ from aifs.diagnostics.plots import plot_predicted_ensemble
 from aifs.diagnostics.plots import plot_predicted_multilevel_flat_sample
 from aifs.diagnostics.plots import plot_rank_histograms
 from aifs.diagnostics.plots import plot_spread_skill
+from aifs.diagnostics.plots import plot_loss
 from aifs.utils.distributed import gather_tensor
 from aifs.utils.logger import get_code_logger
 
@@ -240,6 +241,45 @@ class KCRPSPlot(PlotCallback):
             self._plot(trainer, pl_module, outputs, batch, batch_idx)
 
 
+class PlotLoss(PlotCallback):
+    """Plots the unsqueezed loss over rollouts."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.eval_frequency = 10
+
+    def _plot(
+        # self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int
+        self,
+        trainer,
+        pl_module,
+        outputs,
+        batch,
+        batch_idx,
+    ) -> None:
+        del batch_idx
+        for rollout_step in range(pl_module.rollout):
+            y_hat = outputs[1][rollout_step]
+            y_true = batch[:, pl_module.multi_step + rollout_step, :, : pl_module.fcdim]
+            LOGGER.debug("y_hat = %s, y_true = %s", y_hat.shape, y_true.shape)
+            kcrps_: torch.Tensor = pl_module.calculate_kcrps(y_hat, y_true, squash=False)
+            LOGGER.debug("raw kcrps_.shape = %s", kcrps_.shape)
+            kcrps_ = kcrps_.sum(dim=-1) / pl_module.kcrps.weights.sum()
+            LOGGER.debug("summed kcrps_.shape = %s", kcrps_.shape)
+
+            fig = plot_loss(kcrps_.cpu().numpy())
+            fig.tight_layout()
+            self._output_figure(
+                trainer,
+                fig,
+                tag=f"loss_rstep{rollout_step:02d}_rank{pl_module.local_rank:02d}",
+                exp_log_tag=f"loss_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:02d}",
+            )
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
+            self._plot(trainer, pl_module, outputs, batch, batch_idx)
+
 class GraphTrainableFeaturesPlot(PlotCallback):
     """Visualize the trainable features defined at the ERA and H graph nodes, if any.
 
@@ -264,41 +304,6 @@ class GraphTrainableFeaturesPlot(PlotCallback):
             if gnn.h_trainable is not None:
                 fig = plot_graph_features(hcoords, gnn.h_trainable.cpu())
                 self._output_figure(trainer, fig, tag="h_trainable", exp_log_tag="h_trainable")
-
-
-# class PlotLoss(PlotCallback):
-#     """Plots the unsqueezed loss over rollouts."""
-
-#     def __init__(self, config):
-#         super().__init__(config)
-
-#     def _plot(
-#         # self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int
-#         self,
-#         trainer,
-#         pl_module,
-#         outputs,
-#         batch,
-#         batch_idx,
-#     ) -> None:
-#         del batch_idx
-#         for rollout_step in range(pl_module.rollout):
-#             y_hat = outputs[1][rollout_step]
-#             y_true = batch[:, pl_module.multi_step + rollout_step, :, : pl_module.fcdim]
-#             loss = pl_module.kcrps(y_hat, y_true, squash=False).cpu().numpy()
-
-#             fig = plot_loss(loss)
-#             fig.tight_layout()
-#             self._output_figure(
-#                 trainer,
-#                 fig,
-#                 tag=f"loss_rstep_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
-#                 exp_log_tag=f"loss_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
-#             )
-
-#     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-#         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
-#             self._plot(trainer, pl_module, outputs, batch, batch_idx)
 
 
 class PlotSample(PlotCallback):
@@ -455,6 +460,7 @@ def get_callbacks(config: DictConfig) -> List:
                 PredictedEnsemblePlot(config),
                 KCRPSPlot(config),
                 SpreadSkillPlot(config),
+                PlotLoss(config),
             ]
         )
 

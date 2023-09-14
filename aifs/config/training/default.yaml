@@ -63,16 +63,16 @@ max_epochs: 200
 lr:
   rate: 0.625e-4
   iterations: 75000
-  min: 1.5e-7 #Not scaled by #GPU
+  min: 1.5e-7
 
 loss_scaling:
   pl:
-    q: 0.6 #1
-    t: 6 #1
-    u: 0.8 #0.5
-    v: 0.5 #0.33
-    w: 0.001
-    z: 12 #1
+    q: 0.6
+    t: 6
+    u: 0.8
+    v: 0.5
+    w: 0.005 #0.001
+    z: 8 #12
   sfc:
     sp: 0.1
     sst: 0.1
