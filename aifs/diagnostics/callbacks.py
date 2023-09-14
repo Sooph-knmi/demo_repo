@@ -148,7 +148,7 @@ class GraphTrainableFeaturesPlot(PlotCallback):
 
     def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         if pl_module.global_rank == 0:
-            model = pl_module.model.model
+            model = pl_module.model.module.model if hasattr(pl_module.model, "module") else pl_module.model.model
             graph = pl_module.graph_data
 
             ecoords = np.rad2deg(graph[("era", "to", "era")].ecoords_rad.numpy())
@@ -257,7 +257,8 @@ class InferenceCheckpoint(ModelCheckpoint):
         self.config = config
 
     def _torch_drop_down(self, trainer: "pl.Trainer") -> torch.nn.Module:
-        return trainer.model.model
+        # Get the model from the DataParallel wrapper
+        return trainer.model.module._forward_module.model if hasattr(trainer.model, "module") else trainer.model.model
 
     def _sanitise_checkpoints(self, model) -> None:
         # Delete paths from checkpoint
