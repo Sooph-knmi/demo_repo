@@ -35,4 +35,4 @@ logging:
     # logger options (these probably come with some overhead)
     gradients: False
     parameters: False
-  interval: 100
+  interval: 20
