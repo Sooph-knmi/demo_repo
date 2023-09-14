@@ -131,7 +131,6 @@ class WeightedMSEEnsembleLoss(nn.Module):
             Weighted MSE loss
         """
 
-        # post residual connection
         (means, stddevs) = (torch.mean(pred, 1), torch.std(pred, 1))
 
         shape = target.shape
@@ -141,6 +140,10 @@ class WeightedMSEEnsembleLoss(nn.Module):
         mse = torch.square(means - target)
         mse = (weights * mse).mean()
 
+        # MSE ensemble
+        mse_ens = [(weights * torch.square(pred[:, k] - target)).mean() for k in range(pred.shape[1])]
+        mse_ens = torch.tensor(mse_ens).mean()
+
         # stats loss
         target, means, stddevs = target.flatten(-2, -1), means.flatten(-2, -1), stddevs.flatten(-2, -1)
         weights = weights.flatten(-2, -1)
@@ -148,7 +151,7 @@ class WeightedMSEEnsembleLoss(nn.Module):
         diff = stats_loss - 1.0
         stats_loss = (weights * (diff * diff + torch.sqrt(stddevs))).mean()
 
-        out = mse + stats_loss
+        out = mse_ens + stats_loss
 
         return [out, mse, [stats_loss, stddevs.mean()]]
         # return [mse, mse, [stats_loss, stddevs.mean()]]
