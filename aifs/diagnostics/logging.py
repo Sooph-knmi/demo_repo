@@ -7,6 +7,34 @@ from aifs.utils.logger import get_code_logger
 LOGGER = get_code_logger(__name__)
 
 
+def get_tensorboard_logger(config: DictConfig, model: pl.LightningModule):
+    """Setup TensorBoard experiment logger.
+
+    Parameters
+    ----------
+    config : DictConfig
+        Job configuration
+    model: GraphForecaster
+        Model to watch
+
+    Returns
+    -------
+    _type_
+        Logger object, or None
+    """
+    if not config.diagnostics.log.tensorboard.enabled:
+        LOGGER.debug("Tensorboard logging is disabled.")
+        return None
+
+    from pytorch_lightning.loggers import TensorBoardLogger
+
+    logger = TensorBoardLogger(
+        save_dir=config.hardware.paths.logs.tensorboard,
+        log_graph=False,
+    )
+    return logger
+
+
 def get_wandb_logger(config: DictConfig, model: pl.LightningModule):
     """Setup Weights & Biases experiment logger.
 
@@ -20,7 +48,7 @@ def get_wandb_logger(config: DictConfig, model: pl.LightningModule):
     Returns
     -------
     _type_
-        Logger object or False
+        Logger object
     """
     if not config.diagnostics.log.wandb.enabled:
         LOGGER.debug("Weights & Biases logging is disabled.")
@@ -32,7 +60,7 @@ def get_wandb_logger(config: DictConfig, model: pl.LightningModule):
         project="aifs-fc",
         entity="ecmwf-ml",
         id=config.training.run_id,
-        save_dir=config.hardware.paths.logs,
+        save_dir=config.hardware.paths.logs.wandb,
         offline=config.diagnostics.log.wandb.offline,
         log_model=config.diagnostics.log.wandb.log_model,
         resume=config.training.run_id is not None,

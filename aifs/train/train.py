@@ -8,11 +8,12 @@ import pytorch_lightning as pl
 import torch
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
-from pytorch_lightning.profilers import AdvancedProfiler
+from pytorch_lightning.profilers import PyTorchProfiler
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.callbacks import get_callbacks
 from aifs.diagnostics.logging import get_wandb_logger
+from aifs.diagnostics.logging import get_tensorboard_logger
 from aifs.train.forecaster import GraphForecaster
 from aifs.utils.logger import get_code_logger
 
@@ -74,6 +75,11 @@ class AIFSTrainer:
         return get_wandb_logger(self.config, self.model)
 
     @cached_property
+    def tensorboard_logger(self) -> pl.loggers.TensorBoardLogger:
+        """TensorBoard logger."""
+        return get_tensorboard_logger(self.config, self.model)
+
+    @cached_property
     def last_checkpoint(self) -> Optional[str]:
         """Path to the last checkpoint."""
         if not self.start_from_checkpoint:
@@ -96,18 +102,34 @@ class AIFSTrainer:
         return get_callbacks(self.config)
 
     @cached_property
-    def profiler(self) -> Optional[AdvancedProfiler]:
+    def profiler(self) -> Optional[PyTorchProfiler]:
+        """Returns a pytorch profiler object, if profiling is enabled, otherwise None."""
         if self.config.diagnostics.profiler:
-            return AdvancedProfiler(
-                dirpath=self.config.hardware.paths.logs,
+            assert self.config.diagnostics.log.tensorboard.enabled, "Tensorboard logging must be enabled when profiling! Check your job config."
+            return PyTorchProfiler(
+                dirpath=self.config.hardware.paths.logs.tensorboard,
                 filename="aifs-profiler",
+                export_to_chrome=False,
+                # profiler-specific keywords
+                activities=[
+                    # torch.profiler.ProfilerActivity.CPU,  # this is memory-hungry
+                    torch.profiler.ProfilerActivity.CUDA
+                ],
+                schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(dir_name=self.config.hardware.paths.logs.tensorboard),
+                profile_memory=True,
+                record_shapes=True,
+                with_stack=True,
             )
+        return None
 
     @cached_property
     def loggers(self) -> List:
         loggers = []
         if self.config.diagnostics.log.wandb.enabled:
             loggers.append(self.wandb_logger)
+        if self.config.diagnostics.log.tensorboard.enabled:
+            loggers.append(self.tensorboard_logger)
         return loggers
 
     @cached_property
