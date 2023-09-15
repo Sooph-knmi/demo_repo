@@ -41,7 +41,7 @@ class PlotCallback(Callback):
 
             save_path.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(save_path, dpi=100)
-            if self.config.diagnostics.logging.wandb.enabled:
+            if self.config.diagnostics.log.wandb.enabled:
                 import wandb
 
                 trainer.logger.experiment.log({exp_log_tag: wandb.Image(fig)})
@@ -91,8 +91,8 @@ class RolloutEval(Callback):
                 x = pl_module.advance_input(x, y, y_pred)
 
                 for mkey, (low, high) in pl_module.metric_ranges.items():
-                    y_denorm = pl_module.normalizer.denormalize(y, in_place=False)
-                    y_pred_denorm = pl_module.normalizer.denormalize(x[:, -1, ...], in_place=False)
+                    y_denorm = pl_module.model.normalizer.denormalize(y, in_place=False)
+                    y_pred_denorm = pl_module.model.normalizer.denormalize(x[:, -1, ...], in_place=False)
                     metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
 
             # scale loss
@@ -106,7 +106,7 @@ class RolloutEval(Callback):
             on_epoch=True,
             on_step=True,
             prog_bar=False,
-            logger=True,
+            logger=pl_module.logger_enabled,
             batch_size=bs,
             sync_dist=False,
             rank_zero_only=True,
@@ -118,7 +118,7 @@ class RolloutEval(Callback):
                 on_epoch=True,
                 on_step=False,
                 prog_bar=False,
-                logger=True,
+                logger=pl_module.logger_enabled,
                 batch_size=bs,
                 sync_dist=False,
                 rank_zero_only=True,
@@ -148,18 +148,18 @@ class GraphTrainableFeaturesPlot(PlotCallback):
 
     def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         if pl_module.global_rank == 0:
-            gnn = pl_module.gnn
+            model = pl_module.model.module.model if hasattr(pl_module.model, "module") else pl_module.model.model
             graph = pl_module.graph_data
 
             ecoords = np.rad2deg(graph[("era", "to", "era")].ecoords_rad.numpy())
             hcoords = np.rad2deg(graph[("h", "to", "h")].hcoords_rad.numpy())
 
-            if gnn.era_trainable is not None:
-                fig = plot_graph_features(ecoords, gnn.era_trainable.cpu())
+            if model.era_trainable is not None:
+                fig = plot_graph_features(ecoords, model.era_trainable.cpu())
                 self._output_figure(trainer, fig, tag="era_trainable", exp_log_tag="era_trainable")
 
-            if gnn.h_trainable is not None:
-                fig = plot_graph_features(hcoords, gnn.h_trainable.cpu())
+            if model.h_trainable is not None:
+                fig = plot_graph_features(hcoords, model.h_trainable.cpu())
                 self._output_figure(trainer, fig, tag="h_trainable", exp_log_tag="h_trainable")
 
 
@@ -214,7 +214,7 @@ class PlotSample(PlotCallback):
         batch_idx,
     ) -> None:
         data = (
-            pl_module.normalizer.denormalize(
+            pl_module.model.normalizer.denormalize(
                 batch[self.sample_idx, pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1, ...], in_place=False
             )
             .cpu()
@@ -228,7 +228,9 @@ class PlotSample(PlotCallback):
                 np.rad2deg(pl_module.era_latlons.numpy()),
                 data[0, ..., : pl_module.fcdim].squeeze(),
                 data[rollout_step + 1, ..., : pl_module.fcdim].squeeze(),
-                pl_module.normalizer.denormalize(outputs[1][rollout_step][self.sample_idx, ..., : pl_module.fcdim], in_place=False)
+                pl_module.model.normalizer.denormalize(
+                    outputs[1][rollout_step][self.sample_idx, ..., : pl_module.fcdim], in_place=False
+                )
                 .squeeze()
                 .cpu()
                 .numpy(),
@@ -247,6 +249,47 @@ class PlotSample(PlotCallback):
             self._plot(trainer, pl_module, outputs, batch, batch_idx)
 
 
+class InferenceCheckpoint(ModelCheckpoint):
+    """A checkpoint callback that saves the model after every validation epoch."""
+
+    def __init__(self, config, **kwargs):
+        super().__init__(**kwargs)
+        self.config = config
+
+    def _torch_drop_down(self, trainer: pl.Trainer) -> torch.nn.Module:
+        # Get the model from the DataParallel wrapper
+        return trainer.model.module._forward_module.model if hasattr(trainer.model, "module") else trainer.model.model
+
+    def _sanitise_checkpoints(self, model) -> None:
+        # Delete paths from checkpoint
+        for path in model.config.hardware.paths.keys():
+            model.config.hardware.paths[path] = "/"
+        # Delete filenames from checkpoint
+        for file in model.config.hardware.files.keys():
+            model.config.hardware.files[file] = "/"
+        # Disable logging and plotting
+        model.config.diagnostics.plot.enabled = False
+        model.config.diagnostics.log.wandb.enabled = False
+        return model
+
+    def _save_checkpoint(self, trainer: "pl.Trainer", filepath: str) -> None:
+        # trainer.save_checkpoint(filepath, self.save_weights_only)
+
+        model = self._torch_drop_down(trainer)
+        model = self._sanitise_checkpoints(model)
+
+        torch.save(model, filepath)
+
+        self._last_global_step_saved = trainer.global_step
+
+        # notify loggers
+        if trainer.is_global_zero:
+            from weakref import proxy
+
+            for logger in trainer.loggers:
+                logger.after_save_checkpoint(proxy(self))
+
+
 def get_callbacks(config: DictConfig) -> List:
     """Setup callbacks for PyTorch Lightning trainer.
 
@@ -261,26 +304,37 @@ def get_callbacks(config: DictConfig) -> List:
         A list of PyTorch Lightning callbacks
     """
 
+    checkpoint_settings = dict(
+        monitor="val_wmse",
+        verbose=False,
+        save_top_k=config.training.save_top_k,
+        # save weights, optimizer states, LR-schedule states, hyperparameters etc.
+        # https://pytorch-lightning.readthedocs.io/en/stable/common/checkpointing_basic.html#contents-of-a-checkpoint
+        save_weights_only=False,
+        mode="min",
+        auto_insert_metric_name=False,
+        # save after every validation epoch, if we've improved
+        save_on_train_epoch_end=False,
+        every_n_epochs=1,
+    )
+
     trainer_callbacks = [
         ModelCheckpoint(
             dirpath=config.hardware.paths.checkpoints,
             filename=config.hardware.files.checkpoint,
-            monitor="val_wmse",
-            verbose=False,
             save_last=True,
-            save_top_k=config.training.save_top_k,
-            # save weights, optimizer states, LR-schedule states, hyperparameters etc.
-            # https://pytorch-lightning.readthedocs.io/en/stable/common/checkpointing_basic.html#contents-of-a-checkpoint
-            save_weights_only=False,
-            mode="min",
-            auto_insert_metric_name=False,
-            # save after every validation epoch, if we've improved
-            save_on_train_epoch_end=False,
-            every_n_epochs=1,
+            **checkpoint_settings,
+        ),
+        InferenceCheckpoint(
+            config=config,
+            dirpath=config.hardware.paths.checkpoints,
+            filename="inference-" + config.hardware.files.checkpoint,
+            save_last=False,
+            **checkpoint_settings,
         ),
     ]
 
-    if config.diagnostics.logging.wandb.enabled:
+    if config.diagnostics.log.wandb.enabled:
         from pytorch_lightning.callbacks import LearningRateMonitor
 
         trainer_callbacks.append(

@@ -1,32 +1,18 @@
-from typing import Any
-from typing import Mapping
-
-import yaml
-
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
 
 
-class YAMLConfig:
-    def __init__(self, yaml_file: str):
-        with open(yaml_file) as f:
-            self._cfg: Mapping[str, Any] = yaml.safe_load(f)
+class DotConfig(dict):
+    def __init__(self, *args, **kwargs):
+        for a in args:
+            self.update(a)
+        self.update(kwargs)
 
-    def __len__(self) -> int:
-        return len(self._cfg)
-
-    def __getitem__(self, key: str) -> Any:
-        nested_keys = key.split(":")
-        data = self._cfg
-        try:
-            for k in nested_keys[:-1]:
-                data = data[k]
-            return data[nested_keys[-1]]
-        except KeyError as e:
-            LOGGER.error("Invalid config key: %s", key)
-            raise KeyError from e
-
-    @property
-    def cfg(self) -> Mapping[str, Any]:
-        return self._cfg
+    def __getattr__(self, name):
+        if name in self:
+            x = self[name]
+            if isinstance(x, dict):
+                return DotConfig(x)
+            return x
+        raise AttributeError(name)

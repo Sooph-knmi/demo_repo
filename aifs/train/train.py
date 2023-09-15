@@ -106,7 +106,7 @@ class AIFSTrainer:
     @cached_property
     def loggers(self) -> List:
         loggers = []
-        if self.config.diagnostics.logging.wandb.enabled:
+        if self.config.diagnostics.log.wandb.enabled:
             loggers.append(self.wandb_logger)
         return loggers
 
@@ -131,16 +131,8 @@ class AIFSTrainer:
         self.config.hardware.paths.checkpoints = Path(self.config.hardware.paths.checkpoints, self.run_id)
         self.config.hardware.paths.plots = Path(self.config.hardware.paths.plots, self.run_id)
 
-    def compile(self) -> None:
-        # this doesn't work ATM (April 2), don't bother enabling it ...
-        LOGGER.debug("torch.compiling the Lightning model ...")
-        self.model = torch.compile(self.model, mode="default", backend="inductor", fullgraph=False)
-
     def train(self) -> None:
         """Training entry point."""
-
-        if self.config.training.compile:
-            self.compile()
 
         trainer = pl.Trainer(
             accelerator=self.accelerator,
@@ -153,7 +145,7 @@ class AIFSTrainer:
             precision=self.config.training.precision,
             max_epochs=self.config.training.max_epochs,
             logger=self.loggers,
-            log_every_n_steps=self.config.diagnostics.logging.interval,
+            log_every_n_steps=self.config.diagnostics.log.interval,
             # run a fixed no of batches per epoch (helpful when debugging)
             limit_train_batches=self.config.dataloader.limit_batches.training,
             limit_val_batches=self.config.dataloader.limit_batches.validation,
