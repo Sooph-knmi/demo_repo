@@ -39,7 +39,6 @@ class AIFSModelGNN(torch.nn.Module):
         batch = self.normalizer(batch, in_place=False)
 
         with torch.no_grad():
-            # start rollout
             x = batch[:, 0 : self.multi_step, ...]
             y_hat = self(x)
 

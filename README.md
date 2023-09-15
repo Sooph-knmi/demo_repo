@@ -22,7 +22,7 @@ for training, you need to install
 pip install .[training]
 ```
 
-Graph shenanigans need to have some extra packages here:
+Graph shenanigans (like running the graph generation notebooks) need to have some extra packages here:
 ```
 pip install .[graph]
 ```

@@ -77,7 +77,7 @@ class AIFSTrainer:
     @cached_property
     def tensorboard_logger(self) -> pl.loggers.TensorBoardLogger:
         """TensorBoard logger."""
-        return get_tensorboard_logger(self.config, self.model)
+        return get_tensorboard_logger(self.config)
 
     @cached_property
     def last_checkpoint(self) -> Optional[str]:

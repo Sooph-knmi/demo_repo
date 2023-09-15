@@ -256,7 +256,7 @@ class InferenceCheckpoint(ModelCheckpoint):
         super().__init__(**kwargs)
         self.config = config
 
-    def _torch_drop_down(self, trainer: "pl.Trainer") -> torch.nn.Module:
+    def _torch_drop_down(self, trainer: pl.Trainer) -> torch.nn.Module:
         # Get the model from the DataParallel wrapper
         return trainer.model.module._forward_module.model if hasattr(trainer.model, "module") else trainer.model.model
 
@@ -272,7 +272,7 @@ class InferenceCheckpoint(ModelCheckpoint):
         model.config.diagnostics.log.wandb.enabled = False
         return model
 
-    def _save_checkpoint(self, trainer: "pl.Trainer", filepath: str) -> None:
+    def _save_checkpoint(self, trainer: pl.Trainer, filepath: str) -> None:
         # trainer.save_checkpoint(filepath, self.save_weights_only)
 
         model = self._torch_drop_down(trainer)

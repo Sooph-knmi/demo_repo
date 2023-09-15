@@ -7,15 +7,13 @@ from aifs.utils.logger import get_code_logger
 LOGGER = get_code_logger(__name__)
 
 
-def get_tensorboard_logger(config: DictConfig, model: pl.LightningModule):
+def get_tensorboard_logger(config: DictConfig):
     """Setup TensorBoard experiment logger.
 
     Parameters
     ----------
     config : DictConfig
         Job configuration
-    model: GraphForecaster
-        Model to watch
 
     Returns
     -------
