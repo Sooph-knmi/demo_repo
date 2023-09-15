@@ -272,7 +272,7 @@ class InferenceCheckpoint(ModelCheckpoint):
         model.config.diagnostics.log.wandb.enabled = False
         return model
 
-    def _save_checkpoint(self, trainer: "pl.Trainer", filepath: str) -> None:
+    def _save_checkpoint(self, trainer: pl.Trainer, filepath: str) -> None:
         # trainer.save_checkpoint(filepath, self.save_weights_only)
 
         model = self._torch_drop_down(trainer)
@@ -318,21 +318,26 @@ def get_callbacks(config: DictConfig) -> List:
         every_n_epochs=1,
     )
 
-    trainer_callbacks = [
-        ModelCheckpoint(
-            dirpath=config.hardware.paths.checkpoints,
-            filename=config.hardware.files.checkpoint,
-            save_last=True,
-            **checkpoint_settings,
-        ),
-        InferenceCheckpoint(
-            config=config,
-            dirpath=config.hardware.paths.checkpoints,
-            filename="inference-" + config.hardware.files.checkpoint,
-            save_last=False,
-            **checkpoint_settings,
-        ),
-    ]
+    trainer_callbacks = []
+    if not config.diagnostics.profiler:
+        trainer_callbacks = [
+            ModelCheckpoint(
+                dirpath=config.hardware.paths.checkpoints,
+                filename=config.hardware.files.checkpoint,
+                save_last=True,
+                **checkpoint_settings,
+            ),
+            InferenceCheckpoint(
+                config=config,
+                dirpath=config.hardware.paths.checkpoints,
+                filename="inference-" + config.hardware.files.checkpoint,
+                save_last=False,
+                **checkpoint_settings,
+            ),
+        ]
+    else:
+        # the tensorboard logger + pytorch profiler cause pickling errors when writing checkpoints
+        LOGGER.warning("Profiling is enabled - AIFS will not write any training or inference model checkpoints!")
 
     if config.diagnostics.log.wandb.enabled:
         from pytorch_lightning.callbacks import LearningRateMonitor
