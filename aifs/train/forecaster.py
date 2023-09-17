@@ -262,12 +262,11 @@ class GraphForecaster(pl.LightningModule):
         return val_loss, y_preds, pkcrps
 
     def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
-        batch = self.normalizer(batch, in_place=False)
+        batch = self.normalizer(batch)
 
         with torch.no_grad():
             # add dummy ensemble dimension (of size 1)
             x = batch[:, None, 0 : self.multi_step, ...]
-            LOGGER.debug("Input shape x.shape = %s", x.shape)
             y_hat = self(x)
 
         return self.normalizer.denormalize(y_hat.squeeze(dim=1), in_place=False)
