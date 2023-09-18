@@ -26,9 +26,10 @@ debug:
   anomaly_detection: False
 
 # activate the pytorch profiler (disable this in production)
+# remember to also activate the tensorboard logger (below)
 profiler: False
 
-logging:
+log:
   wandb:
     enabled: True
     offline: False
@@ -36,4 +37,6 @@ logging:
     # logger options (these probably come with some overhead)
     gradients: False
     parameters: False
+  tensorboard:
+    enabled: False
   interval: 100

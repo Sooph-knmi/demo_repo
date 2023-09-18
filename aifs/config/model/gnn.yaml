@@ -13,6 +13,7 @@ decoder:
 
 hidden:
   num_layers: 16
+  num_noise_channels: 1
 
 trainable_parameters:
   era: 8
