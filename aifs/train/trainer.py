@@ -198,6 +198,15 @@ class GraphForecaster(pl.LightningModule):
         )
         return train_loss
 
+    def predict_step(self, batch: torch.Tensor, mgroupdef=(0, 1, 0)) -> torch.Tensor:
+        batch = self.normalizer(batch)
+
+        with torch.no_grad():
+            x = batch[:, 0 : self.multi_step, ...]
+            y_hat = self(x, mgroupdef = mgroupdef)
+
+        return self.normalizer.denormalize(y_hat, in_place=False)
+
     def lr_scheduler_step(self, scheduler, metric):
         scheduler.step(epoch=self.trainer.global_step)
 
