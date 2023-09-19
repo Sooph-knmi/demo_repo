@@ -20,16 +20,16 @@ class EnergyScore(nn.Module):
         This produces the same energy score as Lorenzo's implementation, up to a constant scaling factor (= 2.0).
 
         Args:
-            y_pred: forecast realizations, shape (bs, nens, latlon, nvar)
-            y_true: ground truth ("observations"), shape (bs, latlon, nvar)
+            y_pred: forecast realizations, shape (bs, nvar, latlon, nens)
+            y_true: ground truth ("observations"), shape (bs, nvar, latlon)
             beta: beta exponent for the energy loss (beta = 1.0 yields the CRPS of the ensemble distribution)
         Returns:
             The energy score loss.
         """
-        m = preds.shape[1]  # ensemble size
+        m = preds.shape[-1]  # ensemble size
 
-        preds = einops.rearrange(preds, "bs m latlon v -> bs m (latlon v)")
-        target = einops.rearrange(target, "bs latlon v -> bs (latlon v)")
+        preds = einops.rearrange(preds, "bs v latlon m -> bs m (latlon v)")
+        target = einops.rearrange(target, "bs v latlon -> bs (latlon v)")
 
         score_a = (1.0 / m) * torch.mean(
             torch.sum(
