@@ -9,10 +9,11 @@ import pytorch_lightning as pl
 import torch
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
-from pytorch_lightning.profilers import AdvancedProfiler
+from pytorch_lightning.profilers import PyTorchProfiler
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.callbacks import get_callbacks
+from aifs.diagnostics.logging import get_tensorboard_logger
 from aifs.diagnostics.logging import get_wandb_logger
 from aifs.train.forecaster import GraphForecaster
 from aifs.train.strategy import DDPGroupStrategy
@@ -76,6 +77,11 @@ class AIFSTrainer:
         return get_wandb_logger(self.config, self.model)
 
     @cached_property
+    def tensorboard_logger(self) -> pl.loggers.TensorBoardLogger:
+        """TensorBoard logger."""
+        return get_tensorboard_logger(self.config)
+
+    @cached_property
     def last_checkpoint(self) -> Optional[str]:
         """Path to the last checkpoint."""
         if not self.start_from_checkpoint:
@@ -98,18 +104,37 @@ class AIFSTrainer:
         return get_callbacks(self.config)
 
     @cached_property
-    def profiler(self) -> Optional[AdvancedProfiler]:
+    def profiler(self) -> Optional[PyTorchProfiler]:
+        """Returns a pytorch profiler object, if profiling is enabled, otherwise
+        None."""
         if self.config.diagnostics.profiler:
-            return AdvancedProfiler(
-                dirpath=self.config.hardware.paths.logs,
+            assert (
+                self.config.diagnostics.log.tensorboard.enabled
+            ), "Tensorboard logging must be enabled when profiling! Check your job config."
+            return PyTorchProfiler(
+                dirpath=self.config.hardware.paths.logs.tensorboard,
                 filename="aifs-profiler",
+                export_to_chrome=False,
+                # profiler-specific keywords
+                activities=[
+                    # torch.profiler.ProfilerActivity.CPU,  # this is memory-hungry
+                    torch.profiler.ProfilerActivity.CUDA
+                ],
+                schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(dir_name=self.config.hardware.paths.logs.tensorboard),
+                profile_memory=True,
+                record_shapes=True,
+                with_stack=True,
             )
+        return None
 
     @cached_property
     def loggers(self) -> List:
         loggers = []
-        if self.config.diagnostics.logging.wandb.enabled:
+        if self.config.diagnostics.log.wandb.enabled:
             loggers.append(self.wandb_logger)
+        if self.config.diagnostics.log.tensorboard.enabled:
+            loggers.append(self.tensorboard_logger)
         return loggers
 
     @cached_property
@@ -134,20 +159,12 @@ class AIFSTrainer:
         self.config.hardware.paths.checkpoints = Path(self.config.hardware.paths.checkpoints, self.run_id)
         self.config.hardware.paths.plots = Path(self.config.hardware.paths.plots, self.run_id)
 
-    def compile(self) -> None:
-        # this doesn't work ATM (April 2), don't bother enabling it ...
-        LOGGER.debug("torch.compiling the Lightning model ...")
-        self.model = torch.compile(self.model, mode="default", backend="inductor", fullgraph=False)
-
     @cached_property
     def strategy(self) -> Any:
         return DDPGroupStrategy(self.config.hardware.group_size, static_graph=True)
 
     def train(self) -> None:
         """Training entry point."""
-
-        if self.config.training.compile:
-            self.compile()
 
         trainer = pl.Trainer(
             accelerator=self.accelerator,
@@ -160,7 +177,7 @@ class AIFSTrainer:
             precision=self.config.training.precision,
             max_epochs=self.config.training.max_epochs,
             logger=self.loggers,
-            log_every_n_steps=self.config.diagnostics.logging.interval,
+            log_every_n_steps=self.config.diagnostics.log.interval,
             # run a fixed no of batches per epoch (helpful when debugging)
             limit_train_batches=self.config.dataloader.limit_batches.training,
             limit_val_batches=self.config.dataloader.limit_batches.validation,

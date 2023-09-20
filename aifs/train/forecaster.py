@@ -10,15 +10,16 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 from omegaconf import DictConfig
+from omegaconf import OmegaConf
 from timm.scheduler import CosineLRScheduler
 
-from aifs.data.era_normalizers import InputNormalizer
 from aifs.data.scaling import pressure_level
 from aifs.losses.kcrps import KernelCRPS
 from aifs.losses.wmse import WeightedMSELoss
 from aifs.metrics.ranks import RankHistogram
 from aifs.metrics.spread import SpreadSkill
-from aifs.model.msg import GraphMSG
+from aifs.model.model import AIFSModelGNN
+from aifs.utils.config import DotConfig
 from aifs.utils.distributed import gather_tensor
 from aifs.utils.logger import get_code_logger
 
@@ -49,17 +50,18 @@ class GraphForecaster(pl.LightningModule):
 
         self.graph_data = torch.load(Path(config.hardware.paths.graph, config.hardware.files.graph))
 
-        self.gnn = GraphMSG(
-            config=config,
+        self.model = AIFSModelGNN(
+            metadata=metadata,
             graph_data=self.graph_data,
+            config=DotConfig(OmegaConf.to_container(config, resolve=True)),
         )
 
         self.save_hyperparameters()
 
-        self.normalizer = InputNormalizer(metadata)
-
         self.era_latlons = self.graph_data[("era", "to", "era")].ecoords_rad
         self.era_weights = self.graph_data[("era", "to", "era")].area_weights
+
+        self.logger_enabled = config.diagnostics.log.wandb.enabled
 
         loss_scaling = np.array([], dtype=np.float32)
         for pl_name in config.data.pl.parameters:
@@ -128,7 +130,7 @@ class GraphForecaster(pl.LightningModule):
         self.mgroupdef_single = mgroupdef_single
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.gnn(x)
+        return self.model(x)
 
     def calculate_kcrps(self, y_pred: torch.Tensor, y_target: torch.Tensor, squash: bool = True) -> torch.Tensor:
         """Rearranges the prediction and ground truth tensors and then computes the
@@ -152,7 +154,7 @@ class GraphForecaster(pl.LightningModule):
         validation_mode: bool = False,
     ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
-        batch = self.normalizer(batch)  # normalized in-place
+        batch = self.model.normalizer(batch)  # normalized in-place
         metrics = {}
 
         # start rollout
@@ -190,8 +192,8 @@ class GraphForecaster(pl.LightningModule):
                 pkcrps = self.calculate_kcrps(y_pred_group, y[..., : self.fcdim], squash=False)
                 # WMSE ensemble mean metrics
                 for mkey, (low, high) in self.metric_ranges.items():
-                    y_denorm = self.normalizer.denormalize(y, in_place=False)
-                    y_hat_denorm = self.normalizer.denormalize(y_pred_group.mean(dim=1), in_place=False)  # ensemble mean
+                    y_denorm = self.model.normalizer.denormalize(y, in_place=False)
+                    y_hat_denorm = self.model.normalizer.denormalize(y_pred_group.mean(dim=1), in_place=False)  # ensemble mean
                     metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
 
                 if self.enable_plot:
@@ -211,7 +213,7 @@ class GraphForecaster(pl.LightningModule):
             on_epoch=True,
             on_step=True,
             prog_bar=True,
-            logger=True,
+            logger=self.logger_enabled,
             batch_size=batch.shape[0],
             sync_dist=True,
         )
@@ -219,7 +221,7 @@ class GraphForecaster(pl.LightningModule):
             "rollout",
             float(self.rollout),
             on_step=True,
-            logger=True,
+            logger=self.logger_enabled,
             rank_zero_only=True,
             sync_dist=False,
         )
@@ -244,7 +246,7 @@ class GraphForecaster(pl.LightningModule):
             on_epoch=True,
             on_step=True,
             prog_bar=True,
-            logger=True,
+            logger=self.logger_enabled,
             batch_size=batch.shape[0],
             sync_dist=True,
         )
@@ -255,19 +257,18 @@ class GraphForecaster(pl.LightningModule):
                 on_epoch=True,
                 on_step=False,
                 prog_bar=False,
-                logger=True,
+                logger=self.logger_enabled,
                 batch_size=batch.shape[0],
                 sync_dist=True,
             )
         return val_loss, y_preds, pkcrps
 
     def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
-        batch = self.normalizer(batch, in_place=False)
+        batch = self.normalizer(batch)
 
         with torch.no_grad():
             # add dummy ensemble dimension (of size 1)
             x = batch[:, None, 0 : self.multi_step, ...]
-            LOGGER.debug("Input shape x.shape = %s", x.shape)
             y_hat = self(x)
 
         return self.normalizer.denormalize(y_hat.squeeze(dim=1), in_place=False)
