@@ -1,11 +1,10 @@
 #!/bin/bash
 
-#SBATCH --account=ecaifs
 #SBATCH --qos=ng
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
 #SBATCH --time=00:30:00
 #SBATCH --output=ens-kcrps-mp.out.%j
@@ -24,15 +23,15 @@ export CUDA_LAUNCH_BLOCKING=1
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="ens-kcrps-mpar"
+export WANDB_NAME="ens-kcrps-mpar-mc"
 export WANDB_NOTES="KCRPS optimized ensemble forecasting (updated code)"
 
 # generic settings
-CONDA_ENV=gnn-pyg-2.3
-GITDIR=/home/syma/GNN/gnn-era5.git
+CONDA_ENV=aifs_dev
+GITDIR=/perm/momc/AIFS/aifs-mono
 WORKDIR=$GITDIR
 
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-srun aifs-ens-train hardware=atos_slurm --config-name=ens-ddmp
+srun aifs-ens-train hardware=atos --config-name=ens-large-ddp
