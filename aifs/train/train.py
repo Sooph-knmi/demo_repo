@@ -6,7 +6,6 @@ import pytorch_lightning as pl
 import torch
 from omegaconf import DictConfig
 from pytorch_lightning.profilers import AdvancedProfiler
-from pytorch_lightning.strategies import DDPStrategy
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.logger import get_logger
@@ -53,7 +52,8 @@ def train(config: DictConfig) -> None:
     # learning rate multiplier when running single-node, multi-GPU and/or multi-node
     total_gpu_count = config.hardware.num_nodes * config.hardware.num_gpus_per_node
     LOGGER.debug("Total GPU count: %d - NB: the learning rate will be scaled by this factor!", total_gpu_count)
-    LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * config.training.lr.rate)
+    LOGGER.debug("Model group size: %d - NB: the learning rate will be divided by this factor!", config.hardware.group_size)
+    LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * config.training.lr.rate / config.hardware.group_size)
     LOGGER.debug("Rollout window length: %d", config.training.rollout.start)
 
     model = GraphForecaster(metadata=dmod.input_metadata, config=config)

@@ -167,27 +167,6 @@ class GraphMSG(nn.Module):
             activation=self.activation,
         )
 
-        # self.h_processor0 = MessagePassingProcessor(
-        #     hidden_dim=self.encoder_out_channels,
-        #     hidden_layers=int(config.model.hidden.num_layers/2),
-        #     mlp_extra_layers=mlp_extra_layers,
-        #     edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
-        #     chunks=1,
-        #     activation=self.activation,
-        #     emb_edges=True,
-        # )
-
-        # # Processor H -> H
-        # self.h_processor1 = MessagePassingProcessor(
-        #     hidden_dim=self.encoder_out_channels,
-        #     hidden_layers=int(config.model.hidden.num_layers/2),
-        #     mlp_extra_layers=mlp_extra_layers,
-        #     edge_dim=0,
-        #     chunks=1,
-        #     activation=self.activation,
-        #     emb_edges=False,
-        # )
-
         # Decoder H -> ERA5
         self.backward_mapper = MessagePassingMapper(
             in_channels_src=self.encoder_out_channels,
@@ -271,38 +250,6 @@ class GraphMSG(nn.Module):
             dim=-1,  # feature dimension
         )
 
-        # x_latent_proc0, edge_attr_proc0, edge_index_proc0 = checkpoint(self.h_processor0,  # has skipped connections and checkpoints inside
-        #     x=x_latent,
-        #     edge_index=torch.cat(
-        #         [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bs)],
-        #         dim=1,
-        #     ),
-        #     edge_attr=edge_h_to_h_latent,
-        #     shape_nodes=shape_h_proc,
-        #     mgroupdef=mgroupdef,
-        #     use_reentrant=False,
-        # )
-
-        # x_latent_proc, _, _ = checkpoint(self.h_processor1,  # has skipped connections and checkpoints inside
-        #     x=x_latent_proc0,
-        #     edge_index=edge_index_proc0,
-        #     edge_attr=edge_attr_proc0,
-        #     shape_nodes=shape_h_proc,
-        #     mgroupdef=mgroupdef,
-        #     use_reentrant=False,
-        # )
-
-        # x_latent_proc = self.h_processor(  # has skipped connections and checkpoints inside
-        #     x=x_latent,
-        #     edge_index=torch.cat(
-        #         [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bs)],
-        #         dim=1,
-        #     ),
-        #     edge_attr=edge_h_to_h_latent,
-        #     shape_nodes=shape_h_proc,
-        #     mgroupdef=mgroupdef,
-        # )
-        # x_latent_proc = checkpoint(self.h_processor,  # has skipped connections and checkpoints inside
 
         x_latent_proc = self.h_processor(  # has skipped connections and checkpoints inside
             x=x_latent,
@@ -313,19 +260,8 @@ class GraphMSG(nn.Module):
             edge_attr=edge_h_to_h_latent,
             shape_nodes=shape_h_proc,
             mgroupdef=mgroupdef,
-            # use_reentrant=False,
         )
 
-        # x_latent_proc = self.h_processor(  # has skipped connections and checkpoints inside
-        #     x=x_latent,
-        #     edge_index=torch.cat(
-        #         [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bs)],
-        #         dim=1,
-        #     ),
-        #     edge_attr=edge_h_to_h_latent,
-        #     shape_nodes=shape_h_proc,
-        #     mgroupdef=mgroupdef,
-        # )
 
         # add skip connection (H -> H)
         x_latent_proc = x_latent_proc + x_latent

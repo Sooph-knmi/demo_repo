@@ -204,6 +204,7 @@ def gen_mlp(
     activation_func: str = "SiLU",
     final_activation: bool = True,
     layer_norm: bool = True,
+    cast_to_dtype: torch.dtype = torch.float16,
     checkpoints: bool = False,
 ) -> nn.Module:
     """Generate a multi-layer perceptron.
@@ -255,7 +256,23 @@ def gen_mlp(
     if layer_norm:
         mlp1.append(nn.LayerNorm(out_features))
 
+    if cast_to_dtype is not None:
+        mlp1.append(CastTensor(dtype=cast_to_dtype))
+
     return CheckpointWrapper(mlp1) if checkpoints else mlp1
+
+
+class CastTensor(nn.Module):
+    def __init__(
+        self,
+        dtype: torch.dtype,
+    ) -> None:
+        super().__init__()
+
+        self.dtype = dtype
+
+    def forward(self, x):
+        return x.to(self.dtype)
 
 
 class MessagePassingProcessorWraper(nn.Module):
@@ -572,14 +589,12 @@ class MessagePassingBlock(nn.Module):
     def forward(self, x: Union[Tensor, OptPairTensor], edge_index, edge_attr, shapes, mgroupdef, size: Size = None):
         if isinstance(x, Tensor):
             x_in = sync_tensor1(x, 0, shapes[1], mgroupdef[0])
-            # out = torch.zeros_like(x_in)
             nchunks = 1
         else:
             x_src = sync_tensor1(x[0], 0, shapes[0], mgroupdef[0])
             x_dst = sync_tensor1(x[1], 0, shapes[1], mgroupdef[0])
             x_in = (x_src, x_dst)
-            out = torch.zeros_like(x_dst)
-            nchunks = 4
+            nchunks = 8
 
         if nchunks > 1:
             edge_index_list = torch.tensor_split(edge_index, nchunks, dim=1)
@@ -587,16 +602,18 @@ class MessagePassingBlock(nn.Module):
             edges_out = []
             for i in range(nchunks):
                 out1, edges_out1 = self.conv(x_in, edge_index_list[i], edge_attr_list[i], size=size)
-                # out1, edges_out1 = checkpoint(self.conv, x_in, edge_index_list[i], edge_attr_list[i], size=size, use_reentrant=False)
                 edges_out.append(edges_out1)
-                out += out1
+                if i == 0:
+                    out = out1
+                else:
+                    out = out + out1
             edges_new = torch.cat(edges_out, dim=0)
         else:
             out, edges_new = self.conv(x_in, edge_index, edge_attr, size=size)
 
-        out = reduce_tensor1(out, mgroupdef[0])  # complete aggregation of edges
-        out = shard_tensor1(out, 0, shapes[1], mgroupdef[0])
-        # out = reduce_shard_tensor1(out, 0, shapes[1], mgroupdef[0])
+        # out = reduce_tensor1(out, mgroupdef[0])  # complete aggregation of edges
+        # out = shard_tensor1(out, 0, shapes[1], mgroupdef[0])
+        out = reduce_shard_tensor1(out, 0, shapes[1], mgroupdef[0])
 
         if isinstance(x, Tensor):
             nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x

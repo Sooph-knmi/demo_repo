@@ -17,7 +17,12 @@ from aifs.model.losses import WeightedMSELoss
 from aifs.model.msg import GraphMSG
 from aifs.train.utils import pl_scaling
 
-# from torch.autograd.graph import save_on_cpu
+from torch.distributed.optim import ZeroRedundancyOptimizer
+from torch.utils.checkpoint import checkpoint
+
+import gc
+
+from torch.autograd.graph import save_on_cpu
 
 LOGGER = get_logger(__name__)
 
@@ -89,7 +94,7 @@ class GraphForecaster(pl.LightningModule):
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
         self.multi_step = config.training.multistep_input
-        self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
+        self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate / config.hardware.group_size
         self.lr_iterations = config.training.lr.iterations
         self.lr_min = config.training.lr.min
         self.rollout = config.training.rollout.start
@@ -151,7 +156,10 @@ class GraphForecaster(pl.LightningModule):
         y_preds = []
         # with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
+
             torch.cuda.empty_cache()
+            gc.collect()
+
             if multi_gpu:
                 y_pred = self(x, self.mgroupdef)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
             else:
@@ -159,9 +167,11 @@ class GraphForecaster(pl.LightningModule):
 
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
-            loss += self.loss(y_pred, y[..., : self.fcdim])
+            # loss += self.loss(y_pred, y[..., : self.fcdim])
+            loss += checkpoint(self.loss, y_pred, y[..., : self.fcdim], use_reentrant=False)
 
-            x = self.advance_input(x, y, y_pred)
+            # x = self.advance_input(x, y, y_pred)
+            x = checkpoint(self.advance_input, x, y, y_pred, use_reentrant=False)
 
             if validation_mode:
                 for mkey, (low, high) in self.metric_ranges.items():
@@ -243,7 +253,8 @@ class GraphForecaster(pl.LightningModule):
         return val_loss, y_preds
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
+        # optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
+        optimizer = ZeroRedundancyOptimizer(self.trainer.model.parameters(), optimizer_class=torch.optim.AdamW, betas=(0.9, 0.95), lr=self.lr)
         scheduler = CosineLRScheduler(
             optimizer,
             lr_min=self.lr_min,

@@ -43,6 +43,9 @@ class DDPGroupStrategy(DDPStrategy):
             str(comms_groups_ranks[imgroup]),
         )
 
+        # register hooks for correct gradient reduction
+        self.register_parameter_hooks()
+
         # move the model to the correct device
         self.model_to_device()
 
@@ -85,3 +88,9 @@ class DDPGroupStrategy(DDPStrategy):
                 my_mgroup = mgroup
                 mgroup_rank = np.ravel(np.asarray(mgroup == rank).nonzero())[0]
         return imgroup, my_mgroup, mgroup_rank
+
+    def register_parameter_hooks(self):
+                for name, param in self.model.named_parameters():
+                    if not "trainable" in name:
+                        if param.requires_grad == True:
+                            param.register_hook(lambda grad: grad * float(self.mgroup_size))
