@@ -253,8 +253,8 @@ class GraphForecaster(pl.LightningModule):
         return val_loss, y_preds
 
     def configure_optimizers(self):
-        # optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
-        optimizer = ZeroRedundancyOptimizer(self.trainer.model.parameters(), optimizer_class=torch.optim.AdamW, betas=(0.9, 0.95), lr=self.lr)
+        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
+        # optimizer = ZeroRedundancyOptimizer(self.trainer.model.parameters(), optimizer_class=torch.optim.AdamW, betas=(0.9, 0.95), lr=self.lr)
         scheduler = CosineLRScheduler(
             optimizer,
             lr_min=self.lr_min,
