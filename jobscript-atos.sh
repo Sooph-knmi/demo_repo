@@ -23,7 +23,6 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-<<<<<<< HEAD
 export WANDB_NAME="ens-kcrps-mpar-mc"
 export WANDB_NOTES="KCRPS optimized ensemble forecasting (updated code)"
 
@@ -35,4 +34,4 @@ WORKDIR=$GITDIR
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-srun aifs-ens-train hardware=atos_slurm --config-name=ens-dmp-h4
+srun aifs-ens-train hardware=atos_slurm --config-name=ens-dmp-h4.yaml
