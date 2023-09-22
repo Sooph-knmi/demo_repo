@@ -2,7 +2,7 @@
 compile: False
 
 # resume or fork a training from a checkpoint last.ckpt or specified in hardware.files.warm_start
-run_id: a0b2321b-c16a-4db0-9ea0-25ce5ad95faf
+run_id: null # a0b2321b-c16a-4db0-9ea0-25ce5ad95faf
 fork_run_id: null
 
 # prescribe initial seed, if null generate seed
@@ -26,7 +26,7 @@ accum_grad_batches: 1
 
 # clipp gradients, 0 : don't clip, default algorithm: norm, alternative: value
 gradient_clip:
-  val: 32.
+  val: 64. #32.
   algorithm: value
 
 # stochastic weight averaging
@@ -59,8 +59,11 @@ save_top_k: -1
 lead_time: 6
 max_epochs: 200
 lr:
+  # rate: 0.000125 #0.625e-4
+  # iterations: 100000 # 600000
   rate: 0.625e-4
-  iterations: 600000
+  iterations: 150000 # 600000
+
   min: 1.5e-7 #Not scaled by #GPU
 
 loss_scaling:
