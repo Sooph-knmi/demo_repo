@@ -1,3 +1,5 @@
+import os
+import math
 from pathlib import Path
 from typing import Dict
 from typing import Mapping
@@ -17,7 +19,12 @@ from aifs.model.model import AIFSModelGNN
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
-# from torch.autograd.graph import save_on_cpu
+from torch.distributed.optim import ZeroRedundancyOptimizer
+from torch.utils.checkpoint import checkpoint
+
+import gc
+
+from torch.autograd.graph import save_on_cpu
 
 LOGGER = get_code_logger(__name__)
 
@@ -90,12 +97,14 @@ class GraphForecaster(pl.LightningModule):
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
         self.multi_step = config.training.multistep_input
-        self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
+        self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate / config.hardware.group_size
         self.lr_iterations = config.training.lr.iterations
         self.lr_min = config.training.lr.min
         self.rollout = config.training.rollout.start
         self.rollout_epoch_increment = config.training.rollout.epoch_increment
         self.rollout_max = config.training.rollout.max
+
+        self.mgroupdef = None
 
         LOGGER.debug("Rollout window length: %d", self.rollout)
         LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
@@ -104,8 +113,17 @@ class GraphForecaster(pl.LightningModule):
 
         self.enable_plot = config.diagnostics.plot.enabled
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x)
+        self.group_id = int(os.environ.get("SLURM_PROCID", "0")) // config.hardware.group_size
+        self.group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.group_size
+        self.num_groups = math.ceil(config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.group_size)
+
+    def forward(self, x: torch.Tensor, mgroupdef=(0, 1, 0)) -> torch.Tensor:
+        return self.model(x, mgroupdef)
+
+    def set_mgroupdef(self, mgroupdef, mgroupdef_single) -> None:
+        LOGGER.debug("set_mgroupdef: %s, %s", mgroupdef, mgroupdef_single)
+        self.mgroupdef = mgroupdef
+        self.mgroupdef_single = mgroupdef_single
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         x = x.roll(-1, dims=1)
@@ -120,6 +138,7 @@ class GraphForecaster(pl.LightningModule):
         batch: torch.Tensor,
         batch_idx: int,
         validation_mode: bool = False,
+        multi_gpu: bool = True,
     ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
         batch = self.model.normalizer(batch)  # normalized in-place
@@ -127,16 +146,35 @@ class GraphForecaster(pl.LightningModule):
 
         # start rollout
         x = batch[:, 0 : self.multi_step, ...]  # (bs, multi_step, latlon, nvar)
+        # LOGGER.debug(
+        #     "Batch index: %d - Global rank %d, group %d out of %d, group_rank %d got a batch tensor with norm %.8e",
+        #     batch_idx,
+        #     self.global_rank,
+        #     self.group_id,
+        #     self.num_groups,
+        #     self.group_rank,
+        #     torch.linalg.norm(x),
+        # )
 
         y_preds = []
         # with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
-            y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+
+            torch.cuda.empty_cache()
+            gc.collect()
+
+            if multi_gpu:
+                y_pred = self(x, self.mgroupdef)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+            else:
+                y_pred = self(x, self.mgroupdef_single)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
-            loss += self.loss(y_pred, y[..., : self.fcdim])
+            # loss += self.loss(y_pred, y[..., : self.fcdim])
+            loss += checkpoint(self.loss, y_pred, y[..., : self.fcdim], use_reentrant=False)
 
-            x = self.advance_input(x, y, y_pred)
+            # x = self.advance_input(x, y, y_pred)
+            x = checkpoint(self.advance_input, x, y, y_pred, use_reentrant=False)
 
             if validation_mode:
                 for mkey, (low, high) in self.metric_ranges.items():
@@ -184,7 +222,7 @@ class GraphForecaster(pl.LightningModule):
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
         with torch.no_grad():
-            val_loss, metrics, y_preds = self._step(batch, batch_idx, validation_mode=True)
+            val_loss, metrics, y_preds = self._step(batch, batch_idx, validation_mode=True, multi_gpu=False)
         self.log(
             "val_wmse",
             val_loss,
@@ -219,6 +257,7 @@ class GraphForecaster(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
+        # optimizer = ZeroRedundancyOptimizer(self.trainer.model.parameters(), optimizer_class=torch.optim.AdamW, betas=(0.9, 0.95), lr=self.lr)
         scheduler = CosineLRScheduler(
             optimizer,
             lr_min=self.lr_min,
@@ -226,3 +265,17 @@ class GraphForecaster(pl.LightningModule):
             warmup_t=1000,
         )
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
+
+
+# >>> import torch.nn as nn
+# >>> from torch.distributed.optim import ZeroRedundancyOptimizer
+# >>> from torch.nn.parallel import DistributedDataParallel as DDP
+# >>> model = nn.Sequential(*[nn.Linear(2000, 2000).to(rank) for _ in range(20)])
+# >>> ddp = DDP(model, device_ids=[rank])
+# >>> opt = ZeroRedundancyOptimizer(
+# >>>     ddp.parameters(),
+# >>>     optimizer_class=torch.optim.Adam,
+# >>>     lr=0.01
+# >>> )
+# >>> ddp(inputs).sum().backward()
+# >>> opt.step()

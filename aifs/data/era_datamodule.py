@@ -1,3 +1,4 @@
+import math
 import os
 from typing import Optional
 
@@ -34,8 +35,18 @@ class ERA5DataModule(pl.LightningDataModule):
         self.num_workers_val = config.dataloader.num_workers.validation
         self.config = config
 
-        # TODO: will this work correctly in multi-node runs?
-        self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
+        self.global_rank = int(os.environ.get("SLURM_PROCID", "0"))
+        self.group_id = self.global_rank // self.config.hardware.group_size
+        self.group_rank = self.global_rank % self.config.hardware.group_size
+        self.num_groups = math.ceil(
+            self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes / self.config.hardware.group_size
+        )
+        LOGGER.debug(
+            "Rank %d group number %d, with local group rank %d",
+            self.global_rank,
+            self.group_id,
+            self.group_rank,
+        )
 
         self.ds_train = self._get_dataset("training", shuffle=True)
 
@@ -61,8 +72,9 @@ class ERA5DataModule(pl.LightningDataModule):
             lead_time=self.config.training.lead_time,
             rollout=r,
             multistep=self.config.training.multistep_input,
-            rank=self.local_rank,
-            world_size=self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes,
+            group_rank=self.group_rank,
+            group_id=self.group_id,
+            num_groups=self.num_groups,
             shuffle=shuffle,
         )
 
@@ -94,73 +106,3 @@ class ERA5DataModule(pl.LightningDataModule):
 
     def val_dataloader(self) -> DataLoader:
         return self._get_dataloader(self.ds_valid, self.num_workers_val, self.bs_val)
-
-
-class ERA5TestDataModule(pl.LightningDataModule):
-    """ERA5 data test module for PyTorch Lightning."""
-
-    def __init__(self, config: DictConfig) -> None:
-        """Initialize ERA5 data test module.
-
-        Parameters
-        ----------
-        config : DictConfig
-            Job configuration
-        """
-        super().__init__()
-        self.bs_test = config.dataloader.batch_size.test
-        self.num_workers_test = config.dataloader.num_workers.test
-        self.config = config
-
-        # TODO: will this work correctly in multi-node runs?
-        self.local_rank = int(os.environ.get("SLURM_PROCID", "0"))
-
-        # load data used to transform input
-        ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
-        self.input_metadata = ds_tmp.attrs["climetlab"]
-        ds_tmp = None
-
-        self.ds_test = self._get_dataset("test")
-        self.ds_predict = self._get_dataset("predict")
-
-    def _get_dataset(self, stage: str) -> ERA5NativeGridDataset:
-        return ERA5NativeGridDataset(
-            fname=self._get_data_filename(stage),
-            era_data_reader=read_era_data,
-            lead_time=self.config.training.lead_time,
-            rollout=self.config.training.rollout.start,
-            multistep=self.config.training.multistep_input,
-            rank=self.local_rank,
-            world_size=self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes,
-            shuffle=False,
-        )
-
-    def _get_data_filename(self, stage: str) -> str:
-        # field_type == [pl | sfc], stage == [training | validation | test]
-        return os.path.join(
-            self.config.hardware.paths[stage],
-            self.config.hardware.files[stage],
-        )
-
-    def _get_dataloader(self, ds: ERA5NativeGridDataset, num_workers: int, batch_size: int) -> DataLoader:
-        return DataLoader(
-            ds,
-            batch_size=batch_size,
-            num_workers=num_workers,
-            pin_memory=True,
-            worker_init_fn=worker_init_func,
-            prefetch_factor=self.config.dataloader.prefetch_factor,
-            persistent_workers=False,
-        )
-
-    def train_dataloader(self) -> DataLoader:
-        raise NotImplementedError("The ERA5TestDataModule should be used for inference (test-mode) only!")
-
-    def val_dataloader(self) -> DataLoader:
-        raise NotImplementedError("The ERA5TestDataModule should be used for inference (test-mode) only!")
-
-    def test_dataloader(self) -> DataLoader:
-        return self._get_dataloader(self.ds_test, self.num_workers_test, self.bs_test)
-
-    def predict_dataloader(self) -> DataLoader:
-        return self._get_dataloader(self.ds_predict, self.num_workers_test, self.bs_test)

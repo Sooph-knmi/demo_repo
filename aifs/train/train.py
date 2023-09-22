@@ -14,6 +14,7 @@ from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.callbacks import get_callbacks
 from aifs.diagnostics.logging import get_wandb_logger
 from aifs.diagnostics.logging import get_tensorboard_logger
+from aifs.train.strategy import DDPGroupStrategy
 from aifs.train.forecaster import GraphForecaster
 from aifs.utils.logger import get_code_logger
 
@@ -143,9 +144,9 @@ class AIFSTrainer:
         LOGGER.debug("Total number of auxiliary variables: %d", self.config.data.num_aux_features)
 
         # Log learning rate multiplier when running single-node, multi-GPU and/or multi-node
-        total_gpu_count = self.config.hardware.num_nodes * self.config.hardware.num_gpus_per_node
-        LOGGER.debug("Total GPU count: %d - NB: the learning rate will be scaled by this factor!", total_gpu_count)
-        LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * self.config.training.lr.rate)
+        total_gpu_count_group_size = self.config.hardware.num_nodes * self.config.hardware.num_gpus_per_node/self.config.hardware.group_size
+        LOGGER.debug("Total GPU count / model group size: %d - NB: the learning rate will be scaled by this factor!", total_gpu_count_group_size)
+        LOGGER.debug("Effective learning rate: %.3e", total_gpu_count_group_size * self.config.training.lr.rate)
         LOGGER.debug("Rollout window length: %d", self.config.training.rollout.start)
 
     def update_paths(self) -> None:
@@ -161,7 +162,8 @@ class AIFSTrainer:
             callbacks=self.callbacks,
             deterministic=self.config.training.deterministic,
             detect_anomaly=self.config.diagnostics.debug.anomaly_detection,
-            strategy=self.config.hardware.strategy,  # we should use ddp with find_unused_parameters = False, static_graph = True
+            strategy=DDPGroupStrategy(self.config.hardware.group_size, static_graph=True),
+            #strategy=self.config.hardware.strategy,  # we should use ddp with find_unused_parameters = False, static_graph = True
             devices=self.config.hardware.num_gpus_per_node,
             num_nodes=self.config.hardware.num_nodes,
             precision=self.config.training.precision,
@@ -181,6 +183,9 @@ class AIFSTrainer:
         )
 
         trainer.fit(self.model, datamodule=self.datamodule, ckpt_path=self.last_checkpoint)
+
+        LOGGER.debug(f"memory summary: {torch.cuda.memory_summary()}")
+
         LOGGER.debug("---- DONE. ----")
 
 
