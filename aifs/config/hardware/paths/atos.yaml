@@ -1,5 +1,9 @@
-training: /lus/h2resw01/fws4/lb/project/ai-ml/zarrs/
-validation: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
+training:
+  an: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
+  ens: /ec/res4/scratch/mafp/sandbox/ecflow-data/zarr/
+validation:
+  an: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
+  ens: /ec/res4/scratch/mafp/sandbox/ecflow-data/zarr/
 test: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
 predict: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
 output: ${oc.env:SCRATCH}/aifs/${data.resolution}

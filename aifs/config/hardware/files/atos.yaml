@@ -1,7 +1,11 @@
-training: aifs-era5-${data.resolution}-1979-2015-1h.zarr
-validation: panguweather-${data.resolution}-2016-2017-6h.zarr
+training:
+  an: panguweather-${data.resolution}-1979-2015-6h.zarr
+  ens: aifs-ea-an-enda-0001-mars-${data.resolution}-1979-2015-6h-v1.zarr
+validation:
+  an: panguweather-${data.resolution}-2016-2017-6h.zarr
+  ens: aifs-ea-an-enda-0001-mars-${data.resolution}-2016-2017-6h-v1.zarr
 test: panguweather-${data.resolution}-2016-2017-6h.zarr
 predict: panguweather-${data.resolution}-2016-2017-6h.zarr
 graph: graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4_5.pt
-checkpoint: aifs-ckpt-epoch_{epoch:03d}-rollout_{rollout:.0f}-train_kcrps_{train_kcrps_epoch:.3e}
+checkpoint: aifs-ckpt-eda-epoch_{epoch:03d}-rollout_{rollout:.0f}-train_kcrps_{train_kcrps_epoch:.3e}
 warm_start: null

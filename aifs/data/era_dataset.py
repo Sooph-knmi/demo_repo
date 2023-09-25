@@ -24,6 +24,7 @@ class ERA5NativeGridDataset(IterableDataset):
     def __init__(
         self,
         fname: str,
+        fname_ens: str,
         era_data_reader: Callable,
         lead_time: int = 6,
         rollout: int = 4,
@@ -37,8 +38,8 @@ class ERA5NativeGridDataset(IterableDataset):
 
         Parameters
         ----------
-        fname : str
-            zarr file name with 2D / 3D data
+        fname, fname_ens : str
+            zarr file names with 2D / 3D data
         era_data_reader : Callable
             user function that opens and returns the zarr array data
         lead_time : int, optional
@@ -62,7 +63,10 @@ class ERA5NativeGridDataset(IterableDataset):
             Multistep value cannot be negative.
         """
         self.fname = fname
+        self.fname_ens = fname_ens
+
         self.ds: Optional[Array] = None
+        self.ds_ens: Optional[Array] = None
 
         self.lead_time = lead_time
         # Data_step should be stored in meta-data of file
@@ -114,6 +118,14 @@ class ERA5NativeGridDataset(IterableDataset):
 
         if self.ds is None:
             self.ds = self._read_era(self.fname)
+        if self.ds_ens is None:
+            self.ds_ens = self._read_era(self.fname_ens).data  # EDA ds has its data under .data
+
+        LOGGER.debug("ds.shape = %s, ds_ens.shape = %s", self.ds.shape, self.ds_ens.shape)
+
+        assert (
+            self.ds.shape[0] == self.ds_ens.shape[0]
+        ), f"The ERA5 analysis and EDA datasets have different lengths! {self.ds.shape[0]} != {self.ds_ens.shape[0]}"
 
         # Total number of valid ICs is dataset length
         # minus rollout
@@ -206,15 +218,6 @@ class ERA5NativeGridDataset(IterableDataset):
         else:
             shuffled_chunk_indices = self.chunk_index_range
 
-        # LOGGER.debug(
-        #     "Worker pid %d, global_rank %d, group %d, group_rank %d using indices[0:10]: %s",
-        #     os.getpid(),
-        #     self.global_rank,
-        #     self.group_id,
-        #     self.group_rank,
-        #     shuffled_chunk_indices[:10],
-        # )
-
         for i in shuffled_chunk_indices:
             start, end = (
                 i - (self.multi_step - 1) * self.lead_step,
@@ -222,7 +225,13 @@ class ERA5NativeGridDataset(IterableDataset):
             )
             X = self.ds[start : end : self.lead_step]
             X = rearrange(X, "r var latlon -> r latlon var")
-            yield torch.from_numpy(X)
+            start_ens, end_ens = (
+                i - (self.multi_step - 1) * self.lead_step,
+                i + self.lead_step,
+            )
+            X_ens = self.ds_ens[start_ens : end_ens : self.lead_step]
+            X_ens = rearrange(X_ens, "s var e latlon -> s latlon var e")
+            yield torch.from_numpy(X), torch.from_numpy(X_ens)
 
     def __repr__(self) -> str:
         return f"""

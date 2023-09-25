@@ -26,8 +26,8 @@ dataloader:
     training: 2
     validation: 2
   limit_batches:
-    training: 300
-    validation: 100
+    training: 100
+    validation: 50
 
 training:
   max_epochs: 2
@@ -44,9 +44,9 @@ diagnostics:
     frequency: 5
   plot:
     parameters:
-      23: t_850
-      36: u_850
-      49: v_850
+      # 23: t_850
+      # 36: u_850
+      # 49: v_850
       72: z_500
   logging:
     interval: 50
