@@ -48,6 +48,7 @@ class KernelCRPS(nn.Module):
     def forward(self, y_pred: torch.Tensor, y_target: torch.Tensor, squash: bool = True) -> torch.Tensor:
         bs_ = y_pred.shape[0]  # batch size
         kcrps_ = self._kernel_crps(y_pred, y_target, fair=self.fair)
+
         if hasattr(self, "scale"):
             kcrps_ = kcrps_ * self.scale[:, None]
         kcrps_ = kcrps_ * self.weights

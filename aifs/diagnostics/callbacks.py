@@ -73,6 +73,7 @@ class RolloutEval(Callback):
         self.eval_plot_parameters = config.diagnostics.plot.parameters
         self.rollout = config.diagnostics.eval.rollout
         self.frequency = config.diagnostics.eval.frequency
+        self.loss = config.training.loss
 
     def _eval(
         self,
@@ -108,7 +109,10 @@ class RolloutEval(Callback):
                     y_pred_group.shape[1] == pl_module.nens_per_group
                 ), f"Group ensemble shape mismatch: got {y_pred_group.shape[1]} -- expected {pl_module.nens_per_group}!"
 
-                loss += pl_module.calculate_kcrps(y_pred_group, y[..., : pl_module.fcdim])
+                if self.loss == "kcrps":
+                    loss += pl_module.calculate_kcrps(y_pred_group, y[..., : pl_module.fcdim])
+                else:
+                    loss += pl_module.calculate_energy_score(y_pred_group, y[..., : pl_module.fcdim])
 
                 # retain only my slice of the larger ensemble
                 myrange_start, myrange_end = (
@@ -149,7 +153,7 @@ class RolloutEval(Callback):
 
     def _log(self, pl_module: pl.LightningModule, loss: torch.Tensor, metrics: Dict, bs: int) -> None:
         pl_module.log(
-            f"val_r{self.rollout}_kcrps",
+            f"val_r{self.rollout}_" + self.loss,
             loss,
             on_epoch=True,
             on_step=True,
@@ -247,6 +251,7 @@ class PlotLoss(PlotCallback):
     def __init__(self, config):
         super().__init__(config)
         self.eval_frequency = 10
+        self.loss = config.training.loss
 
     def _plot(
         # self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int
@@ -262,10 +267,13 @@ class PlotLoss(PlotCallback):
             y_hat = outputs[1][rollout_step]
             y_true = batch[:, pl_module.multi_step + rollout_step, :, : pl_module.fcdim]
             LOGGER.debug("y_hat = %s, y_true = %s", y_hat.shape, y_true.shape)
+
             kcrps_: torch.Tensor = pl_module.calculate_kcrps(y_hat, y_true, squash=False)
-            LOGGER.debug("raw kcrps_.shape = %s", kcrps_.shape)
+            if self.loss == "kcrps":
+                LOGGER.debug("raw kcrps_.shape = %s", kcrps_.shape)
             kcrps_ = kcrps_.sum(dim=-1) / pl_module.kcrps.weights.sum()
-            LOGGER.debug("summed kcrps_.shape = %s", kcrps_.shape)
+            if self.loss == "kcrps":
+                LOGGER.debug("summed kcrps_.shape = %s", kcrps_.shape)
 
             fig = plot_loss(kcrps_.cpu().numpy())
             fig.tight_layout()
@@ -463,9 +471,8 @@ def get_callbacks(config: DictConfig) -> List:
     List
         A list of PyTorch Lightning callbacks
     """
-
     checkpoint_settings = dict(
-        monitor="val_kcrps_epoch",
+        monitor="val_" + config.training.loss + "_epoch",
         verbose=False,
         save_top_k=config.training.save_top_k,
         # save weights, optimizer states, LR-schedule states, hyperparameters etc.

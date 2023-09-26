@@ -14,6 +14,7 @@ from omegaconf import OmegaConf
 from timm.scheduler import CosineLRScheduler
 
 from aifs.data.scaling import pressure_level
+from aifs.losses.energy import EnergyScore
 from aifs.losses.kcrps import KernelCRPS
 from aifs.losses.wmse import WeightedMSELoss
 from aifs.metrics.ranks import RankHistogram
@@ -63,6 +64,7 @@ class GraphForecaster(pl.LightningModule):
 
         self.logger_enabled = config.diagnostics.log.wandb.enabled
 
+        self.loss = config.training.loss
         loss_scaling = np.array([], dtype=np.float32)
         for pl_name in config.data.pl.parameters:
             if pl_name in config.training.loss_scaling.pl:
@@ -82,7 +84,13 @@ class GraphForecaster(pl.LightningModule):
         loss_scaling = torch.from_numpy(loss_scaling)
 
         # Loss function
-        self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=loss_scaling)
+        if self.loss == "kcrps":
+            self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=loss_scaling)
+        elif self.loss == "energy":
+            self.energy_score = EnergyScore(area_weights=self.era_weights, loss_scaling=loss_scaling)
+            self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=loss_scaling)
+        else:
+            raise ValueError("No probabilistic training loss implemented")
 
         self.metric_ranges = {}
         for i, key in enumerate(config.data.pl.parameters):
@@ -139,6 +147,24 @@ class GraphForecaster(pl.LightningModule):
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
         return self.kcrps(y_pred, y_target, squash=squash)
 
+    def calculate_energy_score(self, y_pred: torch.Tensor, y_target: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+        """Rearranges the prediction and ground truth tensors and then compute the
+        Energy score loss.
+
+        Args:
+            y_pred (torch.Tensor): predictions
+            y_target (torch.Tensor): target
+            beta: beta exponent for the energy loss (beta = 1.0 yields the CRPS of the ensemble distribution)
+
+        Returns:
+            torch.Tensor: energy score loss
+        """
+
+        y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs e v latlon", e=self.nens_per_group)
+        y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
+
+        return self.energy_score(y_pred, y_target, beta)
+
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         # left-shift along the step dimension
         x = x.roll(-1, dims=2)
@@ -176,7 +202,10 @@ class GraphForecaster(pl.LightningModule):
             LOGGER.debug("Shape of y_pred tensor after gather: y_pred_group.shape = %s", y_pred_group.shape)
 
             # loss calculated over the group ensemble (size = self.nens_per_group)
-            loss += self.calculate_kcrps(y_pred_group, y[..., : self.fcdim])
+            if self.loss == "kcrps":
+                loss += self.calculate_kcrps(y_pred_group, y[..., : self.fcdim])
+            elif self.loss == "energy":
+                loss += self.calculate_energy_score(y_pred_group, y[..., : self.fcdim])
 
             # retain only my slice of the larger ensemble
             # this is needed to make sure the gradients flow correctly during backward()
@@ -208,7 +237,7 @@ class GraphForecaster(pl.LightningModule):
         del batch_idx  # not used
         train_loss, _, _, _ = self._step(batch)
         self.log(
-            "train_kcrps",
+            "train_" + self.loss,
             train_loss,
             on_epoch=True,
             on_step=True,
@@ -241,7 +270,7 @@ class GraphForecaster(pl.LightningModule):
         with torch.no_grad():
             val_loss, metrics, y_preds, pkcrps = self._step(batch, validation_mode=True)
         self.log(
-            "val_kcrps",
+            "val_" + self.loss,
             val_loss,
             on_epoch=True,
             on_step=True,

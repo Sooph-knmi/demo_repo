@@ -26,9 +26,10 @@ class EnergyScore(nn.Module):
         Returns:
             The energy score loss.
         """
-        m = preds.shape[-1]  # ensemble size
 
-        preds = einops.rearrange(preds, "bs v latlon m -> bs m (latlon v)")
+        m = preds.shape[1]  # ensemble size
+
+        preds = einops.rearrange(preds, "bs m v latlon -> bs m (latlon v)")
         target = einops.rearrange(target, "bs v latlon -> bs (latlon v)")
 
         score_a = (1.0 / m) * torch.mean(
@@ -56,6 +57,6 @@ class EnergyScore(nn.Module):
         return score_a - score_b
 
     def forward(self, preds: torch.Tensor, target: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
-        preds = (preds * self.scale[:, None]) * self.weights
-        target = (target * self.scale[:, None]) * self.weights
+        preds = (preds * self.scale[None, None, :, None]) * self.weights
+        target = (target * self.scale[None, :, None]) * self.weights
         return self._energy_score(preds, target, beta)
