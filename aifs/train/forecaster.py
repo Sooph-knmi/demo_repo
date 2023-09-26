@@ -207,7 +207,7 @@ class GraphForecaster(pl.LightningModule):
         return val_loss, y_preds
 
     def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
-        batch = self.normalizer(batch, in_place=False)
+        batch = self.normalizer(batch) #, in_place=False)
 
         with torch.no_grad():
             x = batch[:, 0 : self.multi_step, ...]
