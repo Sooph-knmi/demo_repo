@@ -187,6 +187,20 @@ class GATEncoder(nn.Module):
         return self.encoder(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
 
+class AutocastLayerNorm(nn.LayerNorm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward with explicit autocast to the input type.
+
+        This casts the output to (b)float16 (instead of float32) when we run in mixed
+        precision.
+        """
+        t = x.dtype
+        return super().forward(x).to(dtype=t)
+
+
 def gen_mlp(
     in_features: int,
     hidden_dim: int,
@@ -244,7 +258,7 @@ def gen_mlp(
         mlp1.append(act_func())
 
     if layer_norm:
-        mlp1.append(nn.LayerNorm(out_features))
+        mlp1.append(AutocastLayerNorm(out_features))
 
     return CheckpointWrapper(mlp1) if checkpoints else mlp1
 
