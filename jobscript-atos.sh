@@ -23,7 +23,7 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="ens-energy-mpar-mc"
+export WANDB_NAME="ens-patched-energy-mpar-mc"
 export WANDB_NOTES="Energy score optimized ensemble forecasting"
 
 
@@ -35,4 +35,5 @@ WORKDIR=$GITDIR
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
+wandb online
 srun aifs-ens-train hardware=atos_slurm --config-name=ens-dmp-h4.yaml

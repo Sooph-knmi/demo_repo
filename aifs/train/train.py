@@ -189,7 +189,6 @@ class AIFSTrainer:
             use_distributed_sampler=False,
             profiler=self.profiler,
         )
-
         trainer.fit(self.model, datamodule=self.datamodule, ckpt_path=self.last_checkpoint)
         LOGGER.debug("---- DONE. ----")
 

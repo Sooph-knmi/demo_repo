@@ -15,6 +15,7 @@ from timm.scheduler import CosineLRScheduler
 
 from aifs.data.scaling import pressure_level
 from aifs.losses.energy import EnergyScore
+from aifs.losses.energy import PatchedEnergyScore
 from aifs.losses.kcrps import KernelCRPS
 from aifs.losses.wmse import WeightedMSELoss
 from aifs.metrics.ranks import RankHistogram
@@ -88,6 +89,9 @@ class GraphForecaster(pl.LightningModule):
             self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=loss_scaling)
         elif self.loss == "energy":
             self.energy_score = EnergyScore(area_weights=self.era_weights, loss_scaling=loss_scaling)
+            self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=loss_scaling)
+        elif self.loss == "patched_energy":
+            self.energy_score = PatchedEnergyScore(area_weights=self.era_weights, loss_scaling=loss_scaling)
             self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=loss_scaling)
         else:
             raise ValueError("No probabilistic training loss implemented")
@@ -163,7 +167,9 @@ class GraphForecaster(pl.LightningModule):
         y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs e v latlon", e=self.nens_per_group)
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
 
-        return self.energy_score(y_pred, y_target, beta)
+        graph_data = self.graph_data
+
+        return self.energy_score(y_pred, y_target, graph_data, beta)
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         # left-shift along the step dimension
@@ -206,6 +212,10 @@ class GraphForecaster(pl.LightningModule):
                 loss += self.calculate_kcrps(y_pred_group, y[..., : self.fcdim])
             elif self.loss == "energy":
                 loss += self.calculate_energy_score(y_pred_group, y[..., : self.fcdim])
+            elif self.loss == "patched_energy":
+                loss += self.calculate_energy_score(y_pred_group, y[..., : self.fcdim])
+            else:
+                raise ValueError("No probabilistic training loss implemented")
 
             # retain only my slice of the larger ensemble
             # this is needed to make sure the gradients flow correctly during backward()
