@@ -2,13 +2,13 @@
 
 #SBATCH --account=ecaifs
 #SBATCH --qos=ng
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=2
-#SBATCH --gpus-per-node=2
+#SBATCH --nodes=2
+#SBATCH --ntasks-per-node=4
+#SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
-#SBATCH --time=00:20:00
-#SBATCH --output=ens-kcrps-mp-h4-test-eda.out.%j
+#SBATCH --time=48:00:00
+#SBATCH --output=ens-kcrps-mp-h5-eda.out.%j
 
 # debugging flags (optional)
 # export NCCL_DEBUG=INFO
@@ -24,15 +24,15 @@ export HYDRA_FULL_ERROR=1
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="ens-kcrps-mpar-test-eda"
-export WANDB_NOTES="KCRPS ensemble - testing ERA5 EDA ICs"
+export WANDB_NAME="ens-kcrps-mpar-h5-eda"
+export WANDB_NOTES="KCRPS ensemble - ERA5 EDA ICs"
 
 # generic settings
-CONDA_ENV=aifs-dev
-GITDIR=/home/syma/GNN/gnn-era5.git
+CONDA_ENV=aifs-eda-dev
+GITDIR=/home/syma/GNN/aifs-temp/aifs-mono
 WORKDIR=$GITDIR
 
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-srun aifs-ens-train hardware=atos_slurm --config-name=ens-dmp-h4
+srun aifs-ens-train hardware=atos_slurm --config-name=ens-dmp-h5
