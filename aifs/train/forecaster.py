@@ -8,6 +8,9 @@ import einops
 import numpy as np
 import pytorch_lightning as pl
 import torch
+
+from torch.utils.checkpoint import checkpoint
+
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from timm.scheduler import CosineLRScheduler
@@ -141,6 +144,18 @@ class GraphForecaster(pl.LightningModule):
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
         return self.kcrps(y_pred, y_target, squash=squash)
 
+    def gather_calc_kcrps(self, y_pred: torch.Tensor, y: torch.Tensor):
+        # if this is checkpointed then the full ens size is only materialised inside the checkpoint and hopefully won't eat up memory when rolling out ; cost is more communication. 
+        y_pred_group = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.mgroupdef[1], mgroup=self.mgroupdef[0])
+        assert (
+            y_pred_group.shape[1] == self.nens_per_group
+        ), f"Group ensemble shape mismatch: got {y_pred_group.shape[1]} -- expected {self.nens_per_group}!"
+
+        loss_inc = self.calculate_kcrps(y_pred_group, y[..., : self.fcdim])
+        y_pred = scatter_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.mgroupdef[1], mgroup=self.mgroupdef[0]) # scatter_tensor should be in my distributed ... keep only what is relevant for this rank
+
+        return y_pred, loss_inc
+
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         # left-shift along the step dimension
         x = x.roll(-1, dims=2)
@@ -208,19 +223,21 @@ class GraphForecaster(pl.LightningModule):
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
 
             # gather all predictions from the device group, along the ensemble dim
-            y_pred_group = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.mgroupdef[1], mgroup=self.mgroupdef[0])
-            assert (
-                y_pred_group.shape[1] == self.nens_per_group
-            ), f"Group ensemble shape mismatch: got {y_pred_group.shape[1]} -- expected {self.nens_per_group}!"
+            # y_pred_group = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.mgroupdef[1], mgroup=self.mgroupdef[0])
+            # assert (
+            #     y_pred_group.shape[1] == self.nens_per_group
+            # ), f"Group ensemble shape mismatch: got {y_pred_group.shape[1]} -- expected {self.nens_per_group}!"
 
             # loss calculated over the group ensemble (size = self.nens_per_group)
-            loss += self.calculate_kcrps(y_pred_group, y[..., : self.fcdim])
+            # loss += self.calculate_kcrps(y_pred_group, y[..., : self.fcdim])
+            y_pred, loss_inc = checkpoint(self.gather_calc_kcrps,y_pred, y, use_reentrant=False)
+            loss += loss_inc
 
             # retain only my slice of the larger ensemble
             # this is needed to make sure the gradients flow correctly during backward()
             myrange_start, myrange_end = self.mgroupdef[2] * self.nens_per_device, (self.mgroupdef[2] + 1) * self.nens_per_device
-            y_pred = y_pred_group[:, myrange_start:myrange_end, ...]
-            x = self.advance_input(x, y, y_pred)
+            # y_pred = y_pred_group[:, myrange_start:myrange_end, ...] ; I don't think this is required
+            x = checkpoint(self.advance_input, x, y, y_pred, use_reentrant=False)
 
             if validation_mode:
                 # rank histograms - update metric state
