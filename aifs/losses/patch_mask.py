@@ -41,9 +41,9 @@ hcoords_sp = np.deg2rad(hcoords)
 mask_list = eneigh.radius_neighbors_graph(hcoords_sp, mode="connectivity").tocoo()
 mask_list_arr = mask_list.toarray()
 
-graph_data["patches"] = torch.tensor(mask_list_arr)
+# graph_data["patches"] = torch.tensor(mask_list_arr, device = "cuda")
 
-torch.save(graph_data, graph_path + "patches_" + graph_name)
+# torch.save(graph_data, graph_path + "patches_" + graph_name)
 
 print("Check all nodes used")
 print(mask_list.toarray().sum(axis=0).min())

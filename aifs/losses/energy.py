@@ -1,6 +1,7 @@
 from typing import Optional
 
 import einops
+import numpy as np
 import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
@@ -70,6 +71,17 @@ class EnergyScore(nn.Module):
 
 
 class PatchedEnergyScore(EnergyScore):
+    def __init__(self, area_weights: torch.Tensor, loss_scaling: Optional[torch.Tensor] = None) -> None:
+        """Energy score."""
+        super().__init__(area_weights, loss_scaling)
+        self.register_buffer("weights", area_weights, persistent=True)
+
+        if loss_scaling is not None:
+            self.register_buffer("scale", loss_scaling, persistent=True)
+
+        patches = np.load("aifs/losses/patches_o96.npy")
+        self.register_buffer("patches", torch.Tensor(patches), persistent=True)
+
     def mask_score(self, index, masks, preds, target, beta):
         mask = masks[index].to(device="cuda")
         preds_masked_reshape = einops.rearrange(preds * mask, "bs m v latlon -> bs m (latlon v)")
@@ -80,7 +92,7 @@ class PatchedEnergyScore(EnergyScore):
     def _patched_energy_score(self, preds: torch.Tensor, target: torch.Tensor, graph_data: data, beta: float = 1.0) -> torch.Tensor:
         preds.shape[1]  # ensemble size
 
-        masks = graph_data["patches"]
+        masks = self.patches
 
         energy_score = 0
 

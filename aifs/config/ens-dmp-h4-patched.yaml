@@ -15,7 +15,7 @@ defaults:
 
 hardware:
   files:
-    graph: patches_graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4.pt
+    graph: graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4.pt
     training: panguweather-${data.resolution}-1979-2015-6h.zarr
   paths:
     training: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
