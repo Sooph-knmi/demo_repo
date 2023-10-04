@@ -3,6 +3,7 @@ from typing import Optional
 import einops
 import torch
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 from torch_geometric import data
 
 
@@ -69,6 +70,13 @@ class EnergyScore(nn.Module):
 
 
 class PatchedEnergyScore(EnergyScore):
+    def mask_score(self, index, masks, preds, target, beta):
+        mask = masks[index].to(device="cuda")
+        preds_masked_reshape = einops.rearrange(preds * mask, "bs m v latlon -> bs m (latlon v)")
+        target_masked_reshape = einops.rearrange(target * mask, "bs v latlon -> bs (latlon v)")
+
+        return self._calc_energy_score(preds_masked_reshape, target_masked_reshape, beta)
+
     def _patched_energy_score(self, preds: torch.Tensor, target: torch.Tensor, graph_data: data, beta: float = 1.0) -> torch.Tensor:
         preds.shape[1]  # ensemble size
 
@@ -76,17 +84,10 @@ class PatchedEnergyScore(EnergyScore):
 
         energy_score = 0
 
-        for i in range(masks.shape[0]):
-            print(i)
-            mask = masks[i].to(device="cuda")
+        for index in range(masks.shape[0]):
+            energy_value = checkpoint(self.mask_score, index, masks, preds, target, beta, use_reentrant=False)
 
-            preds_masked_reshape = einops.rearrange(preds * mask, "bs m v latlon -> bs m (latlon v)")
-            target_masked_reshape = einops.rearrange(target * mask, "bs v latlon -> bs (latlon v)")
-
-            energy_score += self._calc_energy_score(preds_masked_reshape, target_masked_reshape, beta)
-
-            del preds_masked_reshape
-            del target_masked_reshape
+            energy_score += energy_value
 
         return energy_score
 

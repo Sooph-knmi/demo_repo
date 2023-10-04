@@ -26,8 +26,8 @@ model:
 
 dataloader:
   batch_size:
-    training: 2
-    validation: 2
+    training: 4
+    validation: 4
   limit_batches:
     training: 4000
     validation: null # no limit
