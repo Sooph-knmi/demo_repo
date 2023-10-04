@@ -83,7 +83,7 @@ class PatchedEnergyScore(EnergyScore):
         self.register_buffer("patches", torch.Tensor(patches), persistent=True)
 
     def mask_score(self, index, masks, preds, target, beta):
-        mask = masks[index].to(device="cuda")
+        mask = masks[index]  # .to(device="cuda")
         preds_masked_reshape = einops.rearrange(preds * mask, "bs m v latlon -> bs m (latlon v)")
         target_masked_reshape = einops.rearrange(target * mask, "bs v latlon -> bs (latlon v)")
 
