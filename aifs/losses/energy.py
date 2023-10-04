@@ -77,13 +77,17 @@ class PatchedEnergyScore(EnergyScore):
         energy_score = 0
 
         for i in range(masks.shape[0]):
+            print(i)
             mask = masks[i].to(device="cuda")
-            pred_masked = preds * mask
-            target_masked = target * mask
-            preds_masked_reshape = einops.rearrange(pred_masked, "bs m v latlon -> bs m (latlon v)")
-            target_masked_reshape = einops.rearrange(target_masked, "bs v latlon -> bs (latlon v)")
+
+            preds_masked_reshape = einops.rearrange(preds * mask, "bs m v latlon -> bs m (latlon v)")
+            target_masked_reshape = einops.rearrange(target * mask, "bs v latlon -> bs (latlon v)")
 
             energy_score += self._calc_energy_score(preds_masked_reshape, target_masked_reshape, beta)
+
+            del preds_masked_reshape
+            del target_masked_reshape
+
         return energy_score
 
     def forward(self, preds: torch.Tensor, target: torch.Tensor, graph_data: data, beta: float = 1.0) -> torch.Tensor:
