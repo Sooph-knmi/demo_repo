@@ -32,6 +32,9 @@ swa:
   enabled: False
   lr: 1.e-4
 
+# use ZeroRedundancyOptimizer ; saves memory for larger models
+zero_opt: False
+
 # dynamic rescaling of the loss gradient
 # see https://arxiv.org/pdf/2306.06079.pdf, section 4.3.2
 # don't enable this by default until it's been tested and proven beneficial

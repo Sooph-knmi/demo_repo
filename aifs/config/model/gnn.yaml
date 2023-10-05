@@ -6,13 +6,14 @@ mlp:
   extra_layers: 1
 
 encoder:
-  num_layers: 1
+  nchunks: 8
 
 decoder:
-  num_layers: 1
+  nchunks: 8
 
-hidden:
+processor:
   num_layers: 16
+  chunks: 2
 
 trainable_parameters:
   era: 8

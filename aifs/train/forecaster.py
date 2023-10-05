@@ -104,7 +104,10 @@ class GraphForecaster(pl.LightningModule):
         self.rollout_epoch_increment = config.training.rollout.epoch_increment
         self.rollout_max = config.training.rollout.max
 
-        self.mgroupdef = None
+        self.use_zero_opt = config.training.zero_opt
+
+        self.mgroup = None
+        self.mgroup_single = None
 
         LOGGER.debug("Rollout window length: %d", self.rollout)
         LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
@@ -117,13 +120,13 @@ class GraphForecaster(pl.LightningModule):
         self.group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.group_size
         self.num_groups = math.ceil(config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.group_size)
 
-    def forward(self, x: torch.Tensor, mgroupdef=(0, 1, 0)) -> torch.Tensor:
-        return self.model(x, mgroupdef)
+    def forward(self, x: torch.Tensor, mgroup=0) -> torch.Tensor:
+        return self.model(x, mgroup)
 
-    def set_mgroupdef(self, mgroupdef, mgroupdef_single) -> None:
-        LOGGER.debug("set_mgroupdef: %s, %s", mgroupdef, mgroupdef_single)
-        self.mgroupdef = mgroupdef
-        self.mgroupdef_single = mgroupdef_single
+    def set_mgroups(self, mgroup, mgroup_single) -> None:
+        LOGGER.debug("set_mgroup: %s, %s", mgroup, mgroup_single)
+        self.mgroup = mgroup
+        self.mgroup_single = mgroup_single
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         x = x.roll(-1, dims=1)
@@ -164,9 +167,9 @@ class GraphForecaster(pl.LightningModule):
             gc.collect()
 
             if multi_gpu:
-                y_pred = self(x, self.mgroupdef)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+                y_pred = self(x, self.mgroup)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
             else:
-                y_pred = self(x, self.mgroupdef_single)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+                y_pred = self(x, self.mgroup_single)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
 
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
@@ -256,8 +259,11 @@ class GraphForecaster(pl.LightningModule):
         return self.normalizer.denormalize(y_hat, in_place=False)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
-        # optimizer = ZeroRedundancyOptimizer(self.trainer.model.parameters(), optimizer_class=torch.optim.AdamW, betas=(0.9, 0.95), lr=self.lr)
+        if self.use_zero_opt:
+            optimizer = ZeroRedundancyOptimizer(self.trainer.model.parameters(), optimizer_class=torch.optim.AdamW, betas=(0.9, 0.95), lr=self.lr)
+        else:
+            optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
+
         scheduler = CosineLRScheduler(
             optimizer,
             lr_min=self.lr_min,
@@ -265,17 +271,3 @@ class GraphForecaster(pl.LightningModule):
             warmup_t=1000,
         )
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
-
-
-# >>> import torch.nn as nn
-# >>> from torch.distributed.optim import ZeroRedundancyOptimizer
-# >>> from torch.nn.parallel import DistributedDataParallel as DDP
-# >>> model = nn.Sequential(*[nn.Linear(2000, 2000).to(rank) for _ in range(20)])
-# >>> ddp = DDP(model, device_ids=[rank])
-# >>> opt = ZeroRedundancyOptimizer(
-# >>>     ddp.parameters(),
-# >>>     optimizer_class=torch.optim.Adam,
-# >>>     lr=0.01
-# >>> )
-# >>> ddp(inputs).sum().backward()
-# >>> opt.step()

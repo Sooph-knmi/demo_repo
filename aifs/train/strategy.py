@@ -32,7 +32,7 @@ class DDPGroupStrategy(DDPStrategy):
 
         imgroup, my_mgroup, my_mgroup_rank = self.get_my_mgroup(world_size, my_rank, self.mgroup_size)
         comms_group = comms_groups[imgroup]
-        self.model.set_mgroupdef((comms_group, len(my_mgroup), my_mgroup_rank), (comms_groups_single[my_rank], 1, 0))
+        self.model.set_mgroups(comms_group, comms_groups_single[my_rank])
         LOGGER.debug(
             "Rank %d mgroup is %s, group number %d, with local group rank %d and comms_group_ranks %s",
             my_rank,

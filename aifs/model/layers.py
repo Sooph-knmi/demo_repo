@@ -29,6 +29,471 @@ from aifs.utils.logger import get_code_logger
 LOGGER = get_code_logger(__name__)
 
 
+def gen_mlp(
+    in_features: int,
+    hidden_dim: int,
+    out_features: int,
+    n_extra_layers: int = 0,
+    activation_func: str = "SiLU",
+    final_activation: bool = False,
+    layer_norm: bool = True,
+    cast_to_dtype: torch.dtype = torch.float16,
+    checkpoints: bool = False,
+) -> nn.Module:
+    """Generate a multi-layer perceptron.
+
+    Parameters
+    ----------
+    in_features : int
+        Number of input features
+    hidden_dim : int
+        Hidden dimensions
+    out_features : int
+        Number of output features
+    n_extra_layers : int, optional
+        Number of extra layers in MLP, by default 0
+    activation_func : str, optional
+        Activation function, by default "SiLU"
+    final_activation : bool, optional
+        Whether to apply a final activation function to last layer, by default True
+    layer_norm : bool, optional
+        Whether to apply layer norm after activation, by default True
+    cast_to_dtype : torch.dtype, by default torch.float16
+        Cast manually to dtype after layer norms (amp casts to float32)
+    checkpoints : bool, optional
+        Whether to provide checkpoints, by default False
+
+    Returns
+    -------
+    nn.Module
+        Returns a MLP module
+
+    Raises
+    ------
+    RuntimeError
+        If activation function is not supported
+    """
+    try:
+        act_func = getattr(nn, activation_func)
+    except AttributeError as ae:
+        LOGGER.error("Activation function %s not supported", activation_func)
+        raise RuntimeError from ae
+
+    mlp1 = nn.Sequential(nn.Linear(in_features, hidden_dim), act_func())
+    for _ in range(n_extra_layers):
+        mlp1.append(nn.Linear(hidden_dim, hidden_dim))
+        mlp1.append(act_func())
+    mlp1.append(nn.Linear(hidden_dim, out_features))
+
+    if final_activation:
+        mlp1.append(act_func())
+
+    if layer_norm:
+        mlp1.append(nn.LayerNorm(out_features))
+
+    if cast_to_dtype is not None:
+        mlp1.append(CastTensor(dtype=cast_to_dtype))
+
+    return CheckpointWrapper(mlp1) if checkpoints else mlp1
+
+
+class CastTensor(nn.Module):
+    """Cast manually to torch.dtype"""
+
+    def __init__(
+        self,
+        dtype: torch.dtype,
+    ) -> None:
+        super().__init__()
+
+        self.dtype = dtype
+
+    def forward(self, x):
+        return x.to(self.dtype)
+
+
+class MessagePassingProcessor(nn.Module):
+    """Message Passing Processor Graph Neural Network."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        hidden_layers: int,
+        edge_dim: int,
+        chunks: int = 2,
+        mlp_extra_layers: int = 0,
+        activation: str = "SiLU",
+        cpu_offload: bool = False,
+    ) -> None:
+        """Initialize MessagePassingProcessor.
+
+        Parameters
+        ----------
+        hidden_dim : int
+            Hidden dimension
+        hidden_layers : int
+            Number of hidden layers
+        edge_dim : int
+            Input features of edge MLP
+        chunks : int, optional
+            Number of chunks, by default 2
+        mlp_extra_layers : int, optional
+            Number of extra layers in MLP, by default 0
+        activation : str, optional
+            Activation funciton, by default "SiLU"
+        cpu_offload : bool, optional
+            Whether to offload processing to CPU, by default False
+        """
+        super().__init__()
+
+        self.hidden_layers = chunks
+        chunk_size = int(hidden_layers / chunks)
+        assert hidden_layers % chunks == 0
+
+        self.proc = nn.ModuleList()
+        for i in range(self.hidden_layers):
+
+            kwargs = {"emb_edges" : True, "edge_dim" : edge_dim} if i == 0 else {}
+            self.proc.append(
+                MessagePassingProcessorChunk(
+                    hidden_dim, hidden_layers=chunk_size, mlp_extra_layers=mlp_extra_layers, activation=activation, **kwargs
+                )
+            )
+
+        if cpu_offload:
+            self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
+
+    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes, mgroup) -> Tensor:
+        shapes_edge_idx = get_shape_shards1(edge_index, 1, mgroup)
+        shapes_edge_attr = get_shape_shards1(edge_attr, 0, mgroup)
+        edge_index = shard_tensor1(edge_index, 1, shapes_edge_idx, mgroup)
+        edge_attr = shard_tensor1(edge_attr, 0, shapes_edge_attr, mgroup)
+
+        for i in range(self.hidden_layers):
+            x, edge_attr = checkpoint(self.proc[i], x, edge_index, edge_attr, (shape_nodes, shape_nodes), mgroup, use_reentrant=False)
+
+        return x
+
+
+class MessagePassingProcessorChunk(nn.Module):
+    """Wraps edge embedding and X message passing blocks for checkpointing in Processor."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        hidden_layers: int,
+        mlp_extra_layers: int = 0,
+        activation: str = "SiLU",
+        emb_edges: bool = False,
+        edge_dim: int = 3,
+    ) -> None:
+        """Initialize MessagePassingProcessorChunk.
+
+        Parameters
+        ----------
+        hidden_dim : int
+            Hidden dimention of the message passing blocks.
+        hidden_layers : int
+            Number of message passing blocks.
+        mlp_extra_layers : int, optional
+            Extra layers in MLP, by default 0
+        activation : str, optional
+            Activation function, by default "SiLU"
+        emb_edges : bool, by default False,
+        edge_dim: int, by default 3, only used if emb_edges = True
+
+        """
+        super().__init__()
+
+        self.hidden_layers = hidden_layers
+        self.emb_edges = emb_edges
+
+        if self.emb_edges:
+            self.emb_edges = gen_mlp(
+                in_features=edge_dim,
+                hidden_dim=hidden_dim,
+                out_features=hidden_dim,
+                n_extra_layers=mlp_extra_layers,
+                activation_func=activation,
+            )
+
+        self.proc = nn.ModuleList(
+            [
+                GNNBlock(hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation)
+                for _ in range(self.hidden_layers)
+            ]
+        )
+
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index, edge_attr, shapes, mgroup, size: Size = None):
+
+        if self.emb_edges:
+            edge_attr = self.emb_edges(edge_attr)
+
+        for i in range(self.hidden_layers):
+            x, edge_attr = self.proc[i](x, edge_index, edge_attr, shapes, mgroup, size=size)
+
+        return x, edge_attr
+
+
+class MessagePassingMapper(nn.Module):
+    """Mapper from h -> era or era -> h."""
+
+    def __init__(
+        self,
+        in_channels_src: int,
+        in_channels_dst: int,
+        hidden_dim: int,
+        edge_dim: int,
+        mlp_extra_layers: int = 0,
+        activation: str = "SiLU",
+        nchunks: int = 1,
+        cpu_offload: bool = False,
+        backward_mapper: bool = False,
+        out_channels_dst: Optional[int] = None,
+    ) -> None:
+        """Initialize the mapper.
+
+        Parameters
+        ----------
+        in_channels_src : int
+            Input channels of the source node
+        in_channels_dst : int
+            Input channels of the destination node
+        backward_mapper : bool, optional
+            Map from (true) hidden to era or (false) reverse, by default False
+        out_channels_dst : Optional[int], optional
+            Output channels of the destination node, by default None
+        nchunks : do message passing in X chunks
+        """
+        super().__init__()
+
+        self.hidden_dim = hidden_dim
+        self.backward_mapper = backward_mapper
+        self.out_channels_dst = out_channels_dst
+
+        self.emb_edges = gen_mlp(
+            in_features=edge_dim,
+            hidden_dim=hidden_dim,
+            out_features=hidden_dim,
+            n_extra_layers=mlp_extra_layers,
+            activation_func=activation,
+        )
+
+        update_src_nodes = False if backward_mapper else True
+        self.proc = GNNBlock(hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation, update_src_nodes=update_src_nodes, nchunks=nchunks)
+
+        if cpu_offload:
+            self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
+
+        if backward_mapper:  # h -> era
+            self.node_era_extractor = gen_mlp(
+                in_features=hidden_dim,
+                hidden_dim=hidden_dim,
+                out_features=out_channels_dst,
+                n_extra_layers=mlp_extra_layers,
+                activation_func=activation,
+                layer_norm=False,
+                final_activation=False,
+            )
+        else:  # era -> h
+            self.emb_nodes_src = gen_mlp(
+                in_features=in_channels_src,
+                hidden_dim=hidden_dim,
+                out_features=hidden_dim,
+                n_extra_layers=mlp_extra_layers,
+                activation_func=activation,
+            )
+
+            self.emb_nodes_dst = gen_mlp(
+                in_features=in_channels_dst,
+                hidden_dim=hidden_dim,
+                out_features=hidden_dim,
+                n_extra_layers=mlp_extra_layers,
+                activation_func=activation,
+            )
+
+    def forward(self, x: PairTensor, edge_index: Adj, edge_attr: Tensor, shape_nodes, size, mgroup) -> PairTensor:
+        shapes_edge_idx = get_shape_shards1(edge_index, 1, mgroup)
+        shapes_edge_attr = get_shape_shards1(edge_attr, 0, mgroup)
+        edge_index = shard_tensor1(edge_index, 1, shapes_edge_idx, mgroup)
+        edge_attr = shard_tensor1(edge_attr, 0, shapes_edge_attr, mgroup)
+        edge_attr = self.emb_edges(edge_attr)
+
+        x_src, x_dst = x
+        shapes_src, shapes_dst = shape_nodes
+
+        if not self.backward_mapper:
+            x_src = shard_tensor1(x_src, 0, shapes_src, mgroup)
+            x_dst = shard_tensor1(x_dst, 0, shapes_dst, mgroup)
+            x_src = self.emb_nodes_src(x_src)
+            x_dst = self.emb_nodes_dst(x_dst)
+            shapes_src = change_channels_in_shape1(shapes_src, self.hidden_dim)
+            shapes_dst = change_channels_in_shape1(shapes_dst, self.hidden_dim)
+
+        (x_src, x_dst), edge_attr = self.proc(
+            (x_src, x_dst), edge_index, edge_attr, (shapes_src, shapes_dst), mgroup, size=size
+        )
+
+        if self.backward_mapper:
+            x_dst = self.node_era_extractor(x_dst)
+            x_dst = gather_tensor1(x_dst, 0, change_channels_in_shape1(shapes_dst, self.out_channels_dst), mgroup)
+
+        return x_src, x_dst
+
+
+class GNNBlock(nn.Module):
+    """Message passing block with MLPs for node embeddings."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        mlp_extra_layers: int = 0,
+        activation: str = "SiLU",
+        update_src_nodes: bool = True,
+        nchunks: int = 1,
+        **kwargs,
+    ) -> None:
+        """Initialize GNNBlock.
+
+        Parameters
+        ----------
+        in_channels : int
+            Number of input channels.
+        out_channels : int
+            Number of output channels.
+        mlp_extra_layers : int, optional
+            Extra layers in MLP, by default 0
+        activation : str, optional
+            Activation function, by default "SiLU"
+        update_src_nodes: bool, by default True
+            Update src if src and dst nodes are given
+        nchunks : int, by default 1
+            do message passing in X chunks
+        """
+        super().__init__(**kwargs)
+
+        self.update_src_nodes = update_src_nodes
+        self.nchunks = nchunks
+
+        self.node_mlp = gen_mlp(
+            2 * in_channels,
+            out_channels,
+            out_channels,
+            n_extra_layers=mlp_extra_layers,
+            activation_func=activation,
+        )
+
+        self.conv = NodeEdgeInteractions(
+            in_channels=in_channels, out_channels=out_channels, mlp_extra_layers=mlp_extra_layers, activation=activation
+        )
+
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index, edge_attr, shapes, mgroup, size: Size = None):
+        if isinstance(x, Tensor):
+            x_in = sync_tensor1(x, 0, shapes[1], mgroup)
+        else:
+            x_src = sync_tensor1(x[0], 0, shapes[0], mgroup)
+            x_dst = sync_tensor1(x[1], 0, shapes[1], mgroup)
+            x_in = (x_src, x_dst)
+
+        if self.nchunks > 1:
+            edge_index_list = torch.tensor_split(edge_index, self.nchunks, dim=1)
+            edge_attr_list = torch.tensor_split(edge_attr, self.nchunks, dim=0)
+            edges_out = []
+            for i in range(self.nchunks):
+                out1, edges_out1 = self.conv(x_in, edge_index_list[i], edge_attr_list[i], size=size)
+                edges_out.append(edges_out1)
+                if i == 0:
+                    out = out1
+                else:
+                    out = out + out1
+            edges_new = torch.cat(edges_out, dim=0)
+        else:
+            out, edges_new = self.conv(x_in, edge_index, edge_attr, size=size)
+
+        out = reduce_shard_tensor1(out, 0, shapes[1], mgroup)
+
+        if isinstance(x, Tensor):
+            nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x
+        else:
+            nodes_new_dst = self.node_mlp(torch.cat([x[1], out], dim=1)) + x[1]
+
+            if self.update_src_nodes: # update only needed in forward mapper
+                nodes_new_src = self.node_mlp(torch.cat([x[0], x[0]], dim=1)) + x[0]
+            else:
+                nodes_new_src = x[0]
+
+            nodes_new = (nodes_new_src, nodes_new_dst)
+
+        return nodes_new, edges_new
+
+
+class NodeEdgeInteractions(MessagePassing):
+    """Message passing module for node and edge interactions."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        mlp_extra_layers: int = 0,
+        activation: str = "SiLU",
+        **kwargs,
+    ) -> None:
+        """Initialize NodeEdgeInteractions.
+
+        Parameters
+        ----------
+        in_channels : int
+            Number of input channels.
+        out_channels : int
+            Number of output channels.
+        mlp_extra_layers : int, optional
+            Extra layers in MLP, by default 0
+        activation : str, optional
+            Activation function, by default "SiLU"
+        """
+        super().__init__(**kwargs)
+
+        self.edge_mlp = gen_mlp(
+            3 * in_channels,
+            out_channels,
+            out_channels,
+            n_extra_layers=mlp_extra_layers,
+            activation_func=activation,
+        )
+
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, size: Size = None):
+        if isinstance(x, Tensor):
+            dim_size = x.shape[0]
+        else:
+            dim_size = x[1].shape[0]
+
+        out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size, dim_size=dim_size)
+
+        return out, edges_new
+
+    def message(self, x_i: Tensor, x_j: Tensor, edge_attr: Tensor, dim_size: Optional[int] = None) -> Tensor:
+        edges_new = self.edge_mlp(torch.cat([x_i, x_j, edge_attr], dim=1)) + edge_attr
+
+        return edges_new
+
+    def aggregate(self, edges_new: Tensor, edge_index: Adj, dim_size: Optional[int] = None) -> Tuple[Tensor, Tensor]:
+        out = scatter(edges_new, edge_index[1], dim=0, dim_size=dim_size, reduce="sum")
+
+        return out, edges_new
+
+
+class CheckpointWrapper(nn.Module): # not used
+    """Wrapper for checkpointing a module."""
+
+    def __init__(self, module: nn.Module) -> None:
+        super().__init__()
+        self.module = module
+
+    def forward(self, *args, **kwargs):
+        return checkpoint(self.module, *args, **kwargs, use_reentrant=False)
+
+
 class TransformerMapper(MessagePassing):
     """Transformer mapper layer."""
 
@@ -193,545 +658,6 @@ class GATEncoder(nn.Module):
 
     def forward(self, x: Tensor, edge_index: Adj, edge_attr: Optional[Tensor] = None) -> Tensor:
         return self.encoder(x=x, edge_index=edge_index, edge_attr=edge_attr)
-
-
-def gen_mlp(
-    in_features: int,
-    hidden_dim: int,
-    out_features: int,
-    n_extra_layers: int = 0,
-    activation_func: str = "SiLU",
-    final_activation: bool = False,
-    layer_norm: bool = True,
-    cast_to_dtype: torch.dtype = torch.float16,
-    checkpoints: bool = False,
-) -> nn.Module:
-    """Generate a multi-layer perceptron.
-
-    Parameters
-    ----------
-    in_features : int
-        Number of input features
-    hidden_dim : int
-        Hidden dimensions
-    out_features : int
-        Number of output features
-    n_extra_layers : int, optional
-        Number of extra layers in MLP, by default 0
-    activation_func : str, optional
-        Activation function, by default "SiLU"
-    final_activation : bool, optional
-        Whether to apply a final activation function to last layer, by default True
-    layer_norm : bool, optional
-        Whether to apply layer norm after activation, by default True
-    checkpoints : bool, optional
-        Whether to provide checkpoints, by default False
-
-    Returns
-    -------
-    nn.Module
-        Returns a MLP module
-
-    Raises
-    ------
-    RuntimeError
-        If activation function is not supported
-    """
-    try:
-        act_func = getattr(nn, activation_func)
-    except AttributeError as ae:
-        LOGGER.error("Activation function %s not supported", activation_func)
-        raise RuntimeError from ae
-
-    mlp1 = nn.Sequential(nn.Linear(in_features, hidden_dim), act_func())
-    for _ in range(n_extra_layers):
-        mlp1.append(nn.Linear(hidden_dim, hidden_dim))
-        mlp1.append(act_func())
-    mlp1.append(nn.Linear(hidden_dim, out_features))
-
-    if final_activation:
-        mlp1.append(act_func())
-
-    if layer_norm:
-        mlp1.append(nn.LayerNorm(out_features))
-
-    if cast_to_dtype is not None:
-        mlp1.append(CastTensor(dtype=cast_to_dtype))
-
-    return CheckpointWrapper(mlp1) if checkpoints else mlp1
-
-
-class CastTensor(nn.Module):
-    def __init__(
-        self,
-        dtype: torch.dtype,
-    ) -> None:
-        super().__init__()
-
-        self.dtype = dtype
-
-    def forward(self, x):
-        return x.to(self.dtype)
-
-
-class MessagePassingProcessorWraper(nn.Module):
-    """Message Passing Processor Wraper for Graph Neural Network."""
-
-    def __init__(
-        self,
-        hidden_dim: int,
-        hidden_layers: int,
-        edge_dim: int,
-        chunks: int = 1,
-        mlp_extra_layers: int = 0,
-        activation: str = "SiLU",
-        cpu_offload: bool = False,
-    ) -> None:
-        super().__init__()
-
-        assert hidden_layers % chunks == 0
-
-        self.processor0 = MessagePassingProcessor(
-            hidden_dim=hidden_dim,
-            hidden_layers=int(hidden_layers / 4),
-            mlp_extra_layers=mlp_extra_layers,
-            edge_dim=edge_dim,
-            chunks=chunks,
-            activation=activation,
-            emb_edges=True,
-            cpu_offload=cpu_offload,
-        )
-
-        # Processor H -> H
-        self.processor1 = MessagePassingProcessor(
-            hidden_dim=hidden_dim,
-            hidden_layers=int(hidden_layers / 4),
-            mlp_extra_layers=mlp_extra_layers,
-            edge_dim=0,
-            chunks=chunks,
-            activation=activation,
-            emb_edges=False,
-            cpu_offload=cpu_offload,
-        )
-
-        # Processor H -> H
-        self.processor2 = MessagePassingProcessor(
-            hidden_dim=hidden_dim,
-            hidden_layers=int(hidden_layers / 4),
-            mlp_extra_layers=mlp_extra_layers,
-            edge_dim=0,
-            chunks=chunks,
-            activation=activation,
-            emb_edges=False,
-            cpu_offload=cpu_offload,
-        )
-
-        # Processor H -> H
-        self.processor3 = MessagePassingProcessor(
-            hidden_dim=hidden_dim,
-            hidden_layers=int(hidden_layers / 4),
-            mlp_extra_layers=mlp_extra_layers,
-            edge_dim=0,
-            chunks=chunks,
-            activation=activation,
-            emb_edges=False,
-            cpu_offload=cpu_offload,
-        )
-
-    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes, mgroupdef) -> Tensor:
-        x0, edge_attr0, edge_index0 = checkpoint(
-            self.processor0,
-            x=x,
-            edge_index=edge_index,
-            edge_attr=edge_attr,
-            shape_nodes=shape_nodes,
-            mgroupdef=mgroupdef,
-            use_reentrant=False,
-        )
-
-        x1, edge_attr1, edge_index1 = checkpoint(
-            self.processor1,  # has skipped connections and checkpoints inside
-            x=x0,
-            edge_index=edge_index0,
-            edge_attr=edge_attr0,
-            shape_nodes=shape_nodes,
-            mgroupdef=mgroupdef,
-            use_reentrant=False,
-        )
-
-        x2, edge_attr2, edge_index2 = checkpoint(
-            self.processor2,  # has skipped connections and checkpoints inside
-            x=x1,
-            edge_index=edge_index1,
-            edge_attr=edge_attr1,
-            shape_nodes=shape_nodes,
-            mgroupdef=mgroupdef,
-            use_reentrant=False,
-        )
-
-        x3, _, _ = checkpoint(
-            self.processor3,  # has skipped connections and checkpoints inside
-            x=x2,
-            edge_index=edge_index2,
-            edge_attr=edge_attr2,
-            shape_nodes=shape_nodes,
-            mgroupdef=mgroupdef,
-            use_reentrant=False,
-        )
-
-        return x3
-
-
-class MessagePassingProcessor(nn.Module):
-    """Message Passing Processor Graph Neural Network."""
-
-    def __init__(
-        self,
-        hidden_dim: int,
-        hidden_layers: int,
-        edge_dim: int,
-        chunks: int = 2,
-        emb_edges: bool = True,
-        mlp_extra_layers: int = 0,
-        activation: str = "SiLU",
-        cpu_offload: bool = False,
-    ) -> None:
-        """Initialize MessagePassingProcessor.
-
-        Parameters
-        ----------
-        hidden_dim : int
-            Hidden dimension
-        hidden_layers : int
-            Number of hidden layers
-        edge_dim : int
-            Input features of MLP
-        chunks : int, optional
-            Number of chunks, by default 2
-        mlp_extra_layers : int, optional
-            Number of extra layers in MLP, by default 0
-        activation : str, optional
-            Activation funciton, by default "SiLU"
-        cpu_offload : bool, optional
-            Whether to offload processing to CPU, by default False
-        """
-        super().__init__()
-
-        self.hidden_layers = chunks
-        chunk_size = int(hidden_layers / chunks)
-        assert hidden_layers % chunks == 0
-
-        # needed in mapper
-        self.hidden_dim = hidden_dim
-        self.mlp_extra_layers = mlp_extra_layers
-        self.activation = activation
-        self.emb_edges = emb_edges
-
-        if self.emb_edges:
-            self.emb_edges = gen_mlp(
-                in_features=edge_dim,
-                hidden_dim=hidden_dim,
-                out_features=hidden_dim,
-                n_extra_layers=mlp_extra_layers,
-                activation_func=activation,
-            )
-
-        self.proc = nn.ModuleList(
-            [
-                MessagePassingProcessorChunk(
-                    hidden_dim, hidden_layers=chunk_size, mlp_extra_layers=mlp_extra_layers, activation=activation
-                )
-                for _ in range(self.hidden_layers)
-            ]
-        )
-
-        if cpu_offload:
-            self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
-
-    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes, mgroupdef) -> Tensor:
-        if self.emb_edges:
-            shapes_edge_idx = get_shape_shards1(edge_index, 1, mgroupdef[0])
-            shapes_edge_attr = get_shape_shards1(edge_attr, 0, mgroupdef[0])
-            edge_index = shard_tensor1(edge_index, 1, shapes_edge_idx, mgroupdef[0])
-            edge_attr = shard_tensor1(edge_attr, 0, shapes_edge_attr, mgroupdef[0])
-
-            edge_attr = self.emb_edges(edge_attr)
-
-        for i in range(self.hidden_layers):
-            x, edge_attr = self.proc[i](x, edge_index, edge_attr, (shape_nodes, shape_nodes), mgroupdef)
-
-        return x, edge_attr, edge_index
-
-
-class MessagePassingMapper(MessagePassingProcessor):
-    """Mapper from h -> era or era -> h."""
-
-    def __init__(
-        self,
-        in_channels_src: int,
-        in_channels_dst: int,
-        backward_mapper: bool = False,
-        out_channels_dst: Optional[int] = None,
-        **kwargs,
-    ) -> None:
-        """Initialize the mapper.
-
-        Parameters
-        ----------
-        in_channels_src : int
-            Input channels of the source node
-        in_channels_dst : int
-            Input channels of the destination node
-        backward_mapper : bool, optional
-            Map from (true) hidden to era or (false) reverse, by default False
-        out_channels_dst : Optional[int], optional
-            Output channels of the destination node, by default None
-        """
-        super().__init__(**kwargs)
-
-        self.backward_mapper = backward_mapper
-        self.out_channels_dst = out_channels_dst
-
-        if backward_mapper:  # h -> era
-            self.node_era_extractor = gen_mlp(
-                in_features=self.hidden_dim,
-                hidden_dim=self.hidden_dim,
-                out_features=out_channels_dst,
-                n_extra_layers=self.mlp_extra_layers,
-                activation_func=self.activation,
-                layer_norm=False,
-                final_activation=False,
-            )
-        else:  # era -> h
-            self.emb_nodes_src = gen_mlp(
-                in_features=in_channels_src,
-                hidden_dim=self.hidden_dim,
-                out_features=self.hidden_dim,
-                n_extra_layers=self.mlp_extra_layers,
-                activation_func=self.activation,
-            )
-
-            self.emb_nodes_dst = gen_mlp(
-                in_features=in_channels_dst,
-                hidden_dim=self.hidden_dim,
-                out_features=self.hidden_dim,
-                n_extra_layers=self.mlp_extra_layers,
-                activation_func=self.activation,
-            )
-
-    def forward(self, x: PairTensor, edge_index: Adj, edge_attr: Tensor, shape_nodes, size, mgroupdef) -> PairTensor:
-        shapes_edge_idx = get_shape_shards1(edge_index, 1, mgroupdef[0])
-        shapes_edge_attr = get_shape_shards1(edge_attr, 0, mgroupdef[0])
-        edge_index = shard_tensor1(edge_index, 1, shapes_edge_idx, mgroupdef[0])
-        edge_attr = shard_tensor1(edge_attr, 0, shapes_edge_attr, mgroupdef[0])
-        edge_attr = self.emb_edges(edge_attr)
-
-        x_src, x_dst = x
-        shapes_src, shapes_dst = shape_nodes
-
-        if not self.backward_mapper:
-            x_src = shard_tensor1(x_src, 0, shapes_src, mgroupdef[0])
-            x_dst = shard_tensor1(x_dst, 0, shapes_dst, mgroupdef[0])
-            x_src = self.emb_nodes_src(x_src)
-            x_dst = self.emb_nodes_dst(x_dst)
-            shapes_src = change_channels_in_shape1(shapes_src, self.hidden_dim)
-            shapes_dst = change_channels_in_shape1(shapes_dst, self.hidden_dim)
-
-        for i in range(self.hidden_layers):
-            (x_src, x_dst), edge_attr = self.proc[i](
-                (x_src, x_dst), edge_index, edge_attr, (shapes_src, shapes_dst), mgroupdef, size=size
-            )
-
-        if self.backward_mapper:
-            x_dst = self.node_era_extractor(x_dst)
-            x_dst = gather_tensor1(x_dst, 0, change_channels_in_shape1(shapes_dst, self.out_channels_dst), mgroupdef[0])
-            # x_src not gathered because not used ...
-
-        return x_src, x_dst
-
-
-class MessagePassingProcessorChunk(nn.Module):
-    """Wraps X message passing blocks for checkpointing in Processor / Mapper."""
-
-    def __init__(
-        self,
-        hidden_dim: int,
-        hidden_layers: int,
-        mlp_extra_layers: int = 0,
-        activation: str = "SiLU",
-    ) -> None:
-        """Initialize MessagePassingProcessorChunk.
-
-        Parameters
-        ----------
-        hidden_dim : int
-            Hidden dimention of the message passing blocks.
-        hidden_layers : int
-            Number of message passing blocks.
-        mlp_extra_layers : int, optional
-            Extra layers in MLP, by default 0
-        activation : str, optional
-            Activation function, by default "SiLU"
-        """
-        super().__init__()
-
-        self.hidden_layers = hidden_layers
-
-        self.proc = nn.ModuleList(
-            [
-                MessagePassingBlock(hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation)
-                for _ in range(self.hidden_layers)
-            ]
-        )
-
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index, edge_attr, shapes, mgroupdef, size: Size = None):
-        for i in range(self.hidden_layers):
-            x, edge_attr = self.proc[i](x, edge_index, edge_attr, shapes, mgroupdef, size=size)
-
-        return x, edge_attr
-
-
-class MessagePassingBlock(nn.Module):
-    """Message passing block with MLPs for node embeddings."""
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        mlp_extra_layers: int = 0,
-        activation: str = "SiLU",
-        **kwargs,
-    ) -> None:
-        """Initialize MessagePassingBlock.
-
-        Parameters
-        ----------
-        in_channels : int
-            Number of input channels.
-        out_channels : int
-            Number of output channels.
-        mlp_extra_layers : int, optional
-            Extra layers in MLP, by default 0
-        activation : str, optional
-            Activation function, by default "SiLU"
-        """
-        super().__init__(**kwargs)
-
-        self.node_mlp = gen_mlp(
-            2 * in_channels,
-            out_channels,
-            out_channels,
-            n_extra_layers=mlp_extra_layers,
-            activation_func=activation,
-        )
-
-        self.conv = NodeEdgeInteractions(
-            in_channels=in_channels, out_channels=out_channels, mlp_extra_layers=mlp_extra_layers, activation=activation
-        )
-
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index, edge_attr, shapes, mgroupdef, size: Size = None):
-        if isinstance(x, Tensor):
-            x_in = sync_tensor1(x, 0, shapes[1], mgroupdef[0])
-            nchunks = 1
-        else:
-            x_src = sync_tensor1(x[0], 0, shapes[0], mgroupdef[0])
-            x_dst = sync_tensor1(x[1], 0, shapes[1], mgroupdef[0])
-            x_in = (x_src, x_dst)
-            nchunks = 8
-
-        if nchunks > 1:
-            edge_index_list = torch.tensor_split(edge_index, nchunks, dim=1)
-            edge_attr_list = torch.tensor_split(edge_attr, nchunks, dim=0)
-            edges_out = []
-            for i in range(nchunks):
-                out1, edges_out1 = self.conv(x_in, edge_index_list[i], edge_attr_list[i], size=size)
-                edges_out.append(edges_out1)
-                if i == 0:
-                    out = out1
-                else:
-                    out = out + out1
-            edges_new = torch.cat(edges_out, dim=0)
-        else:
-            out, edges_new = self.conv(x_in, edge_index, edge_attr, size=size)
-
-        # out = reduce_tensor1(out, mgroupdef[0])  # complete aggregation of edges
-        # out = shard_tensor1(out, 0, shapes[1], mgroupdef[0])
-        out = reduce_shard_tensor1(out, 0, shapes[1], mgroupdef[0])
-
-        if isinstance(x, Tensor):
-            nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x
-        else:
-            nodes_new_dst = self.node_mlp(torch.cat([x[1], out], dim=1)) + x[1]
-            nodes_new_src = self.node_mlp(torch.cat([x[0], x[0]], dim=1)) + x[0]  # todo: only update this in the forward mapper...
-            nodes_new = (nodes_new_src, nodes_new_dst)
-
-        return nodes_new, edges_new
-
-
-class NodeEdgeInteractions(MessagePassing):
-    """Message passing block with MLPs for node and edge embeddings."""
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        mlp_extra_layers: int = 0,
-        activation: str = "SiLU",
-        **kwargs,
-    ) -> None:
-        """Initialize MessagePassingBlock.
-
-        Parameters
-        ----------
-        in_channels : int
-            Number of input channels.
-        out_channels : int
-            Number of output channels.
-        mlp_extra_layers : int, optional
-            Extra layers in MLP, by default 0
-        activation : str, optional
-            Activation function, by default "SiLU"
-        """
-        super().__init__(**kwargs)
-
-        self.edge_mlp = gen_mlp(
-            3 * in_channels,
-            out_channels,
-            out_channels,
-            n_extra_layers=mlp_extra_layers,
-            activation_func=activation,
-        )
-
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, size: Size = None):
-        if isinstance(x, Tensor):
-            dim_size = x.shape[0]
-        else:
-            dim_size = x[1].shape[0]
-
-        out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size, dim_size=dim_size)
-
-        return out, edges_new
-
-    def message(self, x_i: Tensor, x_j: Tensor, edge_attr: Tensor, dim_size: Optional[int] = None) -> Tensor:
-        edges_new = self.edge_mlp(torch.cat([x_i, x_j, edge_attr], dim=1)) + edge_attr
-
-        return edges_new
-
-    def aggregate(self, edges_new: Tensor, edge_index: Adj, dim_size: Optional[int] = None) -> Tuple[Tensor, Tensor]:
-        out = scatter(edges_new, edge_index[1], dim=0, dim_size=dim_size, reduce="sum")
-
-        return out, edges_new
-
-
-class CheckpointWrapper(nn.Module):
-    """Wrapper for checkpointing a module."""
-
-    def __init__(self, module: nn.Module) -> None:
-        super().__init__()
-        self.module = module
-
-    def forward(self, *args, **kwargs):
-        return checkpoint(self.module, *args, **kwargs, use_reentrant=False)
 
 
 if __name__ == "__main__":
