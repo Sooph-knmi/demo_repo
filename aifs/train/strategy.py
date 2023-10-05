@@ -10,6 +10,7 @@ from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
 
+
 class DDPGroupStrategy(DDPStrategy):
     def __init__(self, group_size: int, **kwargs):
         super().__init__(**kwargs)
@@ -89,7 +90,7 @@ class DDPGroupStrategy(DDPStrategy):
         return imgroup, my_mgroup, mgroup_rank
 
     def register_parameter_hooks(self):
-                for name, param in self.model.named_parameters():
-                    if not "trainable" in name:
-                        if param.requires_grad == True:
-                            param.register_hook(lambda grad: grad * float(self.mgroup_size))
+        for name, param in self.model.named_parameters():
+            if not "trainable" in name:
+                if param.requires_grad == True:
+                    param.register_hook(lambda grad: grad * float(self.mgroup_size))

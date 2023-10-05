@@ -8,9 +8,9 @@ from torch import nn
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
 
-from aifs.model.layers import MessagePassingMapper
-from aifs.model.layers import MessagePassingProcessor
-from aifs.utils.distributed import get_shape_shards1, change_channels_in_shape1
+from aifs.model.layers import GNNMapper
+from aifs.model.layers import GNNProcessor
+from aifs.utils.distributed import get_shape_shards, change_channels_in_shape
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
@@ -75,7 +75,7 @@ class GraphMSG(nn.Module):
         mlp_extra_layers = config.model.mlp.extra_layers
 
         # Encoder from ERA -> H
-        self.forward_mapper = MessagePassingMapper(
+        self.forward_mapper = GNNMapper(
             in_channels_src=self.multi_step * (self.in_channels + self.aux_in_channels)
             + self.era_latlons.shape[1]
             + self.era_trainable_size,
@@ -88,7 +88,7 @@ class GraphMSG(nn.Module):
         )
 
         # Processor H -> H
-        self.h_processor = MessagePassingProcessor(
+        self.h_processor = GNNProcessor(
             hidden_dim=self.encoder_out_channels,
             hidden_layers=config.model.processor.num_layers,
             mlp_extra_layers=mlp_extra_layers,
@@ -98,7 +98,7 @@ class GraphMSG(nn.Module):
         )
 
         # Decoder H -> ERA5
-        self.backward_mapper = MessagePassingMapper(
+        self.backward_mapper = GNNMapper(
             in_channels_src=self.encoder_out_channels,
             in_channels_dst=self.encoder_out_channels,
             out_channels_dst=self.in_channels,
@@ -267,7 +267,6 @@ class GraphMSG(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, mgroup) -> torch.Tensor:
-
         self.batch_size = x.shape[0]
 
         # add ERA positional info (lat/lon)
@@ -281,20 +280,23 @@ class GraphMSG(nn.Module):
         edge_h_to_h_latent = self._fuse_trainable_tensors(self.h2h_edge_attr, self.h2h_trainable)
         edge_h_to_e_latent = self._fuse_trainable_tensors(self.h2e_edge_attr, self.h2e_trainable)
 
-
         # size for mappers:
         size_fwd = (x_era_latent.shape[0], x_h_latent.shape[0])
         size_bwd = (x_h_latent.shape[0], x_era_latent.shape[0])
 
         # shapes of node shards:
-        shape_x_fwd = get_shape_shards1(x_era_latent, 0, mgroup)
-        shape_h_fwd = get_shape_shards1(x_h_latent, 0, mgroup)
-        shape_h_proc = change_channels_in_shape1(shape_h_fwd, self.encoder_out_channels)
+        shape_x_fwd = get_shape_shards(x_era_latent, 0, mgroup)
+        shape_h_fwd = get_shape_shards(x_h_latent, 0, mgroup)
+        shape_h_proc = change_channels_in_shape(shape_h_fwd, self.encoder_out_channels)
         shape_h_bwd = shape_h_proc
-        shape_x_bwd = change_channels_in_shape1(shape_x_fwd, self.encoder_out_channels)
+        shape_x_bwd = change_channels_in_shape(shape_x_fwd, self.encoder_out_channels)
 
         x_era_latent, x_latent = self._create_mapper(
-            self.forward_mapper, (x_era_latent, x_h_latent), self.e2h_edge_index, self._e2h_edge_inc, edge_e_to_h_latent,
+            self.forward_mapper,
+            (x_era_latent, x_h_latent),
+            self.e2h_edge_index,
+            self._e2h_edge_inc,
+            edge_e_to_h_latent,
             shape_nodes=(shape_x_fwd, shape_h_fwd),
             size=size_fwd,
             mgroup=mgroup,
@@ -316,7 +318,11 @@ class GraphMSG(nn.Module):
         x_latent_proc = x_latent_proc + x_latent
 
         _, x_out = self._create_mapper(
-            self.backward_mapper, (x_latent_proc, x_era_latent), self.h2e_edge_index, self._h2e_edge_inc, edge_h_to_e_latent,
+            self.backward_mapper,
+            (x_latent_proc, x_era_latent),
+            self.h2e_edge_index,
+            self._h2e_edge_inc,
+            edge_h_to_e_latent,
             shape_nodes=(shape_h_bwd, shape_x_bwd),
             size=size_bwd,
             mgroup=mgroup,

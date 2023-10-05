@@ -17,12 +17,12 @@ from torch_geometric.typing import Size
 from torch_geometric.utils import scatter
 
 from aifs.utils.distributed import (
-    shard_tensor1,
-    gather_tensor1,
-    sync_tensor1,
-    reduce_shard_tensor1,
-    get_shape_shards1,
-    change_channels_in_shape1,
+    shard_tensor,
+    gather_tensor,
+    sync_tensor,
+    reduce_shard_tensor,
+    get_shape_shards,
+    change_channels_in_shape,
 )
 from aifs.utils.logger import get_code_logger
 
@@ -112,8 +112,8 @@ class CastTensor(nn.Module):
         return x.to(self.dtype)
 
 
-class MessagePassingProcessor(nn.Module):
-    """Message Passing Processor Graph Neural Network."""
+class GNNProcessor(nn.Module):
+    """Processor."""
 
     def __init__(
         self,
@@ -125,7 +125,7 @@ class MessagePassingProcessor(nn.Module):
         activation: str = "SiLU",
         cpu_offload: bool = False,
     ) -> None:
-        """Initialize MessagePassingProcessor.
+        """Initialize GNNProcessor.
 
         Parameters
         ----------
@@ -152,10 +152,9 @@ class MessagePassingProcessor(nn.Module):
 
         self.proc = nn.ModuleList()
         for i in range(self.hidden_layers):
-
-            kwargs = {"emb_edges" : True, "edge_dim" : edge_dim} if i == 0 else {}
+            kwargs = {"emb_edges": True, "edge_dim": edge_dim} if i == 0 else {}
             self.proc.append(
-                MessagePassingProcessorChunk(
+                GNNProcessorChunk(
                     hidden_dim, hidden_layers=chunk_size, mlp_extra_layers=mlp_extra_layers, activation=activation, **kwargs
                 )
             )
@@ -164,18 +163,20 @@ class MessagePassingProcessor(nn.Module):
             self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
 
     def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes, mgroup) -> Tensor:
-        shapes_edge_idx = get_shape_shards1(edge_index, 1, mgroup)
-        shapes_edge_attr = get_shape_shards1(edge_attr, 0, mgroup)
-        edge_index = shard_tensor1(edge_index, 1, shapes_edge_idx, mgroup)
-        edge_attr = shard_tensor1(edge_attr, 0, shapes_edge_attr, mgroup)
+        shapes_edge_idx = get_shape_shards(edge_index, 1, mgroup)
+        shapes_edge_attr = get_shape_shards(edge_attr, 0, mgroup)
+        edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, mgroup)
+        edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, mgroup)
 
         for i in range(self.hidden_layers):
-            x, edge_attr = checkpoint(self.proc[i], x, edge_index, edge_attr, (shape_nodes, shape_nodes), mgroup, use_reentrant=False)
+            x, edge_attr = checkpoint(
+                self.proc[i], x, edge_index, edge_attr, (shape_nodes, shape_nodes), mgroup, use_reentrant=False
+            )
 
         return x
 
 
-class MessagePassingProcessorChunk(nn.Module):
+class GNNProcessorChunk(nn.Module):
     """Wraps edge embedding and X message passing blocks for checkpointing in Processor."""
 
     def __init__(
@@ -187,7 +188,7 @@ class MessagePassingProcessorChunk(nn.Module):
         emb_edges: bool = False,
         edge_dim: int = 3,
     ) -> None:
-        """Initialize MessagePassingProcessorChunk.
+        """Initialize GNNProcessorChunk.
 
         Parameters
         ----------
@@ -224,8 +225,7 @@ class MessagePassingProcessorChunk(nn.Module):
             ]
         )
 
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index, edge_attr, shapes, mgroup, size: Size = None):
-
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, shapes, mgroup, size: Size = None):
         if self.emb_edges:
             edge_attr = self.emb_edges(edge_attr)
 
@@ -235,7 +235,7 @@ class MessagePassingProcessorChunk(nn.Module):
         return x, edge_attr
 
 
-class MessagePassingMapper(nn.Module):
+class GNNMapper(nn.Module):
     """Mapper from h -> era or era -> h."""
 
     def __init__(
@@ -280,7 +280,14 @@ class MessagePassingMapper(nn.Module):
         )
 
         update_src_nodes = False if backward_mapper else True
-        self.proc = GNNBlock(hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation, update_src_nodes=update_src_nodes, nchunks=nchunks)
+        self.proc = GNNBlock(
+            hidden_dim,
+            hidden_dim,
+            mlp_extra_layers=mlp_extra_layers,
+            activation=activation,
+            update_src_nodes=update_src_nodes,
+            nchunks=nchunks,
+        )
 
         if cpu_offload:
             self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
@@ -313,30 +320,28 @@ class MessagePassingMapper(nn.Module):
             )
 
     def forward(self, x: PairTensor, edge_index: Adj, edge_attr: Tensor, shape_nodes, size, mgroup) -> PairTensor:
-        shapes_edge_idx = get_shape_shards1(edge_index, 1, mgroup)
-        shapes_edge_attr = get_shape_shards1(edge_attr, 0, mgroup)
-        edge_index = shard_tensor1(edge_index, 1, shapes_edge_idx, mgroup)
-        edge_attr = shard_tensor1(edge_attr, 0, shapes_edge_attr, mgroup)
+        shapes_edge_idx = get_shape_shards(edge_index, 1, mgroup)
+        shapes_edge_attr = get_shape_shards(edge_attr, 0, mgroup)
+        edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, mgroup)
+        edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, mgroup)
         edge_attr = self.emb_edges(edge_attr)
 
         x_src, x_dst = x
         shapes_src, shapes_dst = shape_nodes
 
         if not self.backward_mapper:
-            x_src = shard_tensor1(x_src, 0, shapes_src, mgroup)
-            x_dst = shard_tensor1(x_dst, 0, shapes_dst, mgroup)
+            x_src = shard_tensor(x_src, 0, shapes_src, mgroup)
+            x_dst = shard_tensor(x_dst, 0, shapes_dst, mgroup)
             x_src = self.emb_nodes_src(x_src)
             x_dst = self.emb_nodes_dst(x_dst)
-            shapes_src = change_channels_in_shape1(shapes_src, self.hidden_dim)
-            shapes_dst = change_channels_in_shape1(shapes_dst, self.hidden_dim)
+            shapes_src = change_channels_in_shape(shapes_src, self.hidden_dim)
+            shapes_dst = change_channels_in_shape(shapes_dst, self.hidden_dim)
 
-        (x_src, x_dst), edge_attr = self.proc(
-            (x_src, x_dst), edge_index, edge_attr, (shapes_src, shapes_dst), mgroup, size=size
-        )
+        (x_src, x_dst), edge_attr = self.proc((x_src, x_dst), edge_index, edge_attr, (shapes_src, shapes_dst), mgroup, size=size)
 
         if self.backward_mapper:
             x_dst = self.node_era_extractor(x_dst)
-            x_dst = gather_tensor1(x_dst, 0, change_channels_in_shape1(shapes_dst, self.out_channels_dst), mgroup)
+            x_dst = gather_tensor(x_dst, 0, change_channels_in_shape(shapes_dst, self.out_channels_dst), mgroup)
 
         return x_src, x_dst
 
@@ -388,12 +393,12 @@ class GNNBlock(nn.Module):
             in_channels=in_channels, out_channels=out_channels, mlp_extra_layers=mlp_extra_layers, activation=activation
         )
 
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index, edge_attr, shapes, mgroup, size: Size = None):
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, shapes, mgroup, size: Size = None):
         if isinstance(x, Tensor):
-            x_in = sync_tensor1(x, 0, shapes[1], mgroup)
+            x_in = sync_tensor(x, 0, shapes[1], mgroup)
         else:
-            x_src = sync_tensor1(x[0], 0, shapes[0], mgroup)
-            x_dst = sync_tensor1(x[1], 0, shapes[1], mgroup)
+            x_src = sync_tensor(x[0], 0, shapes[0], mgroup)
+            x_dst = sync_tensor(x[1], 0, shapes[1], mgroup)
             x_in = (x_src, x_dst)
 
         if self.nchunks > 1:
@@ -411,14 +416,14 @@ class GNNBlock(nn.Module):
         else:
             out, edges_new = self.conv(x_in, edge_index, edge_attr, size=size)
 
-        out = reduce_shard_tensor1(out, 0, shapes[1], mgroup)
+        out = reduce_shard_tensor(out, 0, shapes[1], mgroup)
 
         if isinstance(x, Tensor):
             nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x
         else:
             nodes_new_dst = self.node_mlp(torch.cat([x[1], out], dim=1)) + x[1]
 
-            if self.update_src_nodes: # update only needed in forward mapper
+            if self.update_src_nodes:  # update only needed in forward mapper
                 nodes_new_src = self.node_mlp(torch.cat([x[0], x[0]], dim=1)) + x[0]
             else:
                 nodes_new_src = x[0]
@@ -483,7 +488,7 @@ class NodeEdgeInteractions(MessagePassing):
         return out, edges_new
 
 
-class CheckpointWrapper(nn.Module): # not used
+class CheckpointWrapper(nn.Module):  # not used
     """Wrapper for checkpointing a module."""
 
     def __init__(self, module: nn.Module) -> None:
