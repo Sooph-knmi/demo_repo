@@ -419,15 +419,15 @@ class MessagePassingMapperBackwardEnsemble(MessagePassingProcessor):
         """
         super().__init__(**kwargs)
 
-        self.node_era_extractor = gen_mlp(
-            in_features=self.hidden_dim,
-            hidden_dim=self.hidden_dim,
-            out_features=self.hidden_dim,
-            n_extra_layers=self.mlp_extra_layers + 1,
-            activation_func=self.activation,
-            layer_norm=False,
-            final_activation=False,
-        )
+        # self.node_era_extractor = gen_mlp(
+        #    in_features=self.hidden_dim,
+        #    hidden_dim=self.hidden_dim,
+        #    out_features=self.hidden_dim,
+        #    n_extra_layers=self.mlp_extra_layers + 1,
+        #    activation_func=self.activation,
+        #    layer_norm=False,
+        #    final_activation=False,
+        # )
 
         self.num_tail_nets = 10
         dim = self.hidden_dim

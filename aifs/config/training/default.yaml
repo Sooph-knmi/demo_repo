@@ -2,7 +2,7 @@
 compile: False
 
 # resume or fork a training from a checkpoint last.ckpt or specified in hardware.files.warm_start
-run_id: null
+run_id: null 
 fork_run_id: null
 
 # prescribe initial seed, if null generate seed
@@ -57,7 +57,7 @@ rollout:
 save_top_k: -1
 
 lead_time: 6
-max_epochs: 200
+max_epochs: 2000
 lr:
   rate: 0.625e-4
   iterations: 600000

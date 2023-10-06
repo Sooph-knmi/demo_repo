@@ -269,7 +269,7 @@ class GraphForecaster(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
         scheduler = CosineLRScheduler(
-            self.optimizer,
+            optimizer,
             lr_min=self.lr_min,
             t_initial=self.lr_iterations,
             warmup_t=1000,

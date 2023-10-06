@@ -10,6 +10,7 @@ setup(
     author_email="ecmwf-authors@ecmwf.int",
     description="ERA5 forecasting with Graph Neural Networks",
     install_requires=[
+        "torch==2.0.1",
         "torch_geometric==2.3.1",
         "pytorch-lightning==2.0.3",
         "timm==0.9.2",
