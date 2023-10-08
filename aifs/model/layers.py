@@ -335,6 +335,90 @@ class MessagePassingProcessor(nn.Module):
         return x
 
 
+class NoisyMessagePassingProcessor(nn.Module):
+    """Message Passing Processor Graph Neural Network."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        noise_dim: int,
+        hidden_layers: int,
+        edge_dim: int,
+        chunks: int = 2,
+        mlp_extra_layers: int = 0,
+        activation: str = "SiLU",
+    ) -> None:
+        """Initialize MessagePassingProcessor.
+
+        Parameters
+        ----------
+        hidden_dim : int
+            Hidden dimension
+        noise_dim : int
+            Noise dimension
+        hidden_layers : int
+            Number of hidden layers
+        edge_dim : int
+            Input features of MLP
+        chunks : int, optional
+            Number of chunks, by default 2
+        mlp_extra_layers : int, optional
+            Number of extra layers in MLP, by default 0
+        activation : str, optional
+            Activation funciton, by default "SiLU"
+        """
+        super().__init__()
+
+        self.hidden_layers = chunks
+        chunk_size = int(hidden_layers / chunks)
+        assert hidden_layers % chunks == 0
+
+        # needed in mapper
+        self.hidden_dim = hidden_dim
+        self.noise_dim = noise_dim
+        self.mlp_extra_layers = mlp_extra_layers
+        self.activation = activation
+
+        self.emb_edges = gen_mlp(
+            in_features=edge_dim,
+            hidden_dim=hidden_dim + noise_dim,
+            out_features=hidden_dim + noise_dim,
+            n_extra_layers=mlp_extra_layers,
+            activation_func=activation,
+        )
+
+        self.proc = nn.ModuleList(
+            [
+                MessagePassingProcessorChunk(
+                    hidden_dim + noise_dim, hidden_layers=chunk_size, mlp_extra_layers=mlp_extra_layers, activation=activation
+                )
+                for _ in range(self.hidden_layers)
+            ]
+        )
+
+        self.emb_nodes_out = gen_mlp(
+            in_features=hidden_dim + noise_dim,
+            hidden_dim=hidden_dim + noise_dim,
+            out_features=hidden_dim,
+            n_extra_layers=mlp_extra_layers,
+            activation_func=activation,
+        )
+
+    def forward(self, x_noisy: Tensor, edge_index: Adj, edge_attr: Tensor) -> Tensor:
+        LOGGER.debug(
+            "x_noisy.shape = %s, edge_index.shape = %s, edge_attr.shape = %s", x_noisy.shape, edge_index.shape, edge_attr.shape
+        )
+        edge_attr = checkpoint(self.emb_edges, edge_attr, use_reentrant=False)
+        LOGGER.debug("after embedding edge_attr.shape = %s", edge_attr.shape)
+
+        for i in range(self.hidden_layers):
+            x_noisy, edge_attr = checkpoint(self.proc[i], x_noisy, edge_index, edge_attr, use_reentrant=False)
+
+        x = self.emb_nodes_out(x_noisy)
+
+        return x
+
+
 class MessagePassingMapper(MessagePassingProcessor):
     """Mapper from h -> era or era -> h."""
 
@@ -525,8 +609,11 @@ class CheckpointWrapper(nn.Module):
 
 
 if __name__ == "__main__":
+    import numpy as np
+
     bs, nlatlon, nfeat = 1, 1024, 64
     hdim, ofeat = 128, 36
+    nnoise = 4
     x_in = torch.randn((bs, nlatlon, nfeat), dtype=torch.float32, requires_grad=True)
     mlp_1 = gen_mlp(nfeat, hdim, hdim, layer_norm=True)
     mlp_2 = gen_mlp(hdim, hdim, hdim, layer_norm=True)
@@ -541,3 +628,28 @@ if __name__ == "__main__":
     LOGGER.debug("running backward on the dummy loss ...")
     loss.backward()
     LOGGER.debug("done.")
+
+    z_in = torch.randn((bs, nlatlon, nnoise), dtype=torch.float32, requires_grad=False)
+    edim = 3
+
+    noisy_processor = NoisyMessagePassingProcessor(
+        hidden_dim=nfeat,
+        noise_dim=nnoise,
+        hidden_layers=2,
+        edge_dim=edim,
+    )
+
+    nedges = 4500
+    eattr = torch.randn(nedges, edim)
+    eidx = torch.randint(0, nlatlon, size=(2, nedges))
+
+    eattr_batched = torch.cat([einops.repeat(eattr, "e f -> (repeat e) f", repeat=bs)], dim=-1)
+    edge_inc = torch.from_numpy(np.asarray([[nlatlon], [nlatlon]], dtype=np.int64))
+    eidx_batched = torch.cat([eidx + i * edge_inc for i in range(bs)], dim=1)
+
+    x_in = einops.rearrange(x_in, "bs n f -> (bs n) f")
+    z_in = einops.rearrange(z_in, "bs n f -> (bs n) f")
+
+    x_out = noisy_processor(torch.cat([x_in, z_in], dim=-1), eidx, eattr)
+    # x_out = noisy_processor(x_in, eidx, eattr)
+    LOGGER.debug("x_out.shape = %s", x_out.shape)
