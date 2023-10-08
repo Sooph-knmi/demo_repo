@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
 #SBATCH --time=48:00:00
-#SBATCH --output=ens-kcrps-h5-atos-part2.out.%j
+#SBATCH --output=ens-kcrps-h5-atos-roll1.out.%j
 
 # debugging flags (optional)
 # export NCCL_DEBUG=INFO
@@ -24,8 +24,8 @@ export HYDRA_FULL_ERROR=1
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="ens-kcrps-h5-atos"
-export WANDB_NOTES="KCRPS ensemble (reweighted loss)"
+export WANDB_NAME="ens-kcrps-h5-atos-roll1"
+export WANDB_NOTES="KCRPS ensemble (reweighted loss, rollout 1)"
 
 # generic settings
 CONDA_ENV=aifs-dev
