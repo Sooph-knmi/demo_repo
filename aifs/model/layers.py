@@ -8,6 +8,7 @@ import torch_geometric.nn as tgnn
 from torch import nn
 from torch import Tensor
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import offload_wrapper
+from torch.distributed.distributed_c10d import ProcessGroup
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.typing import Adj
@@ -162,15 +163,15 @@ class GNNProcessor(nn.Module):
         if cpu_offload:
             self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
 
-    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes, mgroup) -> Tensor:
-        shapes_edge_idx = get_shape_shards(edge_index, 1, mgroup)
-        shapes_edge_attr = get_shape_shards(edge_attr, 0, mgroup)
-        edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, mgroup)
-        edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, mgroup)
+    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, model_coms_group: ProcessGroup) -> Tensor:
+        shapes_edge_idx = get_shape_shards(edge_index, 1, model_coms_group)
+        shapes_edge_attr = get_shape_shards(edge_attr, 0, model_coms_group)
+        edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_coms_group)
+        edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_coms_group)
 
         for i in range(self.hidden_layers):
             x, edge_attr = checkpoint(
-                self.proc[i], x, edge_index, edge_attr, (shape_nodes, shape_nodes), mgroup, use_reentrant=False
+                self.proc[i], x, edge_index, edge_attr, (shape_nodes, shape_nodes), model_coms_group, use_reentrant=False
             )
 
         return x
@@ -225,12 +226,12 @@ class GNNProcessorChunk(nn.Module):
             ]
         )
 
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, shapes, mgroup, size: Size = None):
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, shapes: Tuple, model_coms_group: ProcessGroup, size: Size = None):
         if self.emb_edges:
             edge_attr = self.emb_edges(edge_attr)
 
         for i in range(self.hidden_layers):
-            x, edge_attr = self.proc[i](x, edge_index, edge_attr, shapes, mgroup, size=size)
+            x, edge_attr = self.proc[i](x, edge_index, edge_attr, shapes, model_coms_group, size=size)
 
         return x, edge_attr
 
@@ -246,7 +247,7 @@ class GNNMapper(nn.Module):
         edge_dim: int,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
-        nchunks: int = 1,
+        num_chunks: int = 1,
         cpu_offload: bool = False,
         backward_mapper: bool = False,
         out_channels_dst: Optional[int] = None,
@@ -263,7 +264,7 @@ class GNNMapper(nn.Module):
             Map from (true) hidden to era or (false) reverse, by default False
         out_channels_dst : Optional[int], optional
             Output channels of the destination node, by default None
-        nchunks : do message passing in X chunks
+        num_chunks : do message passing in X chunks
         """
         super().__init__()
 
@@ -286,7 +287,7 @@ class GNNMapper(nn.Module):
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             update_src_nodes=update_src_nodes,
-            nchunks=nchunks,
+            num_chunks=num_chunks,
         )
 
         if cpu_offload:
@@ -319,29 +320,29 @@ class GNNMapper(nn.Module):
                 activation_func=activation,
             )
 
-    def forward(self, x: PairTensor, edge_index: Adj, edge_attr: Tensor, shape_nodes, size, mgroup) -> PairTensor:
-        shapes_edge_idx = get_shape_shards(edge_index, 1, mgroup)
-        shapes_edge_attr = get_shape_shards(edge_attr, 0, mgroup)
-        edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, mgroup)
-        edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, mgroup)
+    def forward(self, x: PairTensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, size: Size, model_coms_group: ProcessGroup) -> PairTensor:
+        shapes_edge_idx = get_shape_shards(edge_index, 1, model_coms_group)
+        shapes_edge_attr = get_shape_shards(edge_attr, 0, model_coms_group)
+        edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_coms_group)
+        edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_coms_group)
         edge_attr = self.emb_edges(edge_attr)
 
         x_src, x_dst = x
         shapes_src, shapes_dst = shape_nodes
 
         if not self.backward_mapper:
-            x_src = shard_tensor(x_src, 0, shapes_src, mgroup)
-            x_dst = shard_tensor(x_dst, 0, shapes_dst, mgroup)
+            x_src = shard_tensor(x_src, 0, shapes_src, model_coms_group)
+            x_dst = shard_tensor(x_dst, 0, shapes_dst, model_coms_group)
             x_src = self.emb_nodes_src(x_src)
             x_dst = self.emb_nodes_dst(x_dst)
             shapes_src = change_channels_in_shape(shapes_src, self.hidden_dim)
             shapes_dst = change_channels_in_shape(shapes_dst, self.hidden_dim)
 
-        (x_src, x_dst), edge_attr = self.proc((x_src, x_dst), edge_index, edge_attr, (shapes_src, shapes_dst), mgroup, size=size)
+        (x_src, x_dst), edge_attr = self.proc((x_src, x_dst), edge_index, edge_attr, (shapes_src, shapes_dst), model_coms_group, size=size)
 
         if self.backward_mapper:
             x_dst = self.node_era_extractor(x_dst)
-            x_dst = gather_tensor(x_dst, 0, change_channels_in_shape(shapes_dst, self.out_channels_dst), mgroup)
+            x_dst = gather_tensor(x_dst, 0, change_channels_in_shape(shapes_dst, self.out_channels_dst), model_coms_group)
 
         return x_src, x_dst
 
@@ -356,7 +357,7 @@ class GNNBlock(nn.Module):
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
         update_src_nodes: bool = True,
-        nchunks: int = 1,
+        num_chunks: int = 1,
         **kwargs,
     ) -> None:
         """Initialize GNNBlock.
@@ -373,13 +374,13 @@ class GNNBlock(nn.Module):
             Activation function, by default "SiLU"
         update_src_nodes: bool, by default True
             Update src if src and dst nodes are given
-        nchunks : int, by default 1
+        num_chunks : int, by default 1
             do message passing in X chunks
         """
         super().__init__(**kwargs)
 
         self.update_src_nodes = update_src_nodes
-        self.nchunks = nchunks
+        self.num_chunks = num_chunks
 
         self.node_mlp = gen_mlp(
             2 * in_channels,
@@ -393,19 +394,19 @@ class GNNBlock(nn.Module):
             in_channels=in_channels, out_channels=out_channels, mlp_extra_layers=mlp_extra_layers, activation=activation
         )
 
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, shapes, mgroup, size: Size = None):
+    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, shapes: Tuple, model_coms_group: ProcessGroup, size: Size = None):
         if isinstance(x, Tensor):
-            x_in = sync_tensor(x, 0, shapes[1], mgroup)
+            x_in = sync_tensor(x, 0, shapes[1], model_coms_group)
         else:
-            x_src = sync_tensor(x[0], 0, shapes[0], mgroup)
-            x_dst = sync_tensor(x[1], 0, shapes[1], mgroup)
+            x_src = sync_tensor(x[0], 0, shapes[0], model_coms_group)
+            x_dst = sync_tensor(x[1], 0, shapes[1], model_coms_group)
             x_in = (x_src, x_dst)
 
-        if self.nchunks > 1:
-            edge_index_list = torch.tensor_split(edge_index, self.nchunks, dim=1)
-            edge_attr_list = torch.tensor_split(edge_attr, self.nchunks, dim=0)
+        if self.num_chunks > 1:
+            edge_index_list = torch.tensor_split(edge_index, self.num_chunks, dim=1)
+            edge_attr_list = torch.tensor_split(edge_attr, self.num_chunks, dim=0)
             edges_out = []
-            for i in range(self.nchunks):
+            for i in range(self.num_chunks):
                 out1, edges_out1 = self.conv(x_in, edge_index_list[i], edge_attr_list[i], size=size)
                 edges_out.append(edges_out1)
                 if i == 0:
@@ -416,7 +417,7 @@ class GNNBlock(nn.Module):
         else:
             out, edges_new = self.conv(x_in, edge_index, edge_attr, size=size)
 
-        out = reduce_shard_tensor(out, 0, shapes[1], mgroup)
+        out = reduce_shard_tensor(out, 0, shapes[1], model_coms_group)
 
         if isinstance(x, Tensor):
             nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x

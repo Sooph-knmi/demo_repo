@@ -6,10 +6,10 @@ mlp:
   extra_layers: 1
 
 encoder:
-  nchunks: 8
+  num_chunks: 8
 
 decoder:
-  nchunks: 8
+  num_chunks: 8
 
 processor:
   num_layers: 16

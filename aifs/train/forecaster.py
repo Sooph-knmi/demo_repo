@@ -98,7 +98,7 @@ class GraphForecaster(pl.LightningModule):
 
         self.multi_step = config.training.multistep_input
         self.lr = (
-            config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate / config.hardware.group_size
+            config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate / config.hardware.num_gpus_per_model
         )
         self.lr_iterations = config.training.lr.iterations
         self.lr_min = config.training.lr.min
@@ -108,8 +108,7 @@ class GraphForecaster(pl.LightningModule):
 
         self.use_zero_opt = config.training.zero_opt
 
-        self.mgroup = None
-        self.mgroup_single = None
+        self.model_coms_group = None
 
         LOGGER.debug("Rollout window length: %d", self.rollout)
         LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
@@ -118,17 +117,16 @@ class GraphForecaster(pl.LightningModule):
 
         self.enable_plot = config.diagnostics.plot.enabled
 
-        self.group_id = int(os.environ.get("SLURM_PROCID", "0")) // config.hardware.group_size
-        self.group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.group_size
-        self.num_groups = math.ceil(config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.group_size)
+        self.group_id = int(os.environ.get("SLURM_PROCID", "0")) // config.hardware.num_gpus_per_model
+        self.group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.num_gpus_per_model
+        self.num_groups = math.ceil(config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.num_gpus_per_model)
 
-    def forward(self, x: torch.Tensor, mgroup=0) -> torch.Tensor:
-        return self.model(x, mgroup)
+    def forward(self, x: torch.Tensor, model_coms_group=0) -> torch.Tensor:
+        return self.model(x, model_coms_group)
 
-    def set_mgroups(self, mgroup, mgroup_single) -> None:
-        LOGGER.debug("set_mgroup: %s, %s", mgroup, mgroup_single)
-        self.mgroup = mgroup
-        self.mgroup_single = mgroup_single
+    def set_model_coms_groups(self, model_coms_group) -> None:
+        LOGGER.debug("set_model_coms_group: %s", model_coms_group)
+        self.model_coms_group = model_coms_group
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         x = x.roll(-1, dims=1)
@@ -143,7 +141,6 @@ class GraphForecaster(pl.LightningModule):
         batch: torch.Tensor,
         batch_idx: int,
         validation_mode: bool = False,
-        multi_gpu: bool = True,
     ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
         batch = self.model.normalizer(batch)  # normalized in-place
@@ -167,10 +164,7 @@ class GraphForecaster(pl.LightningModule):
             torch.cuda.empty_cache()
             gc.collect()
 
-            if multi_gpu:
-                y_pred = self(x, self.mgroup)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
-            else:
-                y_pred = self(x, self.mgroup_single)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+            y_pred = self(x, self.model_coms_group)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
 
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
@@ -226,7 +220,7 @@ class GraphForecaster(pl.LightningModule):
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
         with torch.no_grad():
-            val_loss, metrics, y_preds = self._step(batch, batch_idx, validation_mode=True, multi_gpu=False)
+            val_loss, metrics, y_preds = self._step(batch, batch_idx, validation_mode=True)
         self.log(
             "val_wmse",
             val_loss,

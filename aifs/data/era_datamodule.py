@@ -35,12 +35,12 @@ class ERA5DataModule(pl.LightningDataModule):
         self.num_workers_val = config.dataloader.num_workers.validation
         self.config = config
 
-        self.global_rank = int(os.environ.get("SLURM_PROCID", "0"))
-        self.group_id = self.global_rank // self.config.hardware.group_size
-        self.group_rank = self.global_rank % self.config.hardware.group_size
+        self.global_rank = int(os.environ.get("SLURM_PROCID", "0")) # global rank
+        self.group_id = self.global_rank // self.config.hardware.num_gpus_per_model # id of the model communication group the rank is participating in
+        self.group_rank = self.global_rank % self.config.hardware.num_gpus_per_model # rank within one model communication group
         self.num_groups = math.ceil(
-            self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes / self.config.hardware.group_size
-        )
+            self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes / self.config.hardware.num_gpus_per_model
+        ) # number of model communication groups
         LOGGER.debug(
             "Rank %d group number %d, with local group rank %d",
             self.global_rank,

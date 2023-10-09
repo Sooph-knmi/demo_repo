@@ -1,5 +1,6 @@
 from typing import Optional
 from typing import Tuple
+from typing import List
 
 import einops
 import numpy as np
@@ -7,6 +8,9 @@ import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
+from torch_geometric.typing import Size
+
+from torch.distributed.distributed_c10d import ProcessGroup
 
 from aifs.model.layers import GNNMapper
 from aifs.model.layers import GNNProcessor
@@ -84,7 +88,7 @@ class GraphMSG(nn.Module):
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
             activation=self.activation,
-            nchunks=config.model.encoder.nchunks,
+            num_chunks=config.model.encoder.num_chunks,
         )
 
         # Processor H -> H
@@ -107,7 +111,7 @@ class GraphMSG(nn.Module):
             edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
             backward_mapper=True,
             activation=self.activation,
-            nchunks=config.model.decoder.nchunks,
+            num_chunks=config.model.decoder.num_chunks,
         )
 
     def _register_latlon(self, name: str) -> None:
@@ -224,12 +228,12 @@ class GraphMSG(nn.Module):
         edge_index: int,
         edge_inc: int,
         edge_attr: torch.Tensor,
-        shape_nodes,
-        size,
-        mgroup,
+        shape_nodes: Tuple[List, List],
+        size: Size,
+        model_coms_group: ProcessGroup,
         use_reentrant: bool = False,
     ):
-        """Create processor from checkpoint.
+        """Create act. checkpointed mapper.
 
         Parameters
         ----------
@@ -243,6 +247,8 @@ class GraphMSG(nn.Module):
             Edge increment to use
         edge_attr : torch.Tensor
             Trainable edge attribute tensor
+        model_coms_group : ProcessGroup
+            model communication group
         use_reentrant : bool, optional
             Use reentrant, by default False
 
@@ -262,11 +268,11 @@ class GraphMSG(nn.Module):
             edge_attr=edge_attr,
             shape_nodes=shape_nodes,
             size=size,
-            mgroup=mgroup,
+            model_coms_group=model_coms_group,
             use_reentrant=use_reentrant,
         )
 
-    def forward(self, x: torch.Tensor, mgroup) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, model_coms_group: ProcessGroup) -> torch.Tensor:
         self.batch_size = x.shape[0]
 
         # add ERA positional info (lat/lon)
@@ -285,8 +291,8 @@ class GraphMSG(nn.Module):
         size_bwd = (x_h_latent.shape[0], x_era_latent.shape[0])
 
         # shapes of node shards:
-        shape_x_fwd = get_shape_shards(x_era_latent, 0, mgroup)
-        shape_h_fwd = get_shape_shards(x_h_latent, 0, mgroup)
+        shape_x_fwd = get_shape_shards(x_era_latent, 0, model_coms_group)
+        shape_h_fwd = get_shape_shards(x_h_latent, 0, model_coms_group)
         shape_h_proc = change_channels_in_shape(shape_h_fwd, self.encoder_out_channels)
         shape_h_bwd = shape_h_proc
         shape_x_bwd = change_channels_in_shape(shape_x_fwd, self.encoder_out_channels)
@@ -299,7 +305,7 @@ class GraphMSG(nn.Module):
             edge_e_to_h_latent,
             shape_nodes=(shape_x_fwd, shape_h_fwd),
             size=size_fwd,
-            mgroup=mgroup,
+            model_coms_group=model_coms_group,
         )
 
         x_latent_proc = self.h_processor(  # has skipped connections and checkpoints inside
@@ -311,7 +317,7 @@ class GraphMSG(nn.Module):
             ),
             edge_attr=edge_h_to_h_latent,
             shape_nodes=shape_h_proc,
-            mgroup=mgroup,
+            model_coms_group=model_coms_group,
         )
 
         # add skip connection (H -> H)
@@ -325,7 +331,7 @@ class GraphMSG(nn.Module):
             edge_h_to_e_latent,
             shape_nodes=(shape_h_bwd, shape_x_bwd),
             size=size_bwd,
-            mgroup=mgroup,
+            model_coms_group=model_coms_group,
         )
 
         x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=self.batch_size)
