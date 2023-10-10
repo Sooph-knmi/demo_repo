@@ -5,7 +5,7 @@
 
 import torch
 import torch.distributed as dist
-
+from typing import List
 
 def shard_tensor(input_, dim, shapes, mgroup):
     """shard tensor"""
@@ -32,7 +32,7 @@ def reduce_shard_tensor(input_, dim, shapes, mgroup):
     return _ReduceShardParallelSection.apply(input_, dim, shapes, mgroup)
 
 
-def get_shape_shards(tensor, dim, group=None):
+def get_shape_shards(tensor, dim: int, group=None) -> List:
     """Get shape of shards"""
     assert dim < tensor.dim(), f"Error, tensor dimension is {tensor.dim()} which cannot be split along {dim}"
 
@@ -50,7 +50,8 @@ def get_shape_shards(tensor, dim, group=None):
     return shape_list
 
 
-def change_channels_in_shape(shape_list, channels):
+def change_channels_in_shape(shape_list: List, channels: int) -> List:
+    """Change the number of channels in the shape definition list."""
     if shape_list:
         out = [x[:-1] + [channels] for x in shape_list]
     else:

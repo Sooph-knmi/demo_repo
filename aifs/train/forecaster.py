@@ -1,5 +1,5 @@
-import os
 import math
+import os
 from pathlib import Path
 from typing import Dict
 from typing import Mapping
@@ -11,6 +11,8 @@ import torch
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from timm.scheduler import CosineLRScheduler
+from torch.distributed.optim import ZeroRedundancyOptimizer
+from torch.utils.checkpoint import checkpoint
 
 from aifs.data.scaling import pressure_level
 from aifs.model.losses import grad_scaler
@@ -18,13 +20,6 @@ from aifs.model.losses import WeightedMSELoss
 from aifs.model.model import AIFSModelGNN
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
-
-from torch.distributed.optim import ZeroRedundancyOptimizer
-from torch.utils.checkpoint import checkpoint
-
-import gc
-
-from torch.autograd.graph import save_on_cpu
 
 LOGGER = get_code_logger(__name__)
 
@@ -98,7 +93,10 @@ class GraphForecaster(pl.LightningModule):
 
         self.multi_step = config.training.multistep_input
         self.lr = (
-            config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate / config.hardware.num_gpus_per_model
+            config.hardware.num_nodes
+            * config.hardware.num_gpus_per_node
+            * config.training.lr.rate
+            / config.hardware.num_gpus_per_model
         )
         self.lr_iterations = config.training.lr.iterations
         self.lr_min = config.training.lr.min
@@ -119,10 +117,12 @@ class GraphForecaster(pl.LightningModule):
 
         self.group_id = int(os.environ.get("SLURM_PROCID", "0")) // config.hardware.num_gpus_per_model
         self.group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.num_gpus_per_model
-        self.num_groups = math.ceil(config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.num_gpus_per_model)
+        self.num_groups = math.ceil(
+            config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.num_gpus_per_model
+        )
 
-    def forward(self, x: torch.Tensor, model_coms_group=0) -> torch.Tensor:
-        return self.model(x, model_coms_group)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(x, self.model_coms_group)
 
     def set_model_coms_groups(self, model_coms_group) -> None:
         LOGGER.debug("set_model_coms_group: %s", model_coms_group)
@@ -148,31 +148,16 @@ class GraphForecaster(pl.LightningModule):
 
         # start rollout
         x = batch[:, 0 : self.multi_step, ...]  # (bs, multi_step, latlon, nvar)
-        # LOGGER.debug(
-        #     "Batch index: %d - Global rank %d, group %d out of %d, group_rank %d got a batch tensor with norm %.8e",
-        #     batch_idx,
-        #     self.global_rank,
-        #     self.group_id,
-        #     self.num_groups,
-        #     self.group_rank,
-        #     torch.linalg.norm(x),
-        # )
 
         y_preds = []
-        # with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
-            torch.cuda.empty_cache()
-            gc.collect()
-
-            y_pred = self(x, self.model_coms_group)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+            y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
 
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
-            # loss += self.loss(y_pred, y[..., : self.fcdim])
             loss += checkpoint(self.loss, y_pred, y[..., : self.fcdim], use_reentrant=False)
 
-            # x = self.advance_input(x, y, y_pred)
-            x = checkpoint(self.advance_input, x, y, y_pred, use_reentrant=False)
+            x = self.advance_input(x, y, y_pred)
 
             if validation_mode:
                 for mkey, (low, high) in self.metric_ranges.items():

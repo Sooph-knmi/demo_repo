@@ -14,7 +14,7 @@ from torch.distributed.distributed_c10d import ProcessGroup
 
 from aifs.model.layers import GNNMapper
 from aifs.model.layers import GNNProcessor
-from aifs.utils.distributed import get_shape_shards, change_channels_in_shape
+from aifs.distributed.helpers import get_shape_shards, change_channels_in_shape
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 

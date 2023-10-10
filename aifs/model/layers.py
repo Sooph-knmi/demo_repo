@@ -17,14 +17,12 @@ from torch_geometric.typing import PairTensor
 from torch_geometric.typing import Size
 from torch_geometric.utils import scatter
 
-from aifs.utils.distributed import (
-    shard_tensor,
-    gather_tensor,
-    sync_tensor,
-    reduce_shard_tensor,
-    get_shape_shards,
-    change_channels_in_shape,
-)
+from aifs.distributed.helpers import change_channels_in_shape
+from aifs.distributed.helpers import gather_tensor
+from aifs.distributed.helpers import get_shape_shards
+from aifs.distributed.helpers import reduce_shard_tensor
+from aifs.distributed.helpers import shard_tensor
+from aifs.distributed.helpers import sync_tensor
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
@@ -99,7 +97,7 @@ def gen_mlp(
 
 
 class CastTensor(nn.Module):
-    """Cast manually to torch.dtype"""
+    """Cast manually to torch.dtype."""
 
     def __init__(
         self,
@@ -149,14 +147,21 @@ class GNNProcessor(nn.Module):
 
         self.hidden_layers = chunks
         chunk_size = int(hidden_layers / chunks)
-        assert hidden_layers % chunks == 0
+        assert (
+            hidden_layers % chunks == 0
+        ), f"Number of processor layers ({hidden_layers}) has to be divisible by the number of processor chunks ({chunks})."
 
         self.proc = nn.ModuleList()
         for i in range(self.hidden_layers):
-            kwargs = {"emb_edges": True, "edge_dim": edge_dim} if i == 0 else {}
+            if i > 0:
+                edge_dim = None  # only embbed edges in first chunk
             self.proc.append(
                 GNNProcessorChunk(
-                    hidden_dim, hidden_layers=chunk_size, mlp_extra_layers=mlp_extra_layers, activation=activation, **kwargs
+                    hidden_dim,
+                    hidden_layers=chunk_size,
+                    mlp_extra_layers=mlp_extra_layers,
+                    activation=activation,
+                    edge_dim=edge_dim,
                 )
             )
 
@@ -178,7 +183,8 @@ class GNNProcessor(nn.Module):
 
 
 class GNNProcessorChunk(nn.Module):
-    """Wraps edge embedding and X message passing blocks for checkpointing in Processor."""
+    """Wraps edge embedding and X message passing blocks for checkpointing in
+    Processor."""
 
     def __init__(
         self,
@@ -186,8 +192,7 @@ class GNNProcessorChunk(nn.Module):
         hidden_layers: int,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
-        emb_edges: bool = False,
-        edge_dim: int = 3,
+        edge_dim: Optional[int] = None,
     ) -> None:
         """Initialize GNNProcessorChunk.
 
@@ -201,16 +206,15 @@ class GNNProcessorChunk(nn.Module):
             Extra layers in MLP, by default 0
         activation : str, optional
             Activation function, by default "SiLU"
-        emb_edges : bool, by default False,
-        edge_dim: int, by default 3, only used if emb_edges = True
-
+        edge_dim: int, by default None
+            Embedd edges with input dimension edge_dim,
+            if None: assume embedding is not required
         """
         super().__init__()
 
         self.hidden_layers = hidden_layers
-        self.emb_edges = emb_edges
 
-        if self.emb_edges:
+        if edge_dim:
             self.emb_edges = gen_mlp(
                 in_features=edge_dim,
                 hidden_dim=hidden_dim,
@@ -218,6 +222,8 @@ class GNNProcessorChunk(nn.Module):
                 n_extra_layers=mlp_extra_layers,
                 activation_func=activation,
             )
+        else:
+            self.emb_edges = False
 
         self.proc = nn.ModuleList(
             [
@@ -226,7 +232,15 @@ class GNNProcessorChunk(nn.Module):
             ]
         )
 
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, shapes: Tuple, model_coms_group: ProcessGroup, size: Size = None):
+    def forward(
+        self,
+        x: Union[Tensor, OptPairTensor],
+        edge_index: Adj,
+        edge_attr: Tensor,
+        shapes: Tuple,
+        model_coms_group: ProcessGroup,
+        size: Size = None,
+    ):
         if self.emb_edges:
             edge_attr = self.emb_edges(edge_attr)
 
@@ -252,7 +266,7 @@ class GNNMapper(nn.Module):
         backward_mapper: bool = False,
         out_channels_dst: Optional[int] = None,
     ) -> None:
-        """Initialize the mapper.
+        """Initialize GNNMapper.
 
         Parameters
         ----------
@@ -260,11 +274,22 @@ class GNNMapper(nn.Module):
             Input channels of the source node
         in_channels_dst : int
             Input channels of the destination node
+        hidden_dim : int
+            Hidden dimension
+        edge_dim : int
+            Input features of edge MLP
+        mlp_extra_layers : int, optional
+            Number of extra layers in MLP, by default 0
+        activation : str, optional
+            Activation funciton, by default "SiLU"
+        num_chunks : int
+            Do message passing in X chunks
+        cpu_offload : bool, optional
+            Whether to offload processing to CPU, by default False
         backward_mapper : bool, optional
             Map from (true) hidden to era or (false) reverse, by default False
         out_channels_dst : Optional[int], optional
             Output channels of the destination node, by default None
-        num_chunks : do message passing in X chunks
         """
         super().__init__()
 
@@ -320,7 +345,9 @@ class GNNMapper(nn.Module):
                 activation_func=activation,
             )
 
-    def forward(self, x: PairTensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, size: Size, model_coms_group: ProcessGroup) -> PairTensor:
+    def forward(
+        self, x: PairTensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, size: Size, model_coms_group: ProcessGroup
+    ) -> PairTensor:
         shapes_edge_idx = get_shape_shards(edge_index, 1, model_coms_group)
         shapes_edge_attr = get_shape_shards(edge_attr, 0, model_coms_group)
         edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_coms_group)
@@ -338,7 +365,9 @@ class GNNMapper(nn.Module):
             shapes_src = change_channels_in_shape(shapes_src, self.hidden_dim)
             shapes_dst = change_channels_in_shape(shapes_dst, self.hidden_dim)
 
-        (x_src, x_dst), edge_attr = self.proc((x_src, x_dst), edge_index, edge_attr, (shapes_src, shapes_dst), model_coms_group, size=size)
+        (x_src, x_dst), edge_attr = self.proc(
+            (x_src, x_dst), edge_index, edge_attr, (shapes_src, shapes_dst), model_coms_group, size=size
+        )
 
         if self.backward_mapper:
             x_dst = self.node_era_extractor(x_dst)
@@ -394,7 +423,15 @@ class GNNBlock(nn.Module):
             in_channels=in_channels, out_channels=out_channels, mlp_extra_layers=mlp_extra_layers, activation=activation
         )
 
-    def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, shapes: Tuple, model_coms_group: ProcessGroup, size: Size = None):
+    def forward(
+        self,
+        x: Union[Tensor, OptPairTensor],
+        edge_index: Adj,
+        edge_attr: Tensor,
+        shapes: Tuple,
+        model_coms_group: ProcessGroup,
+        size: Size = None,
+    ):
         if isinstance(x, Tensor):
             x_in = sync_tensor(x, 0, shapes[1], model_coms_group)
         else:

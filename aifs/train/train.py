@@ -12,9 +12,9 @@ from pytorch_lightning.profilers import PyTorchProfiler
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.callbacks import get_callbacks
-from aifs.diagnostics.logging import get_wandb_logger
 from aifs.diagnostics.logging import get_tensorboard_logger
-from aifs.train.strategy import DDPGroupStrategy
+from aifs.diagnostics.logging import get_wandb_logger
+from aifs.distributed.strategy import DDPGroupStrategy
 from aifs.train.forecaster import GraphForecaster
 from aifs.utils.logger import get_code_logger
 
@@ -104,7 +104,8 @@ class AIFSTrainer:
 
     @cached_property
     def profiler(self) -> Optional[PyTorchProfiler]:
-        """Returns a pytorch profiler object, if profiling is enabled, otherwise None."""
+        """Returns a pytorch profiler object, if profiling is enabled, otherwise
+        None."""
         if self.config.diagnostics.profiler:
             assert (
                 self.config.diagnostics.log.tensorboard.enabled
@@ -189,8 +190,6 @@ class AIFSTrainer:
         )
 
         trainer.fit(self.model, datamodule=self.datamodule, ckpt_path=self.last_checkpoint)
-
-        LOGGER.debug(f"memory summary: {torch.cuda.memory_summary()}")
 
         LOGGER.debug("---- DONE. ----")
 
