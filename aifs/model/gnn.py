@@ -9,7 +9,7 @@ from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
 
 from aifs.model.layers import MessagePassingMapper
-from aifs.model.layers import MessagePassingProcessor
+from aifs.model.layers import MessagePassingProcessor, TransformerProcessor
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
@@ -88,14 +88,18 @@ class GraphMSG(nn.Module):
         )
 
         # Processor H -> H
-        self.h_processor = MessagePassingProcessor(
+        self.h_processor = TransformerProcessor(
             hidden_dim=encoder_out_channels,
             hidden_layers=config.model.hidden.num_layers,
-            mlp_extra_layers=mlp_extra_layers,
-            edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
-            chunks=2,
-            activation=self.activation,
         )
+        # self.h_processor = MessagePassingProcessor(
+        #     hidden_dim=encoder_out_channels,
+        #     hidden_layers=config.model.hidden.num_layers,
+        #     mlp_extra_layers=mlp_extra_layers,
+        #     edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
+        #     chunks=2,
+        #     activation=self.activation,
+        # )
 
         # Decoder H -> ERA5
         self.backward_mapper = MessagePassingMapper(
@@ -281,16 +285,10 @@ class GraphMSG(nn.Module):
 
         x_latent_proc = self.h_processor(  # has skipped connections and checkpoints inside
             x_latent,
-            # expand edge index correct number of times while adding the proper number to the edge index
-            edge_index=torch.cat(
-                [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(self.batch_size)],
-                dim=1,
-            ),
-            edge_attr=edge_h_to_h_latent,
         )
 
         # add skip connection (H -> H)
-        x_latent_proc = x_latent_proc + x_latent
+        # x_latent_proc = x_latent_proc + x_latent
 
         _, x_out = self._create_processor(
             self.backward_mapper, (x_latent_proc, x_era_latent), self.h2e_edge_index, self._h2e_edge_inc, edge_h_to_e_latent

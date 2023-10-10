@@ -194,6 +194,7 @@ def gen_mlp(
     n_extra_layers: int = 0,
     activation_func: str = "SiLU",
     final_activation: bool = True,
+    start_with_layernorm: bool = False,
     layer_norm: bool = True,
     checkpoints: bool = False,
 ) -> nn.Module:
@@ -233,6 +234,16 @@ def gen_mlp(
     except AttributeError as ae:
         LOGGER.error("Activation function %s not supported", activation_func)
         raise RuntimeError from ae
+
+    mlp1 = nn.Sequential()
+    if start_with_layernorm:
+        mlp1 = nn.Sequential(nn.LayerNorm(in_features))
+    mlp1.append(nn.Sequential(nn.Linear(in_features, hidden_dim), act_func()))
+    for _ in range(n_extra_layers):
+        mlp1.append(nn.Linear(hidden_dim, hidden_dim))
+        mlp1.append(act_func())
+    mlp1.append(nn.Linear(hidden_dim, out_features))
+
 
     mlp1 = nn.Sequential(nn.Linear(in_features, hidden_dim), act_func())
     for _ in range(n_extra_layers):
@@ -292,13 +303,14 @@ class MessagePassingProcessor(nn.Module):
         self.mlp_extra_layers = mlp_extra_layers
         self.activation = activation
 
-        self.emb_edges = gen_mlp(
-            in_features=edge_dim,
-            hidden_dim=hidden_dim,
-            out_features=hidden_dim,
-            n_extra_layers=mlp_extra_layers,
-            activation_func=activation,
-        )
+        self.emb_edges = nn.Linear(edge_dim, hidden_dim)
+        # self.emb_edges = gen_mlp(
+        #     in_features=edge_dim,
+        #     hidden_dim=hidden_dim,
+        #     out_features=hidden_dim,
+        #     n_extra_layers=mlp_extra_layers,
+        #     activation_func=activation,
+        # )
 
         self.proc = nn.ModuleList(
             [
@@ -354,27 +366,28 @@ class MessagePassingMapper(MessagePassingProcessor):
                 in_features=self.hidden_dim,
                 hidden_dim=self.hidden_dim,
                 out_features=out_channels_dst,
-                n_extra_layers=self.mlp_extra_layers + 1,
+                n_extra_layers=self.mlp_extra_layers,
                 activation_func=self.activation,
                 layer_norm=False,
                 final_activation=False,
             )
         else:  # era -> h
-            self.emb_nodes_src = gen_mlp(
-                in_features=in_channels_src,
-                hidden_dim=self.hidden_dim,
-                out_features=self.hidden_dim,
-                n_extra_layers=self.mlp_extra_layers,
-                activation_func=self.activation,
-            )
-
-            self.emb_nodes_dst = gen_mlp(
-                in_features=in_channels_dst,
-                hidden_dim=self.hidden_dim,
-                out_features=self.hidden_dim,
-                n_extra_layers=self.mlp_extra_layers,
-                activation_func=self.activation,
-            )
+            self.emb_nodes_src = nn.Linear(in_channels_src, self.hidden_dim)
+            # self.emb_nodes_src = gen_mlp(
+            #     in_features=in_channels_src,
+            #     hidden_dim=self.hidden_dim,
+            #     out_features=self.hidden_dim,
+            #     n_extra_layers=self.mlp_extra_layers,
+            #     activation_func=self.activation,
+            # )
+            self.emb_nodes_dst = nn.Linear(in_channels_dst, self.hidden_dim)
+            # self.emb_nodes_dst = gen_mlp(
+            #     in_features=in_channels_dst,
+            #     hidden_dim=self.hidden_dim,
+            #     out_features=self.hidden_dim,
+            #     n_extra_layers=self.mlp_extra_layers,
+            #     activation_func=self.activation,
+            # )
 
     def forward(self, x: PairTensor, edge_index: Adj, edge_attr: Tensor) -> PairTensor:
         if self.backward_mapper:
@@ -467,6 +480,9 @@ class MessagePassingBlock(MessagePassing):
             out_channels,
             n_extra_layers=mlp_extra_layers,
             activation_func=activation,
+            start_with_layernorm=True,
+            layer_norm=False,
+            final_activation=False,
         )
         self.edge_mlp = gen_mlp(
             3 * in_channels,
@@ -474,22 +490,26 @@ class MessagePassingBlock(MessagePassing):
             out_channels,
             n_extra_layers=mlp_extra_layers,
             activation_func=activation,
+            start_with_layernorm=True,
+            layer_norm=False,
+            final_activation=False,
         )
+
 
     def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, size: Size = None):
         out, edges_new = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size)
 
         if isinstance(x, Tensor):
-            nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x
+            nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) #+ x # this branch is now not used anymore ...
         else:
-            nodes_new_dst = self.node_mlp(torch.cat([x[1], out], dim=1)) + x[1]
-            nodes_new_src = self.node_mlp(torch.cat([x[0], x[0]], dim=1)) + x[0]  # todo: only update this in the forward mapper...
+            nodes_new_dst = self.node_mlp(torch.cat([x[1], out], dim=1)) #+ x[1]
+            nodes_new_src = self.node_mlp(torch.cat([x[0], x[0]], dim=1)) + x[0] # skipped connection only for source nodes  ; this should only happen in forward mapper to save costs -> todo
             nodes_new = (nodes_new_src, nodes_new_dst)
 
         return nodes_new, edges_new
 
     def message(self, x_i: Tensor, x_j: Tensor, edge_attr: Tensor) -> Tensor:
-        edges_new = self.edge_mlp(torch.cat([x_i, x_j, edge_attr], dim=1)) + edge_attr
+        edges_new = self.edge_mlp(torch.cat([x_i, x_j, edge_attr], dim=1)) #+ edge_attr
 
         return edges_new
 
@@ -497,6 +517,71 @@ class MessagePassingBlock(MessagePassing):
         out = scatter(edges_new, edge_index[1], dim=0, reduce="sum")
 
         return out, edges_new
+
+
+class TransformerProcessor(nn.Module):
+    """Message Passing Processor Graph Neural Network."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        hidden_layers: int,
+    ) -> None:
+        """Initialize TransformerProcessor.
+
+        Parameters
+        ----------
+        hidden_dim : int
+            Hidden dimension
+        hidden_layers : int
+            Number of hidden layers
+        """
+        super().__init__()
+
+        self.hidden_layers = hidden_layers
+
+        self.proc = nn.ModuleList(
+            [
+                AttentionBlock(
+                    channels=hidden_dim, hidden_dim=4*hidden_dim, num_heads=16
+                )
+                for _ in range(self.hidden_layers)
+            ]
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+
+        for i in range(self.hidden_layers):
+            x = checkpoint(self.proc[i], x, use_reentrant=False)
+
+        return x
+
+
+class AttentionBlock(nn.Module):
+    def __init__(self, channels, hidden_dim, num_heads):
+        """
+        Attention Block ...
+        """
+        super().__init__()
+
+        self.lnorm1 = nn.LayerNorm(channels)
+        self.attn = nn.MultiheadAttention(channels, num_heads)
+        self.proj = nn.Linear(channels, channels)
+        self.mlp = nn.Sequential(
+            nn.Linear(channels, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, channels),
+        )
+        self.lnorm2 = nn.LayerNorm(channels)
+
+    def forward(self, x):
+        x1 = x
+        x = self.lnorm1(x)
+        x = self.attn(x, x, x, need_weights=False)[0]
+        x = self.proj(x) + x1
+        x = self.mlp(self.lnorm2(x)) + x
+
+        return x
 
 
 class CheckpointWrapper(nn.Module):
