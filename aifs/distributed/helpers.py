@@ -2,38 +2,39 @@
 # Apache License -> http://www.apache.org/licenses/LICENSE-2.0
 # License: https://github.com/NVIDIA/modulus/blob/b18419e9460f6acd3cd3d175f5d6caf6bbc9d2da/modulus/utils/sfno/distributed/helpers.py#L1C6-L1C6
 # todo: add proper license information etc.
+from typing import List
 
 import torch
 import torch.distributed as dist
-from typing import List
+
 
 def shard_tensor(input_, dim, shapes, mgroup):
-    """shard tensor"""
+    """Shard tensor."""
     return _ShardParallelSection.apply(input_, dim, shapes, mgroup)
 
 
 def gather_tensor(input_, dim, shapes, mgroup):
-    """gather tensor"""
+    """Gather tensor."""
     return _GatherParallelSection.apply(input_, dim, shapes, mgroup)
 
 
 def reduce_tensor(input_, mgroup):
-    """reduce tensor"""
+    """Reduce tensor."""
     return _ReduceParallelSection.apply(input_, mgroup)
 
 
 def sync_tensor(input_, dim, shapes, mgroup):
-    """sync tensor"""
+    """Sync tensor."""
     return _SyncParallelSection.apply(input_, dim, shapes, mgroup)
 
 
 def reduce_shard_tensor(input_, dim, shapes, mgroup):
-    """reduce shard tensor"""
+    """Reduce shard tensor."""
     return _ReduceShardParallelSection.apply(input_, dim, shapes, mgroup)
 
 
 def get_shape_shards(tensor, dim: int, group=None) -> List:
-    """Get shape of shards"""
+    """Get shape of shards."""
     assert dim < tensor.dim(), f"Error, tensor dimension is {tensor.dim()} which cannot be split along {dim}"
 
     if group:
@@ -181,7 +182,7 @@ class _ReduceParallelSection(torch.autograd.Function):
         return grad_output, None
 
 
-def _split(input_, dim_, shapes_, group=None):  # pragma: no cover
+def _split(input_, dim_, shapes_, group=None):
     """Split the tensor along dim and keep the relevant slice."""
     # get input format
     input_format = get_memory_format(input_)
@@ -202,7 +203,7 @@ def _split(input_, dim_, shapes_, group=None):  # pragma: no cover
 
 
 def split_tensor_dim(tensor, dim, num_chunks):
-    """Helper routine to split a tensor along a given dimension"""
+    """Helper routine to split a tensor along a given dimension."""
     assert dim < tensor.dim(), f"Error, tensor dimension is {tensor.dim()} which cannot be split along {dim}"
 
     tensor_list = torch.tensor_split(tensor, num_chunks, dim=dim)
@@ -262,7 +263,7 @@ def _reduce(input_, use_fp32=True, group=None):
 
 
 def get_memory_format(tensor):
-    """Helper routine to get the memory format"""
+    """Helper routine to get the memory format."""
     if tensor.is_contiguous(memory_format=torch.channels_last):
         return torch.channels_last
     else:

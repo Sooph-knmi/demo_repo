@@ -430,6 +430,8 @@ class GNNBlock(nn.Module):
             Extra layers in MLP, by default 0
         activation_fun : str, optional
             Activation function, by default "SiLU"
+        layernorm_to_dtype : str, optional, by default None
+            Cast manually to dtype after layer norms (amp casts to float32)
         update_src_nodes: bool, by default True
             Update src if src and dst nodes are given
         num_chunks : int, by default 1

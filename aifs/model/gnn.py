@@ -225,7 +225,7 @@ class GraphMSG(nn.Module):
             dim=-1,  # feature dimension
         )
 
-    def _create_mapper(
+    def _run_mapper(
         self,
         mapper: nn.Module,
         data: Tuple[torch.Tensor],
@@ -237,7 +237,7 @@ class GraphMSG(nn.Module):
         model_coms_group: ProcessGroup,
         use_reentrant: bool = False,
     ):
-        """Create act. checkpointed mapper.
+        """Run act. checkpointed mapper.
 
         Parameters
         ----------
@@ -301,7 +301,7 @@ class GraphMSG(nn.Module):
         shape_h_bwd = shape_h_proc
         shape_x_bwd = change_channels_in_shape(shape_x_fwd, self.encoder_out_channels)
 
-        x_era_latent, x_latent = self._create_mapper(
+        x_era_latent, x_latent = self._run_mapper(
             self.forward_mapper,
             (x_era_latent, x_h_latent),
             self.e2h_edge_index,
@@ -327,7 +327,7 @@ class GraphMSG(nn.Module):
         # add skip connection (H -> H)
         x_latent_proc = x_latent_proc + x_latent
 
-        _, x_out = self._create_mapper(
+        _, x_out = self._run_mapper(
             self.backward_mapper,
             (x_latent_proc, x_era_latent),
             self.h2e_edge_index,
