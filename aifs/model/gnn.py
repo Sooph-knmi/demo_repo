@@ -1,20 +1,20 @@
+from typing import List
 from typing import Optional
 from typing import Tuple
-from typing import List
 
 import einops
 import numpy as np
 import torch
 from torch import nn
+from torch.distributed.distributed_c10d import ProcessGroup
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
 from torch_geometric.typing import Size
 
-from torch.distributed.distributed_c10d import ProcessGroup
-
+from aifs.distributed.helpers import change_channels_in_shape
+from aifs.distributed.helpers import get_shape_shards
 from aifs.model.layers import GNNMapper
 from aifs.model.layers import GNNProcessor
-from aifs.distributed.helpers import get_shape_shards, change_channels_in_shape
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
@@ -48,7 +48,8 @@ class GraphMSG(nn.Module):
 
         LOGGER.debug("self.in_channels + self.aux_channels == %d", self.in_channels + self.aux_in_channels)
 
-        self.activation = config.model.activation
+        self.activation_fun = config.model.activation_fun
+        self.layernorm_to_dtype = config.training.precision.manual_cast_after_layernorm
 
         # Create Graph edges
         self._create_edges()
@@ -87,7 +88,8 @@ class GraphMSG(nn.Module):
             hidden_dim=self.encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
-            activation=self.activation,
+            activation_fun=self.activation_fun,
+            layernorm_to_dtype=self.layernorm_to_dtype,
             num_chunks=config.model.encoder.num_chunks,
         )
 
@@ -98,7 +100,8 @@ class GraphMSG(nn.Module):
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
             chunks=config.model.processor.chunks,
-            activation=self.activation,
+            activation_fun=self.activation_fun,
+            layernorm_to_dtype=self.layernorm_to_dtype,
         )
 
         # Decoder H -> ERA5
@@ -110,7 +113,8 @@ class GraphMSG(nn.Module):
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
             backward_mapper=True,
-            activation=self.activation,
+            activation_fun=self.activation_fun,
+            layernorm_to_dtype=self.layernorm_to_dtype,
             num_chunks=config.model.decoder.num_chunks,
         )
 

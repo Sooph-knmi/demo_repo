@@ -173,7 +173,7 @@ class AIFSTrainer:
             strategy=DDPGroupStrategy(self.config.hardware.num_gpus_per_model, static_graph=True),
             devices=self.config.hardware.num_gpus_per_node,
             num_nodes=self.config.hardware.num_nodes,
-            precision=self.config.training.precision,
+            precision=self.config.training.precision.default,
             max_epochs=self.config.training.max_epochs,
             logger=self.loggers,
             log_every_n_steps=self.config.diagnostics.log.interval,
