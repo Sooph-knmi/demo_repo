@@ -23,8 +23,8 @@ export TORCH_DISTRIBUTED_DEBUG=DETAIL
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="ens-patched-energy-mpar-mc"
-export WANDB_NOTES="Patched energy score optimized ensemble forecasting"
+export WANDB_NAME="ens-patched-energy-mpar-voronoi"
+export WANDB_NOTES="Patched (voronoi) energy score optimized ensemble forecasting"
 
 
 # generic settings
