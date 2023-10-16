@@ -60,6 +60,7 @@ class GraphForecaster(pl.LightningModule):
 
         self.era_latlons = self.graph_data[("era", "to", "era")].ecoords_rad
         self.era_weights = self.graph_data[("era", "to", "era")].area_weights
+        # np.rad2deg(pl_module.era_latlons.numpy()),
 
         loss_scaling = np.array([], dtype=np.float32)
         for pl_name in config.data.pl.parameters:
@@ -93,7 +94,8 @@ class GraphForecaster(pl.LightningModule):
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
         self.multi_step = config.training.multistep_input
-        self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
+        # self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
+        self.lr = config.hardware.num_gpus_per_node * config.training.lr.rate
         self.lr_iterations = config.training.lr.iterations
         self.lr_min = config.training.lr.min
         self.rollout = config.training.rollout.start
@@ -104,8 +106,6 @@ class GraphForecaster(pl.LightningModule):
         LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
         LOGGER.debug("Rollout max : %d", self.rollout_max)
         LOGGER.debug("Multistep: %d", self.multi_step)
-
-        print("self.rollout : {}".format(self.rollout))
 
         self.enable_plot = config.diagnostics.plot.enabled
 
@@ -144,7 +144,7 @@ class GraphForecaster(pl.LightningModule):
             loss = self.loss(y_pred, y[..., : self.fcdim])
 
             if not validation_mode:
-                y_preds.append(y_pred)
+                y_preds.append(y_pred.to(torch.float32))
 
             # integrate y_pred for roll-out
             x = self.advance_input(x, y, y_pred.mean(axis=1))
@@ -156,7 +156,7 @@ class GraphForecaster(pl.LightningModule):
                     metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
 
                 if self.enable_plot:
-                    y_preds.append(y_pred[0])
+                    y_preds.append(y_pred.to(torch.float32))
 
         # scale loss
         # loss *= 1.0 / self.rollout
@@ -164,12 +164,13 @@ class GraphForecaster(pl.LightningModule):
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         train_loss, _, y_preds = self._step(batch, batch_idx)
+        print("{:04d} :: {:0.5f} / {:0.5f} / {:0.5f}".format(batch_idx, train_loss[1], train_loss[2][0], train_loss[2][1]))
         self.log(
             "train_wmse",
             train_loss[1],
             on_epoch=True,
             on_step=True,
-            prog_bar=True,
+            prog_bar=False,
             logger=True,
             batch_size=batch.shape[0],
             sync_dist=True,
@@ -179,7 +180,7 @@ class GraphForecaster(pl.LightningModule):
             train_loss[2][0],
             on_epoch=True,
             on_step=True,
-            prog_bar=True,
+            prog_bar=False,
             logger=True,
             batch_size=batch.shape[0],
             sync_dist=True,
@@ -189,7 +190,7 @@ class GraphForecaster(pl.LightningModule):
             train_loss[2][1],
             on_epoch=True,
             on_step=True,
-            prog_bar=True,
+            prog_bar=False,
             logger=True,
             batch_size=batch.shape[0],
             sync_dist=True,
@@ -244,21 +245,24 @@ class GraphForecaster(pl.LightningModule):
             sync_dist=True,
         )
         for mname, mvalue in metrics.items():
+            # print( f'validation :: {mname} = {mvalue}')
             self.log(
                 "val_" + mname,
                 mvalue,
                 on_epoch=True,
                 on_step=False,
-                prog_bar=False,
+                prog_bar=True,
                 logger=True,
                 batch_size=batch.shape[0],
                 sync_dist=True,
             )
 
+        # collapse y_preds along ensemble dimension
+        # y_preds = [y_pred.mean(axis=0) for y_pred in y_preds]
         return val_loss[0], y_preds
 
     def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
-        batch = self.normalizer(batch, in_place=False)
+        batch = self.normalizer.normalize(batch, in_place=False)
 
         with torch.no_grad():
             x = batch[:, 0 : self.multi_step, ...]
@@ -269,7 +273,7 @@ class GraphForecaster(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
         scheduler = CosineLRScheduler(
-            self.optimizer,
+            optimizer,
             lr_min=self.lr_min,
             t_initial=self.lr_iterations,
             warmup_t=1000,
