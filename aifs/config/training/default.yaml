@@ -2,7 +2,6 @@
 compile: False
 
 # resume or fork a training from a checkpoint last.ckpt or specified in hardware.files.warm_start
-# run_id: 36367799-a468b02b-4f3a-4074-bc4f-ad681cd4a017
 run_id: null
 fork_run_id: null
 
