@@ -27,8 +27,8 @@ dataloader:
     training: 2
     validation: 2
   limit_batches:
-    training: 300
-    validation: 100
+    training: 100
+    validation: 10
 
 training:
   max_epochs: 2
