@@ -18,6 +18,8 @@ from torch_geometric.utils import scatter
 
 from aifs.utils.logger import get_code_logger
 
+# code.interact(local=locals())
+
 LOGGER = get_code_logger(__name__)
 
 
@@ -196,6 +198,7 @@ def gen_mlp(
     final_activation: bool = True,
     layer_norm: bool = True,
     checkpoints: bool = False,
+    dropout: float = 0.0,
 ) -> nn.Module:
     """Generate a multi-layer perceptron.
 
@@ -238,6 +241,8 @@ def gen_mlp(
     for _ in range(n_extra_layers):
         mlp1.append(nn.Linear(hidden_dim, hidden_dim))
         mlp1.append(act_func())
+    if dropout > 0.0:
+        mlp1.append(torch.nn.Dropout(dropout))
     mlp1.append(nn.Linear(hidden_dim, out_features))
 
     if final_activation:
@@ -419,15 +424,15 @@ class MessagePassingMapperBackwardEnsemble(MessagePassingProcessor):
         """
         super().__init__(**kwargs)
 
-        self.node_era_extractor = gen_mlp(
-            in_features=self.hidden_dim,
-            hidden_dim=self.hidden_dim,
-            out_features=self.hidden_dim,
-            n_extra_layers=self.mlp_extra_layers + 1,
-            activation_func=self.activation,
-            layer_norm=False,
-            final_activation=False,
-        )
+        # self.node_era_extractor = gen_mlp(
+        #     in_features=self.hidden_dim,
+        #     hidden_dim=self.hidden_dim,
+        #     out_features=self.hidden_dim,
+        #     n_extra_layers=self.mlp_extra_layers + 1,
+        #     activation_func=self.activation,
+        #     layer_norm=False,
+        #     final_activation=False,
+        # )
 
         self.num_tail_nets = 10
         dim = self.hidden_dim
@@ -437,6 +442,7 @@ class MessagePassingMapperBackwardEnsemble(MessagePassingProcessor):
             self.tail_nets[-1].append(torch.nn.LayerNorm(dim, elementwise_affine=True))
             self.tail_nets[-1].append(torch.nn.Linear(dim, out_channels_dst, bias=True))
 
+    # @torch.cuda.amp.custom_fwd(cast_inputs=torch.float32)
     def forward(self, x: PairTensor, edge_index: Adj, edge_attr: Tensor) -> PairTensor:
         x_src, x_dst = x
 
@@ -445,7 +451,7 @@ class MessagePassingMapperBackwardEnsemble(MessagePassingProcessor):
         for i in range(self.hidden_layers):
             (x_src, x_dst), edge_attr = self.proc[i]((x_src, x_dst), edge_index, edge_attr, size=(x_src.shape[0], x_dst.shape[0]))
 
-        x_dst = self.node_era_extractor(x_dst)
+        # x_dst = self.node_era_extractor(x_dst)
 
         # evaluate ensemble of tail nets
         preds = []
@@ -534,6 +540,7 @@ class MessagePassingBlock(MessagePassing):
             out_channels,
             n_extra_layers=mlp_extra_layers,
             activation_func=activation,
+            dropout=0.0,
         )
         self.edge_mlp = gen_mlp(
             3 * in_channels,
@@ -541,6 +548,7 @@ class MessagePassingBlock(MessagePassing):
             out_channels,
             n_extra_layers=mlp_extra_layers,
             activation_func=activation,
+            dropout=0.0,
         )
 
     def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, size: Size = None):
