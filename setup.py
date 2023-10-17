@@ -33,7 +33,7 @@ setup(
     ],
     extras_require={
         "training": [
-            "pytorch-lightning>=2.0.8",
+            "pytorch-lightning>=2.1.0",
             "timm>=0.9.2",
             "hydra-core>=1.3",
             "matplotlib>=3.7.1",
