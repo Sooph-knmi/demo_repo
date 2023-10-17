@@ -9,6 +9,7 @@ from torch import nn
 from torch.distributed.distributed_c10d import ProcessGroup
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
+from torch_geometric.typing import Adj
 from torch_geometric.typing import Size
 
 from aifs.distributed.helpers import change_channels_in_shape
@@ -225,12 +226,35 @@ class GraphMSG(nn.Module):
             dim=-1,  # feature dimension
         )
 
+    def _expand_edges(self, edge_index: Adj, edge_inc: torch.Tensor) -> Adj:
+        """Expand edge index correct number of times while adding the proper number to
+        the edge index.
+
+        Parameters
+        ----------
+        edge_index : Adj
+            Edge index to start
+        edge_inc : torch.Tensor
+            Edge increment to use
+
+        Returns
+        -------
+        torch.Tensor
+            Edge Index
+        """
+        edge_index = torch.cat(
+            [edge_index + i * edge_inc for i in range(self.batch_size)],
+            dim=1,
+        )
+
+        return edge_index
+
     def _run_mapper(
         self,
         mapper: nn.Module,
         data: Tuple[torch.Tensor],
-        edge_index: int,
-        edge_inc: int,
+        edge_index: Adj,
+        edge_inc: torch.Tensor,
         edge_attr: torch.Tensor,
         shape_nodes: Tuple[List, List],
         size: Size,
@@ -264,11 +288,7 @@ class GraphMSG(nn.Module):
         return checkpoint(
             mapper,
             data,
-            # expand edge index correct number of times while adding the proper number to the edge index
-            edge_index=torch.cat(
-                [edge_index + i * edge_inc for i in range(self.batch_size)],
-                dim=1,
-            ),
+            edge_index=self._expand_edges(edge_index, edge_inc),
             edge_attr=edge_attr,
             shape_nodes=shape_nodes,
             size=size,
@@ -312,13 +332,9 @@ class GraphMSG(nn.Module):
             model_coms_group=model_coms_group,
         )
 
-        x_latent_proc = self.h_processor(  # has skipped connections and checkpoints inside
+        x_latent_proc = self.h_processor(
             x_latent,
-            # expand edge index correct number of times while adding the proper number to the edge index
-            edge_index=torch.cat(
-                [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(self.batch_size)],
-                dim=1,
-            ),
+            edge_index=self._expand_edges(self.h2h_edge_index, self._h2h_edge_inc),
             edge_attr=edge_h_to_h_latent,
             shape_nodes=shape_h_proc,
             model_coms_group=model_coms_group,
