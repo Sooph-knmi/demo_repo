@@ -12,8 +12,10 @@ from pytorch_lightning.profilers import PyTorchProfiler
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.callbacks import get_callbacks
-from aifs.diagnostics.logging import get_wandb_logger
 from aifs.diagnostics.logging import get_tensorboard_logger
+from aifs.diagnostics.logging import get_wandb_logger
+from aifs.diagnostics.profilers import BenchmarkProfiler
+from aifs.diagnostics.profilers import ProfilerProrgressBar
 from aifs.train.forecaster import GraphForecaster
 from aifs.utils.logger import get_code_logger
 
@@ -103,9 +105,12 @@ class AIFSTrainer:
 
     @cached_property
     def profiler(self) -> Optional[PyTorchProfiler]:
-        """Returns a pytorch profiler object, if profiling is enabled, otherwise None."""
+        """Returns a pytorch profiler object, if profiling is enabled, otherwise
+        None."""
         if self.config.diagnostics.profiler:
-            assert self.config.diagnostics.log.tensorboard.enabled, "Tensorboard logging must be enabled when profiling! Check your job config."
+            assert (
+                self.config.diagnostics.log.tensorboard.enabled
+            ), "Tensorboard logging must be enabled when profiling! Check your job config."
             return PyTorchProfiler(
                 dirpath=self.config.hardware.paths.logs.tensorboard,
                 filename="aifs-profiler",
@@ -121,6 +126,11 @@ class AIFSTrainer:
                 record_shapes=True,
                 with_stack=True,
             )
+        elif self.config.diagnostics.benchmark_profiler:
+            speed_profiler = ProfilerProrgressBar()
+            self.callbacks.append(speed_profiler)
+            benchmark_profiler = BenchmarkProfiler(self.config)
+            return benchmark_profiler
         return None
 
     @cached_property
