@@ -1,7 +1,5 @@
 training: aifs-era5-${data.resolution}-1979-2015-1h.zarr
 validation: panguweather-${data.resolution}-2016-2017-6h.zarr
-test: panguweather-${data.resolution}-2016-2017-6h.zarr
-predict: panguweather-${data.resolution}-2016-2017-6h.zarr
 graph: graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4_5.pt
 checkpoint: aifs-ckpt-epoch_{epoch:03d}-rollout_{rollout:.0f}-train_kcrps_{train_kcrps_epoch:.3e}
 warm_start: null

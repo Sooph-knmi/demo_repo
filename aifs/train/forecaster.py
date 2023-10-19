@@ -28,8 +28,6 @@ from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__, debug=False)
 
-PairTensor = Tuple[torch.Tensor, Optional[torch.Tensor]]
-
 
 class GraphForecaster(pl.LightningModule):
     """Graph neural network forecaster for PyTorch Lightning."""
@@ -88,9 +86,13 @@ class GraphForecaster(pl.LightningModule):
 
         # Loss function
         self.loss_type = config.training.loss
-        assert self.loss_type in ["kcrps", "energy", "patched_energy"], f"A loss of type {self.loss_type} is not supported!"
+        assert self.loss_type in [
+            "kcrps",
+            "energy",
+            "patched_energy",
+        ], f"Invalid loss type {self.loss_type}! Check your config ..."
         self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=loss_scaling)
-        if self.loss == "energy":
+        if self.loss_type == "energy":
             self.energy_score = EnergyScore(area_weights=self.era_weights, loss_scaling=loss_scaling)
         else:
             patches_ = torch.from_numpy(
@@ -188,32 +190,32 @@ class GraphForecaster(pl.LightningModule):
         x[:, :, self.multi_step - 1, :, self.fcdim :] = y[:, None, :, self.fcdim :]  # add dummy ensemble dim to match x
         return x
 
-    def _generate_ens_inicond(self, batch: PairTensor) -> torch.Tensor:
+    def _generate_ens_inicond(self, batch: Tuple[torch.Tensor, ...]) -> torch.Tensor:
         """Generate initial conditions for the ensemble based on the EDA perturbations.
 
         Inputs:
-            batch: 2-tuple of tensors with
+            batch: 1- or 2-tuple of tensors with
                 batch[0]: unperturbed IC (ERA5 analysis), shape = (bs, rollout, latlon, fc_dim + aux_dim)
                 batch[1]: ERA5 EDA (10-member) ensemble, shape = (bs, mstep, latlon, fc_dim, nens_eda)
         Returns:
             Ensemble IC, shape (bs, nens_per_device, mstep, latlon, nvar)
         """
-        x, x_ens = batch
 
-        if x_ens is None:
+        if len(batch) == 1:
             # no EDA available, just stack the analysis IC nens_per_device times
-            x_ = batch[:, 0 : self.multi_step, ...]  # (bs, multistep, latlon, nvar)
+            x_ = batch[0][:, 0 : self.multi_step, ...]  # (bs, multistep, latlon, nvar)
             return torch.stack([x_] * self.nens_per_device, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
 
-        LOGGER.debug("x.shape = %s, x_ens.shape = %s", x.shape, x_ens.shape)
-        assert self.nens_per_group <= x_ens.shape[-1], (
+        x, x_eda = batch
+        LOGGER.debug("x.shape = %s, x_ens.shape = %s", x.shape, x_eda.shape)
+        assert self.nens_per_group <= x_eda.shape[-1], (
             f"Requested number of ensemble members per GPU group {self.nens_per_group} "
-            + f"is larger than that of the EDA ensemble {x_ens.shape[-1]}. "
+            + f"is larger than that of the EDA ensemble {x_eda.shape[-1]}. "
             + "Cannot create enough perturbations :( Check your config!"
         )
 
         # create perturbations
-        x_pert = x_ens - x_ens.mean(dim=-1, keepdim=True)
+        x_pert = x_eda - x_eda.mean(dim=-1, keepdim=True)
         x_pert = einops.rearrange(x_pert, "bs ms latlon v e -> bs e ms latlon v")
         start, end = self.mgroupdef[2] * self.nens_per_device, (self.mgroupdef[2] + 1) * self.nens_per_device
 
@@ -250,13 +252,15 @@ class GraphForecaster(pl.LightningModule):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
 
-            y_pred, loss_rstep, y_pred_group = checkpoint(self.gather_and_compute_loss, y_pred, y, use_reentrant=False)
+            y_pred, loss_rstep, y_pred_group = checkpoint(
+                self.gather_and_compute_loss, y_pred, y, validation_mode=validation_mode, use_reentrant=False
+            )
             loss += loss_rstep
 
             x = self.advance_input(x, y, y_pred)
 
             if validation_mode:
-                assert y_pred_group is not None
+                assert y_pred_group is not None, "Logic error! Incorrect return args from gather_and_compute_loss()"
                 # rank histograms - update metric state
                 _ = self.ranks(y[..., : self.fcdim], y_pred_group)
                 # pointwise KCRPS
@@ -275,7 +279,7 @@ class GraphForecaster(pl.LightningModule):
         loss *= 1.0 / self.rollout
         return loss, metrics, y_preds, kcrps_preds
 
-    def training_step(self, batch: PairTensor, batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int) -> torch.Tensor:
         del batch_idx  # not used
         x_ens_ic = self._generate_ens_inicond(batch)
         train_loss, _, _, _ = self._step(batch[0], x_ens_ic)
@@ -308,7 +312,7 @@ class GraphForecaster(pl.LightningModule):
             LOGGER.debug("Rollout window length: %d", self.rollout)
         self.rollout = min(self.rollout, self.rollout_max)
 
-    def validation_step(self, batch: PairTensor, batch_idx: int) -> None:
+    def validation_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int) -> None:
         del batch_idx  # not used
         with torch.no_grad():
             x_ens_ic = self._generate_ens_inicond(batch)

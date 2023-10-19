@@ -67,7 +67,9 @@ class ERA5NativeGridDataset(IterableDataset):
         self.fname_eda = fname_eda
 
         # master switch for EDA
-        self.eda = self.fname_eda is None
+        LOGGER.info("self.fname_an = %s", self.fname_an)
+        LOGGER.info("self.fname_eda = %s", self.fname_eda)
+        self.eda = self.fname_eda is not None
 
         self.ds_an: Optional[Array] = None
         self.ds_eda: Optional[Array] = None
@@ -182,7 +184,10 @@ class ERA5NativeGridDataset(IterableDataset):
                 )
                 X_ens = self.ds_eda[start_ens : end_ens : self.lead_step]
                 X_ens = rearrange(X_ens, "s var e latlon -> s latlon var e")
-            yield torch.from_numpy(X), torch.from_numpy(X_ens) if self.eda else None
+                sample = (torch.from_numpy(X), torch.from_numpy(X_ens))
+            else:
+                sample = (torch.from_numpy(X),)
+            yield sample
 
     def __repr__(self) -> str:
         return f"""

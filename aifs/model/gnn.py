@@ -74,7 +74,7 @@ class GraphMSG(nn.Module):
 
         encoder_out_channels = config.model.num_channels
         mlp_extra_layers = config.model.mlp.extra_layers
-        mlp_dropout = config.model.mlp_dropout
+        mlp_dropout = config.model.mlp.dropout
 
         # Encoder from ERA -> H
         self.forward_mapper = MessagePassingMapper(
@@ -310,8 +310,7 @@ class GraphMSG(nn.Module):
 
         x_latent_proc = self.h_processor(
             # concat noise tensor to the latent features
-            x=torch.cat([x_latent, z], dim=-1),
-            # expand edge index correct number of times while adding the proper number to the edge index
+            x_noisy=torch.cat([x_latent, z], dim=-1),
             edge_index=torch.cat(
                 [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bse)],
                 dim=1,

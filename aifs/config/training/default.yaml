@@ -60,7 +60,9 @@ eda_initial_perturbations: False
 save_top_k: -1
 
 lead_time: 6
+
 max_epochs: 200
+
 lr:
   rate: 0.625e-4
   iterations: 75000

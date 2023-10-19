@@ -4,6 +4,7 @@ num_channels: 256
 
 mlp:
   extra_layers: 0
+  dropout: 0.
 
 encoder:
   num_layers: 1

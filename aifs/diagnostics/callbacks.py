@@ -25,7 +25,6 @@ from aifs.utils.distributed import gather_tensor
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
-PairTensor = Tuple[torch.Tensor, torch.Tensor]
 
 
 class PlotCallback(Callback):
@@ -166,7 +165,7 @@ class RolloutEval(Callback):
         trainer: pl.Trainer,
         pl_module: pl.LightningModule,
         outputs: Any,
-        batch: PairTensor,
+        batch: Tuple[torch.Tensor, ...],
         batch_idx: int,
     ) -> None:
         del trainer  # not used
@@ -559,7 +558,7 @@ def get_callbacks(config: DictConfig) -> List:
                 KCRPSBarPlot(config),
             ]
         )
-        if config.training.use_era5_eda:
+        if config.training.eda_initial_perturbations:
             trainer_callbacks.append(PlotEnsembleInitialConditions(config))
 
     if config.training.swa.enabled:

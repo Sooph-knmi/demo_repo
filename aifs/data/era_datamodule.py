@@ -1,5 +1,6 @@
 import math
 import os
+from pathlib import Path
 from typing import Optional
 
 import pytorch_lightning as pl
@@ -42,6 +43,11 @@ class ERA5DataModule(pl.LightningDataModule):
             self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes / self.config.hardware.group_size
         )
 
+        LOGGER.info("self.config.training.eda_initial_perturbations = %s", self.config.training.eda_initial_perturbations)
+        LOGGER.info(
+            "type(self.config.training.eda_initial_perturbations) = %s", type(self.config.training.eda_initial_perturbations)
+        )
+
         self.ds_train = self._get_dataset("training", shuffle=True)
 
         r = self.config.training.rollout.max
@@ -49,7 +55,7 @@ class ERA5DataModule(pl.LightningDataModule):
             r = max(r, config.diagnostics.eval.rollout)
         self.ds_valid = self._get_dataset("validation", shuffle=False, rollout=r)
 
-        ds_tmp = zarr.open(self._get_data_file_name("an", "training"), mode="r")
+        ds_tmp = zarr.open(self._get_data_file_path("an", "training"), mode="r")
         self.input_metadata = ds_tmp.attrs["climetlab"]
         ds_tmp = None
 
@@ -60,10 +66,11 @@ class ERA5DataModule(pl.LightningDataModule):
             else self.config.training.rollout.start
         )
         r = max(rollout, rollout_config) if rollout is not None else rollout_config
+        fname_eda = self._get_data_file_path("eda", stage) if self.config.training.eda_initial_perturbations else None
         return ERA5NativeGridDataset(
-            fname_an=self._get_data_file_name("an", stage),
+            fname_an=self._get_data_file_path("an", stage),
             data_reader=read_era_data,
-            fname_eda=self._get_data_file_name("eda", stage) if self.config.training.use_ else None,
+            fname_eda=fname_eda,
             lead_time=self.config.training.lead_time,
             rollout=r,
             multistep=self.config.training.multistep_input,
@@ -73,12 +80,14 @@ class ERA5DataModule(pl.LightningDataModule):
             shuffle=shuffle,
         )
 
-    def _get_data_file_name(self, type_: str, stage: str) -> str:
-        # field_type == [pl | sfc], stage == [training | validation]
-        return os.path.join(
+    def _get_data_file_path(self, type_: str, stage: str) -> str:
+        # type_ == [an | eda], stage == [training | validation]
+        fpath = Path(
             self.config.hardware.paths[stage][type_],
             self.config.hardware.files[stage][type_],
         )
+        LOGGER.debug("Path to %s %s zarr: %s", type_, stage, fpath)
+        return fpath.as_posix()
 
     def _get_dataloader(self, ds: ERA5NativeGridDataset, num_workers: int, batch_size: int) -> DataLoader:
         return DataLoader(

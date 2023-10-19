@@ -28,7 +28,7 @@ export WANDB_NAME="ens-kcrps-h5-atos-roll28"
 export WANDB_NOTES="KCRPS ensemble (reweighted loss, rollout 2-8)"
 
 # generic settings
-CONDA_ENV=aifs-dev
+CONDA_ENV=aifs-ens-dev
 GITDIR=/home/syma/GNN/aifs-temp/aifs-mono
 WORKDIR=$GITDIR
 
