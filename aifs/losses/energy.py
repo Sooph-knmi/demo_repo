@@ -13,7 +13,7 @@ class EnergyScore(nn.Module):
         if loss_scaling is not None:
             self.register_buffer("scale", loss_scaling, persistent=True)
 
-    def _energy_score(self, preds: torch.Tensor, target: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+    def _calc_energy_score(self, preds: torch.Tensor, target: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
         """
         Calculates the energy score (vectorized version).
         See https://github.com/LoryPack/GenerativeNetworksScoringRulesProbabilisticForecasting/blob/main/src/scoring_rules.py.
@@ -58,4 +58,4 @@ class EnergyScore(nn.Module):
     def forward(self, preds: torch.Tensor, target: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
         preds = (preds * self.scale[:, None]) * self.weights
         target = (target * self.scale[:, None]) * self.weights
-        return self._energy_score(preds, target, beta)
+        return self._calc_energy_score(preds, target, beta)

@@ -2,18 +2,18 @@ from typing import Optional
 
 import einops
 import torch
-from torch import nn
 from torch.utils.checkpoint import checkpoint
 
+from aifs.losses.energy import EnergyScore
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__, debug=True)
 
 
-class PatchedEnergyScore(nn.Module):
+class PatchedEnergyScore(EnergyScore):
     def __init__(self, area_weights: torch.Tensor, patches: torch.Tensor, loss_scaling: Optional[torch.Tensor] = None) -> None:
         """Energy score."""
-        super().__init__()
+        super().__init__(area_weights, loss_scaling)
         self.register_buffer("weights", area_weights, persistent=True)
 
         if loss_scaling is not None:
@@ -24,53 +24,13 @@ class PatchedEnergyScore(nn.Module):
         patch_masks = patches != 0.0
         self.register_buffer("patch_masks", patch_masks, persistent=True)
 
-    def _calc_energy_score(self, preds: torch.Tensor, target: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
-        """
-        Calculates the energy score (vectorized version).
-        See https://github.com/LoryPack/GenerativeNetworksScoringRulesProbabilisticForecasting/blob/main/src/scoring_rules.py.
-        This produces the same energy score as Lorenzo's implementation, up to a constant scaling factor (= 2.0).
-
-        Args:
-            y_pred: forecast realizations, shape (bs, nens, nvar *latlon)
-            y_true: ground truth ("observations"), shape (bs, nvar * latlon)
-            beta: beta exponent for the energy loss (beta = 1.0 yields the CRPS of the ensemble distribution)
-        Returns:
-            The energy score loss.
-        """
-
-        m = preds.shape[1]  # ensemble size
-
-        score_a = (1.0 / m) * torch.mean(
-            torch.sum(
-                torch.pow(
-                    torch.linalg.norm((preds - target[:, None, :]), dim=-1, ord=2),
-                    beta,
-                ),
-                dim=-1,
-            )
-        )
-
-        score_b = (
-            1.0
-            / (2 * m * (m - 1))
-            * torch.mean(
-                torch.sum(
-                    torch.pow(torch.cdist(preds, preds, p=2), beta),
-                    axis=(1, 2),
-                ),
-                dim=0,
-            )
-        )
-
-        return score_a - score_b
-
     def _patched_energy_score(self, preds: torch.Tensor, target: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
         energy_score = 0
         for index in range(self.num_patches):
             energy_value = checkpoint(
                 self._calc_energy_score,
-                einops.rearrange(preds[..., self.patch_masks[index]], "bs m v mlatlon -> bs m (mlatlon v)"),
-                einops.rearrange(target[..., self.patch_masks[index]], "bs v mlatlon -> bs (mlatlon v)"),
+                einops.rearrange(preds[..., self.patch_masks[index]], "bs m v mlatlon -> bs m mlatlon v"),
+                einops.rearrange(target[..., self.patch_masks[index]], "bs v mlatlon -> bs mlatlon v"),
                 beta,
                 use_reentrant=False,
             )
