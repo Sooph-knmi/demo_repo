@@ -2,13 +2,13 @@
 
 #SBATCH --account=ecaifs
 #SBATCH --qos=ng
-#SBATCH --nodes=4
+#SBATCH --nodes=3
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
 #SBATCH --time=48:00:00
-#SBATCH --output=ens-kcrps-h5-atos-roll1.out.%j
+#SBATCH --output=ens-kcrps-h5-atos-roll28.out.%j
 
 # debugging flags (optional)
 # export NCCL_DEBUG=INFO
@@ -24,15 +24,15 @@ export HYDRA_FULL_ERROR=1
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="ens-kcrps-h5-atos-roll1"
-export WANDB_NOTES="KCRPS ensemble (reweighted loss, rollout 1)"
+export WANDB_NAME="ens-kcrps-h5-atos-roll28"
+export WANDB_NOTES="KCRPS ensemble (reweighted loss, rollout 2-8)"
 
 # generic settings
 CONDA_ENV=aifs-dev
-GITDIR=/home/syma/GNN/gnn-era5.git
+GITDIR=/home/syma/GNN/aifs-temp/aifs-mono
 WORKDIR=$GITDIR
 
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-srun aifs-ens-train hardware=atos_slurm --config-name=ens-dmp-h5
+srun aifs-ens-train hardware=atos_slurm --config-name=ens-dmp-h5-roll28

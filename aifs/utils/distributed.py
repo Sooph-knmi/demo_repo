@@ -22,15 +22,37 @@ def sync_tensor(input_, dim, shapes, mgroup):
     return _SyncParallelSection.apply(input_, dim, shapes, mgroup)
 
 
-class _GatherParallelSection(torch.autograd.Function):
-    """Gather the input from parallel section and concatenate."""
+def split_tensor(input_, dim, shapes, mgroup):
+    """Split helper."""
+    return _SplitParallelSection.apply(input_, dim, shapes, mgroup)
+
+
+class _SplitParallelSection(torch.autograd.Function):
+    """Split the input from parallel section."""
 
     @staticmethod
-    def symbolic(graph, input_, dim_, shapes_, mgroup_):
-        """"""
+    def forward(ctx, input_, dim_, shapes_, mgroup_):
+        ctx.dim = dim_
+        ctx.comm_group = mgroup_
+        ctx.shapes = shapes_
         if mgroup_:
-            return _gather(input_, dim_, shapes_, group=mgroup_)
+            return _split(input_, dim_, shapes_, group=mgroup_)
         return input_
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        if ctx.comm_group:
+            return (
+                _gather(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
+                None,
+                None,
+                None,
+            )
+        return grad_output, None, None, None
+
+
+class _GatherParallelSection(torch.autograd.Function):
+    """Gather the input from parallel section and concatenate."""
 
     @staticmethod
     def forward(ctx, input_, dim_, shapes_, mgroup_):
@@ -57,13 +79,6 @@ class _SyncParallelSection(torch.autograd.Function):
     """Sync the input from parallel section."""
 
     @staticmethod
-    def symbolic(graph, input_, dim_, shapes_, mgroup_):
-        """"""
-        if mgroup_:
-            return _gather(input_, dim_, shapes_, group=mgroup_)
-        return input_
-
-    @staticmethod
     def forward(ctx, input_, dim_, shapes_, mgroup_):
         ctx.dim = dim_
         ctx.comm_group = mgroup_
@@ -87,13 +102,6 @@ class _SyncParallelSection(torch.autograd.Function):
 
 class _ReduceParallelSection(torch.autograd.Function):
     """All-reduce the input from the parallel section."""
-
-    @staticmethod
-    def symbolic(graph, input_, mgroup_):
-        """Symbolic method."""
-        if mgroup_:
-            return _reduce(input_, group=mgroup_)
-        return input_
 
     @staticmethod
     def forward(ctx, input_, mgroup_):

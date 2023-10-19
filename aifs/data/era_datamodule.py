@@ -41,12 +41,6 @@ class ERA5DataModule(pl.LightningDataModule):
         self.num_groups = math.ceil(
             self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes / self.config.hardware.group_size
         )
-        # LOGGER.debug(
-        #     "Rank %d group number %d, with local group rank %d",
-        #     self.global_rank,
-        #     self.group_id,
-        #     self.group_rank,
-        # )
 
         self.ds_train = self._get_dataset("training", shuffle=True)
 
@@ -55,7 +49,7 @@ class ERA5DataModule(pl.LightningDataModule):
             r = max(r, config.diagnostics.eval.rollout)
         self.ds_valid = self._get_dataset("validation", shuffle=False, rollout=r)
 
-        ds_tmp = zarr.open(self._get_data_filename("training"), mode="r")
+        ds_tmp = zarr.open(self._get_data_file_name("an", "training"), mode="r")
         self.input_metadata = ds_tmp.attrs["climetlab"]
         ds_tmp = None
 
@@ -67,8 +61,9 @@ class ERA5DataModule(pl.LightningDataModule):
         )
         r = max(rollout, rollout_config) if rollout is not None else rollout_config
         return ERA5NativeGridDataset(
-            fname=self._get_data_filename(stage),
-            era_data_reader=read_era_data,
+            fname_an=self._get_data_file_name("an", stage),
+            data_reader=read_era_data,
+            fname_eda=self._get_data_file_name("eda", stage) if self.config.training.use_ else None,
             lead_time=self.config.training.lead_time,
             rollout=r,
             multistep=self.config.training.multistep_input,
@@ -78,11 +73,11 @@ class ERA5DataModule(pl.LightningDataModule):
             shuffle=shuffle,
         )
 
-    def _get_data_filename(self, stage: str) -> str:
+    def _get_data_file_name(self, type_: str, stage: str) -> str:
         # field_type == [pl | sfc], stage == [training | validation]
         return os.path.join(
-            self.config.hardware.paths[stage],
-            self.config.hardware.files[stage],
+            self.config.hardware.paths[stage][type_],
+            self.config.hardware.files[stage][type_],
         )
 
     def _get_dataloader(self, ds: ERA5NativeGridDataset, num_workers: int, batch_size: int) -> DataLoader:

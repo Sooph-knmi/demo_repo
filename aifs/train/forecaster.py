@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Dict
 from typing import List
-from typing import Mapping
 from typing import Optional
 from typing import Tuple
 
@@ -12,6 +11,7 @@ import torch
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from timm.scheduler import CosineLRScheduler
+from torch.utils.checkpoint import checkpoint
 
 from aifs.data.scaling import pressure_level
 from aifs.losses.energy import EnergyScore
@@ -23,9 +23,12 @@ from aifs.metrics.spread import SpreadSkill
 from aifs.model.model import AIFSModelGNN
 from aifs.utils.config import DotConfig
 from aifs.utils.distributed import gather_tensor
+from aifs.utils.distributed import split_tensor
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__, debug=False)
+
+PairTensor = Tuple[torch.Tensor, Optional[torch.Tensor]]
 
 
 class GraphForecaster(pl.LightningModule):
@@ -65,7 +68,6 @@ class GraphForecaster(pl.LightningModule):
 
         self.logger_enabled = config.diagnostics.log.wandb.enabled
 
-        self.loss = config.training.loss
         loss_scaling = np.array([], dtype=np.float32)
         for pl_name in config.data.pl.parameters:
             if pl_name in config.training.loss_scaling.pl:
@@ -85,18 +87,16 @@ class GraphForecaster(pl.LightningModule):
         loss_scaling = torch.from_numpy(loss_scaling)
 
         # Loss function
-        if self.loss == "kcrps":
-            self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=loss_scaling)
-        elif self.loss == "energy":
+        self.loss_type = config.training.loss
+        assert self.loss_type in ["kcrps", "energy", "patched_energy"], f"A loss of type {self.loss_type} is not supported!"
+        self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=loss_scaling)
+        if self.loss == "energy":
             self.energy_score = EnergyScore(area_weights=self.era_weights, loss_scaling=loss_scaling)
-            self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=loss_scaling)
-        elif self.loss == "patched_energy":
-            patches_ = np.load(config.hardware.files.patches_path).astype(np.float32)
-            patches_ = torch.from_numpy(patches_)
-            self.energy_score = PatchedEnergyScore(area_weights=self.era_weights, patches=patches_, loss_scaling=loss_scaling)
-            self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=loss_scaling)
         else:
-            raise ValueError("No probabilistic training loss implemented")
+            patches_ = torch.from_numpy(
+                np.load(Path(config.hardware.paths.patches, config.hardware.files.patches)).astype(np.float32)
+            )
+            self.energy_score = PatchedEnergyScore(area_weights=self.era_weights, patches=patches_, loss_scaling=loss_scaling)
 
         self.metric_ranges = {}
         for i, key in enumerate(config.data.pl.parameters):
@@ -128,7 +128,8 @@ class GraphForecaster(pl.LightningModule):
         self.spread_skill = SpreadSkill(rollout=config.diagnostics.eval.rollout, nvar=len(config.diagnostics.plot.parameters))
 
         LOGGER.debug("Rollout window length: %d", self.rollout)
-        LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
+        if self.rollout_epoch_increment > 0:
+            LOGGER.debug("Rollout increase every %d epochs", self.rollout_epoch_increment)
         LOGGER.debug("Rollout max : %d", self.rollout_max)
         LOGGER.debug("Multistep: %d", self.multi_step)
 
@@ -146,30 +147,37 @@ class GraphForecaster(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
 
-    def calculate_kcrps(self, y_pred: torch.Tensor, y_target: torch.Tensor, squash: bool = True) -> torch.Tensor:
+    def _compute_kcrps(self, y_pred: torch.Tensor, y_target: torch.Tensor, squash: bool = True) -> torch.Tensor:
         """Rearranges the prediction and ground truth tensors and then computes the
         KCRPS loss."""
         y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs v latlon e", e=self.nens_per_group)
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
         return self.kcrps(y_pred, y_target, squash=squash)
 
-    def calculate_energy_score(self, y_pred: torch.Tensor, y_target: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
-        """Rearranges the prediction and ground truth tensors and then compute the
-        Energy score loss.
-
-        Args:
-            y_pred (torch.Tensor): predictions
-            y_target (torch.Tensor): target
-            beta: beta exponent for the energy loss (beta = 1.0 yields the CRPS of the ensemble distribution)
-
-        Returns:
-            torch.Tensor: energy score loss
-        """
-
+    def _compute_energy_score(self, y_pred: torch.Tensor, y_target: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+        """Rearranges the prediction and ground truth tensors and then computes the
+        energy score loss."""
         y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs e v latlon", e=self.nens_per_group)
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
-
         return self.energy_score(y_pred, y_target, beta)
+
+    def _compute_loss(self, y_pred: torch.Tensor, y_target: torch.Tensor) -> torch.Tensor:
+        if self.loss_type == "kcrps":
+            return self._compute_kcrps(y_pred, y_target)
+        return self._compute_energy_score(y_pred, y_target)
+
+    def gather_and_compute_loss(
+        self, y_pred: torch.Tensor, y: torch.Tensor, validation_mode: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        y_pred_group = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.mgroupdef[1], mgroup=self.mgroupdef[0])
+        assert (
+            y_pred_group.shape[1] == self.nens_per_group
+        ), f"Group ensemble shape mismatch: got {y_pred_group.shape[1]} -- expected {self.nens_per_group}!"
+        loss_inc = self._compute_loss(y_pred_group, y[..., : self.fcdim])
+        y_pred = split_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.mgroupdef[1], mgroup=self.mgroupdef[0])
+
+        # during validation, we also return the "full" (group-generated) ensemble so we can run diagnostics
+        return y_pred, loss_inc, y_pred_group if validation_mode else None
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         # left-shift along the step dimension
@@ -180,18 +188,61 @@ class GraphForecaster(pl.LightningModule):
         x[:, :, self.multi_step - 1, :, self.fcdim :] = y[:, None, :, self.fcdim :]  # add dummy ensemble dim to match x
         return x
 
+    def _generate_ens_inicond(self, batch: PairTensor) -> torch.Tensor:
+        """Generate initial conditions for the ensemble based on the EDA perturbations.
+
+        Inputs:
+            batch: 2-tuple of tensors with
+                batch[0]: unperturbed IC (ERA5 analysis), shape = (bs, rollout, latlon, fc_dim + aux_dim)
+                batch[1]: ERA5 EDA (10-member) ensemble, shape = (bs, mstep, latlon, fc_dim, nens_eda)
+        Returns:
+            Ensemble IC, shape (bs, nens_per_device, mstep, latlon, nvar)
+        """
+        x, x_ens = batch
+
+        if x_ens is None:
+            # no EDA available, just stack the analysis IC nens_per_device times
+            x_ = batch[:, 0 : self.multi_step, ...]  # (bs, multistep, latlon, nvar)
+            return torch.stack([x_] * self.nens_per_device, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
+
+        LOGGER.debug("x.shape = %s, x_ens.shape = %s", x.shape, x_ens.shape)
+        assert self.nens_per_group <= x_ens.shape[-1], (
+            f"Requested number of ensemble members per GPU group {self.nens_per_group} "
+            + f"is larger than that of the EDA ensemble {x_ens.shape[-1]}. "
+            + "Cannot create enough perturbations :( Check your config!"
+        )
+
+        # create perturbations
+        x_pert = x_ens - x_ens.mean(dim=-1, keepdim=True)
+        x_pert = einops.rearrange(x_pert, "bs ms latlon v e -> bs e ms latlon v")
+        start, end = self.mgroupdef[2] * self.nens_per_device, (self.mgroupdef[2] + 1) * self.nens_per_device
+
+        # perturb an ICs and clip humidity field where necessary
+        x_ic = torch.stack(
+            [x[:, 0 : self.multi_step, ...]] * self.nens_per_device, dim=1
+        )  # shape == (bs, nens_per_device, multistep, latlon, nvar)
+        x_ic[..., : self.fcdim] += x_pert[:, start:end, ...]
+        # TODO: calculate q index range instead of hard-coding it!
+        x_ic[..., :13] = torch.clamp(x_ic[..., :13], min=0.0, max=None)
+
+        return x_ic
+
     def _step(
         self,
         batch: torch.Tensor,
+        x_ic: Optional[torch.Tensor] = None,
         validation_mode: bool = False,
-    ) -> Tuple[torch.Tensor, Mapping[str, torch.Tensor]]:
+    ) -> Tuple:
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
         batch = self.model.normalizer(batch)  # normalized in-place
-        metrics = {}
+        x = self.model.normalizer(x_ic)  # (bs, nens, multistep, latlon, nvar)
 
-        # start rollout
-        x = batch[:, 0 : self.multi_step, ...]  # (bs, multistep, latlon, nvar)
-        x = torch.stack([x] * self.nens_per_device, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
+        assert len(x.shape) == 5, f"Expected a 5-dimensional tensor and got {len(x.shape)} dimensions, shape {x.shape}!"
+        assert (x.shape[1] == self.nens_per_device) and (
+            x.shape[2] == self.multi_step
+        ), f"Shape mismatch in x! Expected ({self.nens_per_device}, {self.multi_step}), got ({x.shape[1]}, {x.shape[2]})!"
+
+        metrics = {}
 
         y_preds: List[torch.Tensor] = []
         kcrps_preds: List[torch.Tensor] = []
@@ -199,32 +250,13 @@ class GraphForecaster(pl.LightningModule):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
 
-            # gather all predictions from the device group, along the ensemble dim
-            y_pred_group = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.mgroupdef[1], mgroup=self.mgroupdef[0])
-            assert (
-                y_pred_group.shape[1] == self.nens_per_group
-            ), f"Group ensemble shape mismatch: got {y_pred_group.shape[1]} -- expected {self.nens_per_group}!"
+            y_pred, loss_rstep, y_pred_group = checkpoint(self.gather_and_compute_loss, y_pred, y, use_reentrant=False)
+            loss += loss_rstep
 
-            LOGGER.debug("Shape of y_pred tensor after gather: y_pred_group.shape = %s", y_pred_group.shape)
-
-            # loss calculated over the group ensemble (size = self.nens_per_group)
-            if self.loss == "kcrps":
-                loss += self.calculate_kcrps(y_pred_group, y[..., : self.fcdim])
-            elif self.loss == "energy":
-                loss += self.calculate_energy_score(y_pred_group, y[..., : self.fcdim])
-            elif self.loss == "patched_energy":
-                loss += self.calculate_energy_score(y_pred_group, y[..., : self.fcdim])
-            else:
-                raise ValueError("No probabilistic training loss implemented")
-
-            # retain only my slice of the larger ensemble
-            # this is needed to make sure the gradients flow correctly during backward()
-            myrange_start, myrange_end = self.mgroupdef[2] * self.nens_per_device, (self.mgroupdef[2] + 1) * self.nens_per_device
-            LOGGER.debug("Device with group rank %d has start = %d, end = %d", self.mgroupdef[2], myrange_start, myrange_end)
-            y_pred = y_pred_group[:, myrange_start:myrange_end, ...]
             x = self.advance_input(x, y, y_pred)
 
             if validation_mode:
+                assert y_pred_group is not None
                 # rank histograms - update metric state
                 _ = self.ranks(y[..., : self.fcdim], y_pred_group)
                 # pointwise KCRPS
@@ -243,17 +275,18 @@ class GraphForecaster(pl.LightningModule):
         loss *= 1.0 / self.rollout
         return loss, metrics, y_preds, kcrps_preds
 
-    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: PairTensor, batch_idx: int) -> torch.Tensor:
         del batch_idx  # not used
-        train_loss, _, _, _ = self._step(batch)
+        x_ens_ic = self._generate_ens_inicond(batch)
+        train_loss, _, _, _ = self._step(batch[0], x_ens_ic)
         self.log(
-            "train_" + self.loss,
+            "train_kcrps",
             train_loss,
             on_epoch=True,
             on_step=True,
             prog_bar=True,
             logger=self.logger_enabled,
-            batch_size=batch.shape[0],
+            batch_size=batch[0].shape[0],
             sync_dist=True,
         )
         self.log(
@@ -275,18 +308,19 @@ class GraphForecaster(pl.LightningModule):
             LOGGER.debug("Rollout window length: %d", self.rollout)
         self.rollout = min(self.rollout, self.rollout_max)
 
-    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
+    def validation_step(self, batch: PairTensor, batch_idx: int) -> None:
         del batch_idx  # not used
         with torch.no_grad():
-            val_loss, metrics, y_preds, pkcrps = self._step(batch, validation_mode=True)
+            x_ens_ic = self._generate_ens_inicond(batch)
+            val_loss, metrics, y_preds, pkcrps = self._step(batch[0], x_ens_ic, validation_mode=True)
         self.log(
-            "val_" + self.loss,
+            "val_" + self.loss_type,
             val_loss,
             on_epoch=True,
             on_step=True,
             prog_bar=True,
             logger=self.logger_enabled,
-            batch_size=batch.shape[0],
+            batch_size=batch[0].shape[0],
             sync_dist=True,
         )
         for mname, mvalue in metrics.items():
@@ -297,17 +331,17 @@ class GraphForecaster(pl.LightningModule):
                 on_step=False,
                 prog_bar=False,
                 logger=self.logger_enabled,
-                batch_size=batch.shape[0],
+                batch_size=batch[0].shape[0],
                 sync_dist=True,
             )
-        return val_loss, y_preds, pkcrps
+        return val_loss, y_preds, pkcrps, x_ens_ic
 
     def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
         batch = self.normalizer(batch)
 
         with torch.no_grad():
             # add dummy ensemble dimension (of size 1)
-            x = batch[:, None, 0 : self.multi_step, ...]
+            x = batch[:, None, ...]
             y_hat = self(x)
 
         return self.normalizer.denormalize(y_hat.squeeze(dim=1), in_place=False)

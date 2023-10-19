@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
+from typing import Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,6 +13,7 @@ from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 
 from aifs.diagnostics.plots import init_plot_settings
+from aifs.diagnostics.plots import plot_ensemble_initial_conditions
 from aifs.diagnostics.plots import plot_graph_features
 from aifs.diagnostics.plots import plot_kcrps
 from aifs.diagnostics.plots import plot_loss
@@ -23,6 +25,7 @@ from aifs.utils.distributed import gather_tensor
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
+PairTensor = Tuple[torch.Tensor, torch.Tensor]
 
 
 class PlotCallback(Callback):
@@ -73,12 +76,13 @@ class RolloutEval(Callback):
         self.eval_plot_parameters = config.diagnostics.plot.parameters
         self.rollout = config.diagnostics.eval.rollout
         self.frequency = config.diagnostics.eval.frequency
-        self.loss = config.training.loss
+        self.loss_type = config.training.loss
 
     def _eval(
         self,
         pl_module: pl.LightningModule,
         batch: torch.Tensor,
+        ens_ic: torch.Tensor,
     ) -> None:
         loss = torch.zeros(1, dtype=batch.dtype, device=pl_module.device, requires_grad=False)
         metrics = {}
@@ -88,8 +92,7 @@ class RolloutEval(Callback):
         ), "To use this callback, you must define a `spread_skill` attribute of type SpreadSkill in your Forecaster class!"
 
         # start rollout
-        x = batch[:, 0 : pl_module.multi_step, ...]  # (bs, multistep, latlon, nvar)
-        x = torch.stack([x] * pl_module.nens_per_device, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
+        x = ens_ic  # shape == (bs, nens, multistep, latlon, nvar), already transformed (?)
 
         assert batch.shape[1] >= self.rollout + pl_module.multi_step, "Batch length not sufficient for requested rollout length!"
 
@@ -101,30 +104,12 @@ class RolloutEval(Callback):
                 y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
                 y = batch[:, pl_module.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
 
-                # gather all predictions from the device group, along the ensemble dim
-                y_pred_group = gather_tensor(
-                    y_pred, dim=1, shapes=[y_pred.shape] * pl_module.mgroupdef[1], mgroup=pl_module.mgroupdef[0]
+                y_pred, loss_rstep, y_pred_group = pl_module.gather_and_compute_loss(
+                    y_pred, y[..., : pl_module.fcdim], validation_mode=True
                 )
-                assert (
-                    y_pred_group.shape[1] == pl_module.nens_per_group
-                ), f"Group ensemble shape mismatch: got {y_pred_group.shape[1]} -- expected {pl_module.nens_per_group}!"
-
-                if self.loss == "kcrps":
-                    loss += pl_module.calculate_kcrps(y_pred_group, y[..., : pl_module.fcdim])
-                else:
-                    loss += pl_module.calculate_energy_score(y_pred_group, y[..., : pl_module.fcdim])
-
-                # retain only my slice of the larger ensemble
-                myrange_start, myrange_end = (
-                    pl_module.mgroupdef[2] * pl_module.nens_per_device,
-                    (pl_module.mgroupdef[2] + 1) * pl_module.nens_per_device,
-                )
-                # LOGGER.debug(
-                #     "Device with group rank %d has start = %d, end = %d", pl_module.mgroupdef[2], myrange_start, myrange_end
-                # )
-                y_pred = y_pred_group[:, myrange_start:myrange_end, ...]
-
+                loss += loss_rstep
                 x = pl_module.advance_input(x, y, y_pred)
+                assert y_pred_group is not None
 
                 # training metrics
                 for mkey, (low, high) in pl_module.metric_ranges.items():
@@ -153,7 +138,7 @@ class RolloutEval(Callback):
 
     def _log(self, pl_module: pl.LightningModule, loss: torch.Tensor, metrics: Dict, bs: int) -> None:
         pl_module.log(
-            f"val_r{self.rollout}_" + self.loss,
+            f"val_r{self.rollout}_" + self.loss_type,
             loss,
             on_epoch=True,
             on_step=True,
@@ -181,13 +166,13 @@ class RolloutEval(Callback):
         trainer: pl.Trainer,
         pl_module: pl.LightningModule,
         outputs: Any,
-        batch: torch.Tensor,
+        batch: PairTensor,
         batch_idx: int,
     ) -> None:
-        del trainer, outputs  # not used
+        del trainer  # not used
         # this must happen on ALL devices!
         if batch_idx % self.frequency == 3:
-            self._eval(pl_module, batch)
+            self._eval(pl_module, batch[0], outputs[-1])
 
 
 class RankHistogramPlot(PlotCallback):
@@ -217,7 +202,7 @@ class SpreadSkillPlot(PlotCallback):
         pl_module.ranks.reset()
 
 
-class KCRPSPlot(PlotCallback):
+class KCRPSMapPlot(PlotCallback):
     def __init__(self, config) -> None:
         super().__init__(config)
 
@@ -245,13 +230,13 @@ class KCRPSPlot(PlotCallback):
             self._plot(trainer, pl_module, outputs, batch, batch_idx)
 
 
-class PlotLoss(PlotCallback):
+class KCRPSBarPlot(PlotCallback):
     """Plots the unsqueezed loss over rollouts."""
 
     def __init__(self, config):
         super().__init__(config)
         self.eval_frequency = 10
-        self.loss = config.training.loss
+        assert config.training.loss == "kcrps", "For now, this callback works only with the KCRPS loss ..."
 
     def _plot(
         # self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int
@@ -265,15 +250,13 @@ class PlotLoss(PlotCallback):
         del batch_idx
         for rollout_step in range(pl_module.rollout):
             y_hat = outputs[1][rollout_step]
-            y_true = batch[:, pl_module.multi_step + rollout_step, :, : pl_module.fcdim]
+            y_true = batch[0][:, pl_module.multi_step + rollout_step, :, : pl_module.fcdim]
             LOGGER.debug("y_hat = %s, y_true = %s", y_hat.shape, y_true.shape)
 
-            kcrps_: torch.Tensor = pl_module.calculate_kcrps(y_hat, y_true, squash=False)
-            if self.loss == "kcrps":
-                LOGGER.debug("raw kcrps_.shape = %s", kcrps_.shape)
+            kcrps_: torch.Tensor = pl_module._compute_kcrps(y_hat, y_true, squash=False)
+            LOGGER.debug("raw kcrps_.shape = %s", kcrps_.shape)
             kcrps_ = kcrps_.sum(dim=-1) / pl_module.kcrps.weights.sum()
-            if self.loss == "kcrps":
-                LOGGER.debug("summed kcrps_.shape = %s", kcrps_.shape)
+            LOGGER.debug("summed kcrps_.shape = %s", kcrps_.shape)
 
             fig = plot_loss(kcrps_.cpu().numpy())
             fig.tight_layout()
@@ -365,13 +348,58 @@ class PlotSample(PlotCallback):
             self._plot(trainer, pl_module, outputs, batch, batch_idx)
 
 
+class PlotEnsembleInitialConditions(PlotCallback):
+    def __init__(self, config):
+        super().__init__(config)
+        self.sample_idx = self.config.diagnostics.plot.sample_idx
+
+    def _plot(
+        self,
+        trainer,
+        pl_module,
+        ens_ic,
+        batch_idx,
+    ) -> None:
+        denorm_ens_ic = pl_module.model.normalizer.denormalize(ens_ic[self.sample_idx, ...], in_place=False).cpu().numpy()
+
+        for step in range(pl_module.multi_step):
+            # plot the perturbations at current step
+            fig = plot_ensemble_initial_conditions(
+                self.config.diagnostics.plot.parameters,
+                np.rad2deg(pl_module.era_latlons.numpy()),
+                denorm_ens_ic[:, step, ...].squeeze(),
+            )
+            fig.tight_layout()
+            self._output_figure(
+                trainer,
+                fig,
+                tag=f"gnn_ens_ic_val_mstep{step:02d}_batch{batch_idx:05d}_rank{pl_module.global_rank:02d}",
+                exp_log_tag=f"gnn_ens_ic_val_mstep{step:02d}_rank{pl_module.global_rank:02d}",
+            )
+
+    def _gather_group_initial_conditions(self, pl_module: pl.LightningModule, my_ens_ic: torch.Tensor) -> torch.Tensor:
+        """Gathers all the initial conditions used in a device group to a single
+        tensor."""
+        group_ens_ic = gather_tensor(
+            my_ens_ic, dim=1, shapes=[my_ens_ic.shape] * pl_module.mgroupdef[1], mgroup=pl_module.mgroupdef[0]
+        )
+        return group_ens_ic
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        del batch  # not used
+        group_ens_ic = self._gather_group_initial_conditions(pl_module, outputs[-1])
+        # plotting happens only on device 0
+        # device 0 has already gathered all ensemble members generated by its group
+        if batch_idx % self.plot_frequency == 3 and pl_module.global_rank == 0:
+            self._plot(trainer, pl_module, group_ens_ic, batch_idx)
+
+
 class PredictedEnsemblePlot(PlotCallback):
     def __init__(self, config):
         super().__init__(config)
         self.sample_idx = self.config.diagnostics.plot.sample_idx
 
     def _plot(
-        # batch_idx: int, rollout_step: int, x: torch.Tensor, y_true: torch.Tensor, y_pred: torch.Tensor,
         self,
         trainer,
         pl_module,
@@ -381,7 +409,8 @@ class PredictedEnsemblePlot(PlotCallback):
     ) -> None:
         data = (
             pl_module.model.normalizer.denormalize(
-                batch[self.sample_idx, pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1, ...], in_place=False
+                batch[0][self.sample_idx, pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1, ...],
+                in_place=False,
             )
             .cpu()
             .numpy()
@@ -525,11 +554,13 @@ def get_callbacks(config: DictConfig) -> List:
                 RankHistogramPlot(config),
                 GraphTrainableFeaturesPlot(config),
                 PredictedEnsemblePlot(config),
-                KCRPSPlot(config),
+                KCRPSMapPlot(config),
                 SpreadSkillPlot(config),
-                PlotLoss(config),
+                KCRPSBarPlot(config),
             ]
         )
+        if config.training.use_era5_eda:
+            trainer_callbacks.append(PlotEnsembleInitialConditions(config))
 
     if config.training.swa.enabled:
         from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAveraging

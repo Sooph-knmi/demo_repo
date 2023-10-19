@@ -47,6 +47,10 @@ rollout:
 
 ensemble_size: 8
 
+# use the EDA 10-member ensemble to generate perturbations to the ERA5 analysis
+# the (ERA5 analysis + perturbations) will be used as initial conditions for the ensemble during training and validation
+eda_initial_perturbations: False
+
 # Keisler's three training rounds were:
 # Round 1. ~960,000 batches @ ~0.3 seconds per batch (4-step rollout)
 # Round 2. ~90,000 batches @ ~1.0 seconds per batch (8-step rollout)

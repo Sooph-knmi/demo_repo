@@ -360,6 +360,39 @@ def plot_predicted_ensemble(
     return fig
 
 
+def plot_ensemble_initial_conditions(
+    parameters: Dict[int, str],
+    latlons: np.ndarray,
+    y_pert: np.ndarray,
+) -> Figure:
+    """Plots data for one ensemble sample.
+
+    Args:
+        latlons: lat/lon coordinates array, shape (lat*lon, 2)
+        x, y_true, y_pred: arrays of shape (nens, latlon, nvar)
+    Returns:
+        The figure object handle.
+    """
+    nens = y_pert.shape[0]
+    n_plots_x, n_plots_y = len(parameters), nens + 1  # plot the mean and perturbations
+    LOGGER.debug("nens = %d, n_plots_x = %d, n_plots_y = %d", nens, n_plots_x, n_plots_y)
+    LOGGER.debug("y_pert.shape = %s", y_pert.shape)
+
+    figsize = (n_plots_y * 4, n_plots_x * 3)
+    fig, ax = plt.subplots(n_plots_x, n_plots_y, figsize=figsize)
+    pc = EquirectangularProjection()
+
+    for plot_idx, (variable_idx, variable_name) in enumerate(parameters.items()):
+        yp = y_pert[..., variable_idx].squeeze()
+        LOGGER.debug("Variable idx %d name %s -- yp.shape = %s", variable_idx, variable_name, yp.shape)
+        ax_ = ax[plot_idx, :] if n_plots_x > 1 else ax
+        if n_plots_x > 1:
+            LOGGER.debug("Axis length: %d", len(ax_))
+        plot_ensemble_ic(fig, ax_, pc, latlons, yp, variable_name)
+
+    return fig
+
+
 def plot_kcrps(parameters: Dict[str, int], latlons: np.ndarray, pkcrps: np.ndarray) -> Figure:
     """
     Plots pointwise KCRPS values
@@ -416,6 +449,35 @@ def plot_ensemble(
             np.take(pred, i_ens, axis=ens_dim) - ens_mean,
             cmap="bwr",
             title=f"{vname}_{i_ens + 1} - mean",
+        )
+
+
+def plot_ensemble_ic(
+    fig,
+    ax,
+    pc,
+    latlons: np.ndarray,
+    pert: np.ndarray,
+    vname: str,
+    ens_dim: int = 0,
+) -> None:
+    lat, lon = latlons[:, 0], latlons[:, 1]
+    nens = pert.shape[ens_dim]
+
+    ens_ic_mean = pert.mean(axis=ens_dim)
+    scatter_plot(fig, ax[0], pc, lat, lon, ens_ic_mean.squeeze(), cmap="viridis", title=f"{vname}_mean")
+
+    # ensemble ICs
+    for i_ens in range(nens):
+        scatter_plot(
+            fig,
+            ax[i_ens + 1],
+            pc,
+            lat,
+            lon,
+            np.take(pert, i_ens, axis=ens_dim) - ens_ic_mean,
+            cmap="bwr",
+            title=f"{vname}_{i_ens + 1}",
         )
 
 

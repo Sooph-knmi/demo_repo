@@ -9,7 +9,7 @@ from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
 
 from aifs.model.layers import MessagePassingMapper
-from aifs.model.layers import MessagePassingProcessor
+from aifs.model.layers import NoisyMessagePassingProcessor
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
@@ -74,6 +74,7 @@ class GraphMSG(nn.Module):
 
         encoder_out_channels = config.model.num_channels
         mlp_extra_layers = config.model.mlp.extra_layers
+        mlp_dropout = config.model.mlp_dropout
 
         # Encoder from ERA -> H
         self.forward_mapper = MessagePassingMapper(
@@ -89,13 +90,15 @@ class GraphMSG(nn.Module):
             activation=self.activation,
         )
 
-        # Processor H -> H
-        self.h_processor = MessagePassingProcessor(
-            hidden_dim=encoder_out_channels + self.noise_channels,  # includes the noise channels
+        # "Noisy" processor H -> H
+        self.h_processor = NoisyMessagePassingProcessor(
+            hidden_dim=encoder_out_channels,
+            noise_dim=self.noise_channels,
             hidden_layers=config.model.hidden.num_layers,
-            mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
             chunks=2,
+            mlp_extra_layers=mlp_extra_layers,
+            mlp_dropout=mlp_dropout,
             activation=self.activation,
         )
 
@@ -316,10 +319,7 @@ class GraphMSG(nn.Module):
             edge_attr=edge_h_to_h_latent,
         )
 
-        # skip connection (H -> H), leaves out the last output channel
-        # workaround needed b/c the h_processor inputs and outputs have equal channel size
-        # TODO [Mihai]: if you see a cleaner way to inject the noise, i'm all ears
-        x_latent_proc = x_latent_proc[..., : -self.noise_channels] + x_latent
+        # skip connection (H -> H)
         x_latent_proc = x_latent_proc + x_latent
 
         _, x_out = self._create_processor(

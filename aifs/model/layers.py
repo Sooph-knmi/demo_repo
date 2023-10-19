@@ -25,9 +25,10 @@ class AutocastLayerNorm(nn.LayerNorm):
         super().__init__(*args, **kwargs)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        LayerNorm with output autocast to x.type.
-        During mixed-precision training, this will cast the LayerNorm output back to (b)float16 (from float32).
+        """LayerNorm with output autocast to x.type.
+
+        During mixed-precision training, this will cast the LayerNorm output back to
+        (b)float16 (from float32).
         """
         t = x.dtype
         return super().forward(x).to(dtype=t)
@@ -39,6 +40,7 @@ def gen_mlp(
     out_features: int,
     n_extra_layers: int = 0,
     activation_func: str = "SiLU",
+    dropout: float = 0.0,
     final_activation: bool = True,
     layer_norm: bool = True,
     checkpoints: bool = False,
@@ -57,6 +59,8 @@ def gen_mlp(
         Number of extra layers in MLP, by default 0
     activation_func : str, optional
         Activation function, by default "SiLU"
+    dropout: float, optional
+        Dropout rate
     final_activation : bool, optional
         Whether to apply a final activation function to last layer, by default True
     layer_norm : bool, optional
@@ -83,6 +87,7 @@ def gen_mlp(
     mlp1 = nn.Sequential(nn.Linear(in_features, hidden_dim), act_func())
     for _ in range(n_extra_layers):
         mlp1.append(nn.Linear(hidden_dim, hidden_dim))
+        mlp1.append(nn.Dropout(p=dropout))
         mlp1.append(act_func())
     mlp1.append(nn.Linear(hidden_dim, out_features))
 
@@ -93,6 +98,92 @@ def gen_mlp(
         mlp1.append(AutocastLayerNorm(out_features))
 
     return CheckpointWrapper(mlp1) if checkpoints else mlp1
+
+
+class NoisyMessagePassingProcessor(nn.Module):
+    """Message Passing Processor Graph Neural Network."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        noise_dim: int,
+        hidden_layers: int,
+        edge_dim: int,
+        chunks: int = 2,
+        mlp_extra_layers: int = 0,
+        activation: str = "SiLU",
+        mlp_dropout: float = 0.0,
+    ) -> None:
+        """Initialize MessagePassingProcessor.
+
+        Parameters
+        ----------
+        hidden_dim : int
+            Hidden dimension
+        noise_dim : int
+            Noise dimension
+        hidden_layers : int
+            Number of hidden layers
+        edge_dim : int
+            Input features of MLP
+        chunks : int, optional
+            Number of chunks, by default 2
+        mlp_extra_layers : int, optional
+            Number of extra layers in MLP, by default 0
+        activation : str, optional
+            Activation funciton, by default "SiLU"
+        dropout: float, optional
+            Dropout rate for the processor MLPs.
+        """
+        super().__init__()
+
+        self.hidden_layers = chunks
+        chunk_size = int(hidden_layers / chunks)
+        assert hidden_layers % chunks == 0
+
+        # needed in mapper
+        self.hidden_dim = hidden_dim
+        self.noise_dim = noise_dim
+        self.mlp_extra_layers = mlp_extra_layers
+        self.activation = activation
+        self.mlp_dropout = mlp_dropout
+
+        self.emb_edges = gen_mlp(
+            in_features=edge_dim,
+            hidden_dim=hidden_dim + noise_dim,
+            out_features=hidden_dim + noise_dim,
+            n_extra_layers=mlp_extra_layers,
+            activation_func=activation,
+        )
+
+        self.proc = nn.ModuleList(
+            [
+                MessagePassingProcessorChunk(
+                    hidden_dim + noise_dim,
+                    hidden_layers=chunk_size,
+                    mlp_extra_layers=mlp_extra_layers,
+                    activation=activation,
+                    mlp_dropout=mlp_dropout,
+                )
+                for _ in range(self.hidden_layers)
+            ]
+        )
+
+        self.emb_nodes_out = gen_mlp(
+            in_features=hidden_dim + noise_dim,
+            hidden_dim=hidden_dim + noise_dim,
+            out_features=hidden_dim,
+            n_extra_layers=mlp_extra_layers,
+            activation_func=activation,
+        )
+
+    def forward(self, x_noisy: Tensor, edge_index: Adj, edge_attr: Tensor) -> Tensor:
+        edge_attr = checkpoint(self.emb_edges, edge_attr, use_reentrant=False)
+
+        for i in range(self.hidden_layers):
+            x_noisy, edge_attr = checkpoint(self.proc[i], x_noisy, edge_index, edge_attr, use_reentrant=False)
+
+        return self.emb_nodes_out(x_noisy)
 
 
 class MessagePassingProcessor(nn.Module):
@@ -163,90 +254,6 @@ class MessagePassingProcessor(nn.Module):
 
         for i in range(self.hidden_layers):
             x, edge_attr = checkpoint(self.proc[i], x, edge_index, edge_attr, use_reentrant=False)
-
-        return x
-
-
-class NoisyMessagePassingProcessor(nn.Module):
-    """Message Passing Processor Graph Neural Network."""
-
-    def __init__(
-        self,
-        hidden_dim: int,
-        noise_dim: int,
-        hidden_layers: int,
-        edge_dim: int,
-        chunks: int = 2,
-        mlp_extra_layers: int = 0,
-        activation: str = "SiLU",
-    ) -> None:
-        """Initialize MessagePassingProcessor.
-
-        Parameters
-        ----------
-        hidden_dim : int
-            Hidden dimension
-        noise_dim : int
-            Noise dimension
-        hidden_layers : int
-            Number of hidden layers
-        edge_dim : int
-            Input features of MLP
-        chunks : int, optional
-            Number of chunks, by default 2
-        mlp_extra_layers : int, optional
-            Number of extra layers in MLP, by default 0
-        activation : str, optional
-            Activation funciton, by default "SiLU"
-        """
-        super().__init__()
-
-        self.hidden_layers = chunks
-        chunk_size = int(hidden_layers / chunks)
-        assert hidden_layers % chunks == 0
-
-        # needed in mapper
-        self.hidden_dim = hidden_dim
-        self.noise_dim = noise_dim
-        self.mlp_extra_layers = mlp_extra_layers
-        self.activation = activation
-
-        self.emb_edges = gen_mlp(
-            in_features=edge_dim,
-            hidden_dim=hidden_dim + noise_dim,
-            out_features=hidden_dim + noise_dim,
-            n_extra_layers=mlp_extra_layers,
-            activation_func=activation,
-        )
-
-        self.proc = nn.ModuleList(
-            [
-                MessagePassingProcessorChunk(
-                    hidden_dim + noise_dim, hidden_layers=chunk_size, mlp_extra_layers=mlp_extra_layers, activation=activation
-                )
-                for _ in range(self.hidden_layers)
-            ]
-        )
-
-        self.emb_nodes_out = gen_mlp(
-            in_features=hidden_dim + noise_dim,
-            hidden_dim=hidden_dim + noise_dim,
-            out_features=hidden_dim,
-            n_extra_layers=mlp_extra_layers,
-            activation_func=activation,
-        )
-
-    def forward(self, x_noisy: Tensor, edge_index: Adj, edge_attr: Tensor) -> Tensor:
-        LOGGER.debug(
-            "x_noisy.shape = %s, edge_index.shape = %s, edge_attr.shape = %s", x_noisy.shape, edge_index.shape, edge_attr.shape
-        )
-        edge_attr = checkpoint(self.emb_edges, edge_attr, use_reentrant=False)
-        LOGGER.debug("after embedding edge_attr.shape = %s", edge_attr.shape)
-
-        for i in range(self.hidden_layers):
-            x_noisy, edge_attr = checkpoint(self.proc[i], x_noisy, edge_index, edge_attr, use_reentrant=False)
-
-        x = self.emb_nodes_out(x_noisy)
 
         return x
 
@@ -333,19 +340,22 @@ class MessagePassingProcessorChunk(nn.Module):
         hidden_layers: int,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
+        mlp_dropout: float = 0.0,
     ) -> None:
         """Initialize MessagePassingProcessorChunk.
 
         Parameters
         ----------
         hidden_dim : int
-            Hidden dimention of the message passing blocks.
+            Hidden dimension of the message passing blocks.
         hidden_layers : int
             Number of message passing blocks.
         mlp_extra_layers : int, optional
             Extra layers in MLP, by default 0
         activation : str, optional
             Activation function, by default "SiLU"
+        mlp_dropout: float, optional
+            Dropout rate for the MLPs.
         """
         super().__init__()
 
@@ -353,7 +363,13 @@ class MessagePassingProcessorChunk(nn.Module):
 
         self.proc = nn.ModuleList(
             [
-                MessagePassingBlock(hidden_dim, hidden_dim, mlp_extra_layers=mlp_extra_layers, activation=activation)
+                MessagePassingBlock(
+                    hidden_dim,
+                    hidden_dim,
+                    mlp_extra_layers=mlp_extra_layers,
+                    activation=activation,
+                    mlp_dropout=mlp_dropout,
+                )
                 for _ in range(self.hidden_layers)
             ]
         )
@@ -374,6 +390,7 @@ class MessagePassingBlock(MessagePassing):
         out_channels: int,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
+        mlp_dropout: float = 0.0,
         **kwargs,
     ) -> None:
         """Initialize MessagePassingBlock.
@@ -388,6 +405,8 @@ class MessagePassingBlock(MessagePassing):
             Extra layers in MLP, by default 0
         activation : str, optional
             Activation function, by default "SiLU"
+        mlp_dropout: float, optional
+            Dropout rate for the MLPs.
         """
         super().__init__(**kwargs)
 
@@ -397,6 +416,7 @@ class MessagePassingBlock(MessagePassing):
             out_channels,
             n_extra_layers=mlp_extra_layers,
             activation_func=activation,
+            dropout=mlp_dropout,
         )
         self.edge_mlp = gen_mlp(
             3 * in_channels,
@@ -404,6 +424,7 @@ class MessagePassingBlock(MessagePassing):
             out_channels,
             n_extra_layers=mlp_extra_layers,
             activation_func=activation,
+            dropout=mlp_dropout,
         )
 
     def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, size: Size = None):
@@ -429,6 +450,30 @@ class MessagePassingBlock(MessagePassing):
         return out, edges_new
 
 
+class NoiseInjector(nn.Module):
+    """Inject noise into the processor using a technique similar to conditional instance
+    normalization.
+
+    See https://arxiv.org/pdf/2202.07773.pdf, equation (5).
+    We may want to test this out later.
+    """
+
+    def __init__(self, num_inputs: int, num_noise_inputs: int) -> None:
+        """
+        Args:
+            num_inputs: number of physical (latent) input channels
+            num_noise_inputs: number of noise input channels
+        """
+        super().__init__()
+        self.in_norm = nn.InstanceNorm1d(num_features=num_inputs, affine=False)
+        self.alpha = nn.Linear(in_features=num_noise_inputs, out_features=num_inputs)
+        self.beta = nn.Linear(in_features=num_noise_inputs, out_features=num_inputs)
+
+    def forward(self, x: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        x = self.in_norm(x)
+        return self.alpha(z) * x + self.beta(z)
+
+
 class CheckpointWrapper(nn.Module):
     """Wrapper for checkpointing a module."""
 
@@ -443,24 +488,10 @@ class CheckpointWrapper(nn.Module):
 if __name__ == "__main__":
     import numpy as np
 
-    bs, nlatlon, nfeat = 1, 1024, 64
+    bs, nlatlon, nfeat = 2, 1024, 64
     hdim, ofeat = 128, 36
     nnoise = 4
     x_in = torch.randn((bs, nlatlon, nfeat), dtype=torch.float32, requires_grad=True)
-    mlp_1 = gen_mlp(nfeat, hdim, hdim, layer_norm=True)
-    mlp_2 = gen_mlp(hdim, hdim, hdim, layer_norm=True)
-    mlp_3 = gen_mlp(hdim, hdim, ofeat, layer_norm=True)
-    y = mlp_1(x_in)
-    LOGGER.debug("mlp_1(x).shape = %s", y.shape)
-    y = mlp_2(y)
-    LOGGER.debug("mlp_2(mlp_1(x)).shape = %s", y.shape)
-    y = mlp_3(y)
-    LOGGER.debug("mlp_3(mlp_2(mlp_1(x))).shape = %s", y.shape)
-    loss = y.sum()
-    LOGGER.debug("running backward on the dummy loss ...")
-    loss.backward()
-    LOGGER.debug("done.")
-
     z_in = torch.randn((bs, nlatlon, nnoise), dtype=torch.float32, requires_grad=False)
     edim = 3
 
@@ -479,9 +510,23 @@ if __name__ == "__main__":
     edge_inc = torch.from_numpy(np.asarray([[nlatlon], [nlatlon]], dtype=np.int64))
     eidx_batched = torch.cat([eidx + i * edge_inc for i in range(bs)], dim=1)
 
+    noise_injector = NoiseInjector(nfeat, nnoise)
+
     x_in = einops.rearrange(x_in, "bs n f -> (bs n) f")
     z_in = einops.rearrange(z_in, "bs n f -> (bs n) f")
 
-    x_out = noisy_processor(torch.cat([x_in, z_in], dim=-1), eidx, eattr)
-    # x_out = noisy_processor(x_in, eidx, eattr)
+    xz = noise_injector(x_in, z_in)
+
+    x_out = noisy_processor(torch.cat([x_in, z_in], dim=-1), eidx_batched, eattr_batched)
     LOGGER.debug("x_out.shape = %s", x_out.shape)
+
+    processor = MessagePassingProcessor(
+        hidden_dim=nfeat,
+        hidden_layers=2,
+        edge_dim=edim,
+    )
+
+    x_out_v2 = processor(xz, eidx_batched, eattr_batched)
+
+    # outputs must both have the same shape
+    assert x_out.shape == x_out_v2.shape
