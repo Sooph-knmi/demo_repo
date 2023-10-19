@@ -264,7 +264,7 @@ class GraphForecaster(pl.LightningModule):
                 # rank histograms - update metric state
                 _ = self.ranks(y[..., : self.fcdim], y_pred_group)
                 # pointwise KCRPS
-                pkcrps = self.calculate_kcrps(y_pred_group, y[..., : self.fcdim], squash=False)
+                pkcrps = self._compute_kcrps(y_pred_group, y[..., : self.fcdim], squash=False)
                 # WMSE ensemble mean metrics
                 for mkey, (low, high) in self.metric_ranges.items():
                     y_denorm = self.model.normalizer.denormalize(y, in_place=False)
