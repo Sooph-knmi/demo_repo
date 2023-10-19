@@ -4,7 +4,6 @@ from typing import Union
 
 import einops
 import torch
-import torch_geometric.nn as tgnn
 from torch import nn
 from torch import Tensor
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import offload_wrapper
@@ -21,181 +20,14 @@ from aifs.utils.logger import get_code_logger
 LOGGER = get_code_logger(__name__)
 
 
-class TransformerMapper(MessagePassing):
-    """Transformer mapper layer."""
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        context_size: int,
-        trainable_context_channels: int = 1,
-        dynamic_context_channels: int = 0,
-        num_heads: int = 1,
-        dropout: float = 0.0,
-        edge_dim: int = 3,
-    ) -> None:
-        """Initialize the transformer mapper layer.
-
-        Parameters
-        ----------
-        in_channels : int
-            Number of input channels.
-        out_channels : int
-            Number of output channels.
-        context_size : int
-            Size of the context vector.
-        trainable_context_channels : int, optional
-            Number of trainable context channels, by default 1
-        dynamic_context_channels : int, optional
-            Number of dynamic context channels, by default 0
-        num_heads : int, optional
-            Number of attention heads, by default 1
-        dropout : float, optional
-            Dropout probability, by default 0.0
-        edge_dim : int, optional
-            Edge feature dimension, by default 3
-        """
-        super().__init__()
-        self.dynamic_context_channels = dynamic_context_channels
-        context_channels = trainable_context_channels + self.dynamic_context_channels
-
-        if context_channels > 0:
-            self.conv = tgnn.GATConv(
-                in_channels=(in_channels, context_channels),
-                out_channels=out_channels,
-                heads=num_heads,
-                dropout=dropout,
-                edge_dim=edge_dim,
-                add_self_loops=False,
-            )
-        else:
-            self.conv = tgnn.GATConv(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                heads=num_heads,
-                dropout=dropout,
-                add_self_loops=False,
-                edge_dim=edge_dim,
-            )
-
-        if trainable_context_channels > 0:
-            self.trainable_context = nn.Parameter(torch.zeros((context_size, trainable_context_channels), dtype=torch.float32))
-        else:
-            self.trainable_context = None
-
-    def forward(
-        self,
-        x: Tensor,
-        edge_index: Adj,
-        edge_attr: Optional[Tensor] = None,
-        dynamic_context: Optional[Tensor] = None,
-        batch_size: int = 1,
-    ) -> Tensor:
-        context = self.trainable_context
-
-        if dynamic_context is not None:
-            assert (
-                dynamic_context.shape[1] == self.dynamic_context_channels
-            ), f"Expected {dynamic_context.shape[1]} dynamic context channels and got {self.dynamic_context_channels}!"
-            if context is None:
-                context = dynamic_context
-            else:
-                context = torch.cat([context, dynamic_context], dim=1)
-
-        if context is not None:
-            if batch_size > 1:
-                context = einops.repeat(context, "n f -> (repeat n) f", repeat=batch_size)
-            assert edge_index[0].max() < x.size(0) and edge_index[1].max() < context.size(0), "Your edge index tensor is invalid."
-            out = self.conv(
-                x=(x, context),
-                edge_index=edge_index,
-                edge_attr=edge_attr,
-                size=(x.shape[0], context.shape[0]),
-            )
-        else:
-            out = self.conv(x=x, edge_index=edge_index, edge_attr=edge_attr)
-
-        return out
-
-
-class GATEncoder(nn.Module):
-    """Graph Attention Transformer encoder."""
-
-    def __init__(
-        self,
-        num_layers: int,
-        in_channels: int,
-        hidden_channels: int,
-        out_channels: int,
-        num_heads: int = 4,
-        dropout: float = 0.0,
-        activation: Optional[str] = "gelu",
-        jk_mode: Optional[str] = "last",
-        edge_dim: int = 3,
-    ) -> None:
-        """Initialize the GAT encoder.
-
-        Parameters
-        ----------
-        num_layers : int
-            Number of layers
-        in_channels : int
-            Number of input channels
-        hidden_channels : int
-            Number of hidden channels
-        out_channels : int
-            Number of output channels
-        num_heads : int, optional
-            Number of heads in transformer, by default 4
-        dropout : float, optional
-            Dropout probability, by default 0.0
-        activation : Optional[str], optional
-            Activation function, by default "gelu"
-        jk_mode : Optional[str], optional
-            Jumping Knowledge mode (None, "last", "cat", "max", "lstm"), by default "last"
-        edge_dim : int, optional
-            Edge dimension of graph, by default 3
-        """
-        super().__init__()
-
-        act_fn = None
-        if activation == "gelu":
-            act_fn = nn.GELU()
-        elif activation == "relu":
-            act_fn = nn.ReLU()
-        elif activation == "leaky-relu":
-            act_fn = nn.LeakyReLU(negative_slope=0.2)
-
-        self.encoder = tgnn.GAT(
-            in_channels=in_channels,
-            hidden_channels=hidden_channels,
-            num_layers=num_layers,
-            out_channels=out_channels,
-            dropout=dropout,
-            act=act_fn,
-            norm=tgnn.LayerNorm(in_channels=hidden_channels, affine=True),
-            v2=True,
-            jk=jk_mode,
-            heads=num_heads,
-            add_self_loops=False,
-            bias=False,
-            edge_dim=edge_dim,
-        )
-
-    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Optional[Tensor] = None) -> Tensor:
-        return self.encoder(x=x, edge_index=edge_index, edge_attr=edge_attr)
-
-
 class AutocastLayerNorm(nn.LayerNorm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward with explicit autocast to the input type.
-
-        This casts the output to (b)float16 (instead of float32) when we run in mixed
-        precision.
+        """
+        LayerNorm with output autocast to x.type.
+        During mixed-precision training, this will cast the LayerNorm output back to (b)float16 (from float32).
         """
         t = x.dtype
         return super().forward(x).to(dtype=t)

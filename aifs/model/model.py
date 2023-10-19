@@ -23,23 +23,24 @@ class AIFSModelGNN(torch.nn.Module):
         self.model = GraphMSG(self.config, graph_data=self.graph_data)
         self.forward = self.model.forward
 
-    def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
+    def predict_step(self, x: torch.Tensor) -> torch.Tensor:
         """Prediction step for the model.
 
         Parameters
         ----------
-        batch : torch.Tensor
-            Input batched data.
+        x : torch.Tensor
+            Batched input data.
 
         Returns
         -------
         torch.Tensor
             Predicted data.
         """
-        batch = self.normalizer(batch, in_place=False)
+        x = self.normalizer(x)
 
         with torch.no_grad():
-            x = batch[:, 0 : self.multi_step, ...]
+            assert len(x.shape) == 4, f"The input tensor has an incorrect shape: expected a 4-dimensional tensor, got {x.shape}!"
+            x = x[:, None, ...]  # add dummy ensemble dimension
             y_hat = self(x)
 
         return self.normalizer.denormalize(y_hat, in_place=False)
