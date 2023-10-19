@@ -194,6 +194,7 @@ class AIFSTrainer:
         LOGGER.debug("---- DONE. ----")
 
 
-@hydra.main(version_base=None, config_path="../config", config_name="config")
+@hydra.main(version_base=None, config_path="../config", config_name="debug")
 def main(config: DictConfig):
-    AIFSTrainer(config).train()
+    trainer_aifs = AIFSTrainer(config)
+    trainer_aifs.train()
