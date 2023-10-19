@@ -28,9 +28,9 @@ class ERA5NativeGridDataset(IterableDataset):
         lead_time: int = 6,
         rollout: int = 4,
         multistep: int = 1,
-        group_rank: int = 0,
-        group_id: int = 0,
-        num_groups: int = 1,
+        model_comm_group_rank: int = 0,
+        model_comm_group_id: int = 0,
+        model_comm_num_groups: int = 1,
         shuffle: bool = True,
     ) -> None:
         """Initialize (part of) the dataset state.
@@ -47,11 +47,11 @@ class ERA5NativeGridDataset(IterableDataset):
             length of rollout window (Keisler, 2021), by default 4
         multistep : int, optional
             collate (t-1, ... t - multistep) into the input state vector, by default 1
-        group_rank : int, optional
+        model_comm_group_rank : int, optional
             process rank in the torch.distributed group (important when running on multiple GPUs), by default 0
-        group_id: int, optional
-            group ID, default 0
-        num_groups : int, optional
+        model_comm_group_id: int, optional
+            device group ID, default 0
+        model_comm_num_groups : int, optional
             total number of device groups, by default 1
         shuffle : bool, optional
             Shuffle batches, by default True
@@ -83,9 +83,9 @@ class ERA5NativeGridDataset(IterableDataset):
         self.rng: Optional[int] = None
 
         # DDP-relevant info
-        self.group_rank = group_rank
-        self.num_groups = num_groups
-        self.group_id = group_id
+        self.model_comm_group_rank = model_comm_group_rank
+        self.model_comm_num_groups = model_comm_num_groups
+        self.model_comm_group_id = model_comm_group_id
         self.global_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
         # additional state vars (lazy init)
@@ -122,9 +122,9 @@ class ERA5NativeGridDataset(IterableDataset):
         # minus additional multistep inputs
         ds_total_len = self.ds.shape[0] - (self.rollout + (self.multi_step - 1)) * self.lead_step
         # Divide this equally across shards (one shard per group!)
-        shard_size = int(np.floor(ds_total_len / self.num_groups))
-        shard_start = self.group_id * shard_size + (self.multi_step - 1) * self.lead_step
-        shard_end = min((self.group_id + 1) * shard_size, self.ds.shape[0] - self.rollout * self.lead_step)
+        shard_size = int(np.floor(ds_total_len / self.model_comm_num_groups))
+        shard_start = self.model_comm_group_id * shard_size + (self.multi_step - 1) * self.lead_step
+        shard_end = min((self.model_comm_group_id + 1) * shard_size, self.ds.shape[0] - self.rollout * self.lead_step)
 
         ds_len = shard_end - shard_start
         self.n_samples_per_worker = ds_len // n_workers
@@ -132,11 +132,11 @@ class ERA5NativeGridDataset(IterableDataset):
         low = shard_start + worker_id * self.n_samples_per_worker
         high = min(shard_start + (worker_id + 1) * self.n_samples_per_worker, shard_end)
         LOGGER.debug(
-            "Worker %d (pid %d, global_rank %d, group %d) has low/high range %d / %d",
+            "Worker %d (pid %d, global_rank %d, model comm group %d) has low/high range %d / %d",
             worker_id,
             os.getpid(),
             self.global_rank,
-            self.group_id,
+            self.model_comm_group_id,
             low,
             high,
         )
@@ -146,25 +146,25 @@ class ERA5NativeGridDataset(IterableDataset):
         # each worker must have a different seed for its random number generator,
         # otherwise all the workers will output exactly the same data
         # if "PL_SEED_WORKERS" in os.environ:
-        #     self.seed_worker_random_gen(worker_id, self.group_rank)
+        #     self.seed_worker_random_gen(worker_id, self.model_comm_group_rank)
         #     seed = np.random.randint(low=0, high=2**30)
         # else:
         #     seed = torch.initial_seed()
-        # seed = self.BASE_SEED * self.group_id + self.group_rank
+        # seed = self.BASE_SEED * self.model_comm_group_id + self.model_comm_group_rank
 
-        # self.seed_worker_random_gen(worker_id, self.group_rank)
-        seed = self.BASE_SEED * (self.group_id + 1) - worker_id  # np.random.randint(low=0, high=2**30)
+        # self.seed_worker_random_gen(worker_id, self.model_comm_group_rank)
+        seed = self.BASE_SEED * (self.model_comm_group_id + 1) - worker_id  # np.random.randint(low=0, high=2**30)
         torch.manual_seed(seed)
         random.seed(seed)
         self.rng = np.random.default_rng(seed=seed)
 
         LOGGER.debug(
-            "Worker %d (pid %d, global_rank %d, group %d, group_rank %d) using seed %d",
+            "Worker %d (pid %d, global_rank %d, model comm group %d, group_rank %d) using seed %d",
             worker_id,
             os.getpid(),
             self.global_rank,
-            self.group_id,
-            self.group_rank,
+            self.model_comm_group_id,
+            self.model_comm_group_rank,
             seed,
         )
 
@@ -178,19 +178,19 @@ class ERA5NativeGridDataset(IterableDataset):
         `randomness in DataLoaders <https://pytorch.org/docs/stable/notes/randomness.html#dataloader>`_.
         """
         # implementation notes: https://github.com/pytorch/pytorch/issues/5059#issuecomment-817392562
-        group_rank = rank if rank is not None else 0
+        model_comm_group_rank = rank if rank is not None else 0
         # process_seed = torch.initial_seed()
         # back out the base seed so we can use all the bits
-        base_seed = self.BASE_SEED * (self.group_id + 1) - worker_id
+        base_seed = self.BASE_SEED * (self.model_comm_group_id + 1) - worker_id
         LOGGER.debug(
             "Initializing random number generators of group_rank %d worker %d group %d global_rank %d with base seed %d",
-            group_rank,
+            model_comm_group_rank,
             worker_id,
-            self.group_id,
+            self.model_comm_group_id,
             self.global_rank,
             base_seed,
         )
-        ss = np.random.SeedSequence([base_seed, worker_id, group_rank])
+        ss = np.random.SeedSequence([base_seed, worker_id, model_comm_group_rank])
         # use 128 bits (4 x 32-bit words)
         np.random.seed(ss.generate_state(4))
         # Spawn distinct SeedSequences for the PyTorch PRNG and the stdlib random module
@@ -208,11 +208,11 @@ class ERA5NativeGridDataset(IterableDataset):
             shuffled_chunk_indices = self.chunk_index_range
 
         LOGGER.debug(
-            "Worker pid %d, global_rank %d, group %d, group_rank %d using indices[0:10]: %s",
+            "Worker pid %d, global_rank %d, model comm group %d, group_rank %d using indices[0:10]: %s",
             os.getpid(),
             self.global_rank,
-            self.group_id,
-            self.group_rank,
+            self.model_comm_group_id,
+            self.model_comm_group_rank,
             shuffled_chunk_indices[:10],
         )
 

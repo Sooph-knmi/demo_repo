@@ -33,12 +33,12 @@ def reduce_shard_tensor(input_, dim, shapes, mgroup):
     return _ReduceShardParallelSection.apply(input_, dim, shapes, mgroup)
 
 
-def get_shape_shards(tensor, dim: int, group=None) -> List:
+def get_shape_shards(tensor, dim: int, mgroup=None) -> List:
     """Get shape of shards."""
     assert dim < tensor.dim(), f"Error, tensor dimension is {tensor.dim()} which cannot be split along {dim}"
 
-    if group:
-        comm_size = dist.get_world_size(group=group)
+    if mgroup:
+        comm_size = dist.get_world_size(group=mgroup)
         if comm_size == 1:
             shape_list = [list(tensor.shape)]
 

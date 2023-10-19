@@ -104,9 +104,9 @@ class GraphForecaster(pl.LightningModule):
         self.rollout_epoch_increment = config.training.rollout.epoch_increment
         self.rollout_max = config.training.rollout.max
 
-        self.use_zero_opt = config.training.zero_opt
+        self.use_zero_optimizer = config.training.zero_optimizer
 
-        self.model_coms_group = None
+        self.model_comm_group = None
 
         LOGGER.debug("Rollout window length: %d", self.rollout)
         LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
@@ -115,18 +115,18 @@ class GraphForecaster(pl.LightningModule):
 
         self.enable_plot = config.diagnostics.plot.enabled
 
-        self.group_id = int(os.environ.get("SLURM_PROCID", "0")) // config.hardware.num_gpus_per_model
-        self.group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.num_gpus_per_model
-        self.num_groups = math.ceil(
+        self.model_comm_group_id = int(os.environ.get("SLURM_PROCID", "0")) // config.hardware.num_gpus_per_model
+        self.model_comm_group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.num_gpus_per_model
+        self.model_comm_num_groups = math.ceil(
             config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.num_gpus_per_model
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x, self.model_coms_group)
+        return self.model(x, self.model_comm_group)
 
-    def set_model_coms_groups(self, model_coms_group) -> None:
-        LOGGER.debug("set_model_coms_group: %s", model_coms_group)
-        self.model_coms_group = model_coms_group
+    def set_model_comm_group(self, model_comm_group) -> None:
+        LOGGER.debug("set_model_comm_group: %s", model_comm_group)
+        self.model_comm_group = model_comm_group
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         x = x.roll(-1, dims=1)
@@ -151,6 +151,7 @@ class GraphForecaster(pl.LightningModule):
 
         y_preds = []
         for rstep in range(self.rollout):
+            # if rstep > 0: torch.cuda.empty_cache() # uncomment if rollout fails with OOM
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
 
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
@@ -239,7 +240,7 @@ class GraphForecaster(pl.LightningModule):
         return self.normalizer.denormalize(y_hat, in_place=False)
 
     def configure_optimizers(self):
-        if self.use_zero_opt:
+        if self.use_zero_optimizer:
             optimizer = ZeroRedundancyOptimizer(
                 self.trainer.model.parameters(), optimizer_class=torch.optim.AdamW, betas=(0.9, 0.95), lr=self.lr
             )

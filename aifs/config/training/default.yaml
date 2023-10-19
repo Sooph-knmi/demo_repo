@@ -9,11 +9,7 @@ initial_seed: null
 deterministic: False
 
 # miscellaneous
-precision:
-  default: 16-mixed
-  # if set, cast to dtype after layernorm in mlp. This is required because torch casts to float32 after layernorm which
-  # is the last part of most mlps ; without many memory operations are run with float32
-  manual_cast_after_layernorm: float16
+precision: 16-mixed
 
 # multistep input
 # 1 = single step scheme, X(t-1) used to predict X(t)
@@ -37,7 +33,7 @@ swa:
   lr: 1.e-4
 
 # use ZeroRedundancyOptimizer ; saves memory for larger models
-zero_opt: True
+zero_optimizer: True
 
 # dynamic rescaling of the loss gradient
 # see https://arxiv.org/pdf/2306.06079.pdf, section 4.3.2

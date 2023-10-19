@@ -1,5 +1,5 @@
 # specific GNN encoder settings
-activation_fun: SiLU
+activation: SiLU
 num_channels: 512
 
 mlp:

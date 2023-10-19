@@ -33,10 +33,9 @@ def gen_mlp(
     hidden_dim: int,
     out_features: int,
     n_extra_layers: int = 0,
-    activation_fun: str = "SiLU",
+    activation: str = "SiLU",
     final_activation: bool = False,
     layer_norm: bool = True,
-    layernorm_to_dtype: Optional[str] = None,
     checkpoints: bool = False,
 ) -> nn.Module:
     """Generate a multi-layer perceptron.
@@ -51,14 +50,12 @@ def gen_mlp(
         Number of output features
     n_extra_layers : int, optional
         Number of extra layers in MLP, by default 0
-    activation_fun : str, optional
+    activation : str, optional
         Activation function, by default "SiLU"
     final_activation : bool, optional
         Whether to apply a final activation function to last layer, by default True
     layer_norm : bool, optional
         Whether to apply layer norm after activation, by default True
-    layernorm_to_dtype : str, optional, by default None
-        Cast manually to dtype after layer norms (amp casts to float32)
     checkpoints : bool, optional
         Whether to provide checkpoints, by default False
 
@@ -73,17 +70,10 @@ def gen_mlp(
         If activation function is not supported
     """
     try:
-        act_func = getattr(nn, activation_fun)
+        act_func = getattr(nn, activation)
     except AttributeError as ae:
-        LOGGER.error("Activation function %s not supported", activation_fun)
+        LOGGER.error("Activation function %s not supported", activation)
         raise RuntimeError from ae
-
-    if layernorm_to_dtype:
-        try:
-            cast_to_dtype = getattr(torch, layernorm_to_dtype)
-        except AttributeError as ae:
-            LOGGER.error("manual cast after layernorm: dtype %s not supported", layernorm_to_dtype)
-            raise RuntimeError from ae
 
     mlp1 = nn.Sequential(nn.Linear(in_features, hidden_dim), act_func())
     for _ in range(n_extra_layers):
@@ -95,26 +85,22 @@ def gen_mlp(
         mlp1.append(act_func())
 
     if layer_norm:
-        mlp1.append(nn.LayerNorm(out_features))
-        if layernorm_to_dtype is not None:
-            mlp1.append(CastTensor(dtype=cast_to_dtype))
+        mlp1.append(AutocastLayerNorm(out_features))
 
     return CheckpointWrapper(mlp1) if checkpoints else mlp1
 
 
-class CastTensor(nn.Module):
-    """Cast manually to torch.dtype."""
+class AutocastLayerNorm(nn.LayerNorm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-    def __init__(
-        self,
-        dtype: torch.dtype,
-    ) -> None:
-        super().__init__()
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward with explicit autocast back to the input type.
 
-        self.dtype = dtype
-
-    def forward(self, x):
-        return x.to(self.dtype)
+        This casts the output to (b)float16 (instead of float32) when we run in mixed
+        precision.
+        """
+        return super().forward(x).type_as(x)
 
 
 class GNNProcessor(nn.Module):
@@ -127,8 +113,7 @@ class GNNProcessor(nn.Module):
         edge_dim: int,
         chunks: int = 2,
         mlp_extra_layers: int = 0,
-        activation_fun: str = "SiLU",
-        layernorm_to_dtype: Optional[str] = None,
+        activation: str = "SiLU",
         cpu_offload: bool = False,
     ) -> None:
         """Initialize GNNProcessor.
@@ -145,10 +130,8 @@ class GNNProcessor(nn.Module):
             Number of chunks, by default 2
         mlp_extra_layers : int, optional
             Number of extra layers in MLP, by default 0
-        activation_fun : str, optional
-            Activation funciton, by default "SiLU"
-        layernorm_to_dtype : str, optional, by default None
-            Cast manually to dtype after layer norms (amp casts to float32)
+        activation : str, optional
+            Activation function, by default "SiLU"
         cpu_offload : bool, optional
             Whether to offload processing to CPU, by default False
         """
@@ -169,8 +152,7 @@ class GNNProcessor(nn.Module):
                     hidden_dim,
                     hidden_layers=chunk_size,
                     mlp_extra_layers=mlp_extra_layers,
-                    activation_fun=activation_fun,
-                    layernorm_to_dtype=layernorm_to_dtype,
+                    activation=activation,
                     edge_dim=edge_dim,
                 )
             )
@@ -178,15 +160,15 @@ class GNNProcessor(nn.Module):
         if cpu_offload:
             self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
 
-    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, model_coms_group: ProcessGroup) -> Tensor:
-        shapes_edge_idx = get_shape_shards(edge_index, 1, model_coms_group)
-        shapes_edge_attr = get_shape_shards(edge_attr, 0, model_coms_group)
-        edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_coms_group)
-        edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_coms_group)
+    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, model_comm_group: ProcessGroup) -> Tensor:
+        shapes_edge_idx = get_shape_shards(edge_index, 1, model_comm_group)
+        shapes_edge_attr = get_shape_shards(edge_attr, 0, model_comm_group)
+        edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_comm_group)
+        edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_comm_group)
 
         for i in range(self.hidden_layers):
             x, edge_attr = checkpoint(
-                self.proc[i], x, edge_index, edge_attr, (shape_nodes, shape_nodes), model_coms_group, use_reentrant=False
+                self.proc[i], x, edge_index, edge_attr, (shape_nodes, shape_nodes), model_comm_group, use_reentrant=False
             )
 
         return x
@@ -201,8 +183,7 @@ class GNNProcessorChunk(nn.Module):
         hidden_dim: int,
         hidden_layers: int,
         mlp_extra_layers: int = 0,
-        activation_fun: str = "SiLU",
-        layernorm_to_dtype: Optional[str] = None,
+        activation: str = "SiLU",
         edge_dim: Optional[int] = None,
     ) -> None:
         """Initialize GNNProcessorChunk.
@@ -215,10 +196,8 @@ class GNNProcessorChunk(nn.Module):
             Number of message passing blocks.
         mlp_extra_layers : int, optional
             Extra layers in MLP, by default 0
-        activation_fun : str, optional
+        activation : str, optional
             Activation function, by default "SiLU"
-        layernorm_to_dtype : str, optional, by default None
-            Cast manually to dtype after layer norms (amp casts to float32)
         edge_dim: int, by default None
             Embedd edges with input dimension edge_dim,
             if None: assume embedding is not required
@@ -233,8 +212,7 @@ class GNNProcessorChunk(nn.Module):
                 hidden_dim=hidden_dim,
                 out_features=hidden_dim,
                 n_extra_layers=mlp_extra_layers,
-                activation_fun=activation_fun,
-                layernorm_to_dtype=layernorm_to_dtype,
+                activation=activation,
             )
         else:
             self.emb_edges = False
@@ -245,8 +223,7 @@ class GNNProcessorChunk(nn.Module):
                     hidden_dim,
                     hidden_dim,
                     mlp_extra_layers=mlp_extra_layers,
-                    activation_fun=activation_fun,
-                    layernorm_to_dtype=layernorm_to_dtype,
+                    activation=activation,
                 )
                 for _ in range(self.hidden_layers)
             ]
@@ -258,14 +235,14 @@ class GNNProcessorChunk(nn.Module):
         edge_index: Adj,
         edge_attr: Tensor,
         shapes: Tuple,
-        model_coms_group: ProcessGroup,
+        model_comm_group: ProcessGroup,
         size: Size = None,
     ):
         if self.emb_edges:
             edge_attr = self.emb_edges(edge_attr)
 
         for i in range(self.hidden_layers):
-            x, edge_attr = self.proc[i](x, edge_index, edge_attr, shapes, model_coms_group, size=size)
+            x, edge_attr = self.proc[i](x, edge_index, edge_attr, shapes, model_comm_group, size=size)
 
         return x, edge_attr
 
@@ -280,8 +257,7 @@ class GNNMapper(nn.Module):
         hidden_dim: int,
         edge_dim: int,
         mlp_extra_layers: int = 0,
-        activation_fun: str = "SiLU",
-        layernorm_to_dtype: Optional[str] = None,
+        activation: str = "SiLU",
         num_chunks: int = 1,
         cpu_offload: bool = False,
         backward_mapper: bool = False,
@@ -301,10 +277,8 @@ class GNNMapper(nn.Module):
             Input features of edge MLP
         mlp_extra_layers : int, optional
             Number of extra layers in MLP, by default 0
-        activation_fun : str, optional
-            Activation funciton, by default "SiLU"
-        layernorm_to_dtype : str, optional, by default None
-            Cast manually to dtype after layer norms (amp casts to float32)
+        activation : str, optional
+            Activation function, by default "SiLU"
         num_chunks : int
             Do message passing in X chunks
         cpu_offload : bool, optional
@@ -325,8 +299,7 @@ class GNNMapper(nn.Module):
             hidden_dim=hidden_dim,
             out_features=hidden_dim,
             n_extra_layers=mlp_extra_layers,
-            activation_fun=activation_fun,
-            layernorm_to_dtype=layernorm_to_dtype,
+            activation=activation,
         )
 
         update_src_nodes = False if backward_mapper else True
@@ -334,8 +307,7 @@ class GNNMapper(nn.Module):
             hidden_dim,
             hidden_dim,
             mlp_extra_layers=mlp_extra_layers,
-            activation_fun=activation_fun,
-            layernorm_to_dtype=layernorm_to_dtype,
+            activation=activation,
             update_src_nodes=update_src_nodes,
             num_chunks=num_chunks,
         )
@@ -349,8 +321,7 @@ class GNNMapper(nn.Module):
                 hidden_dim=hidden_dim,
                 out_features=out_channels_dst,
                 n_extra_layers=mlp_extra_layers,
-                activation_fun=activation_fun,
-                layernorm_to_dtype=layernorm_to_dtype,
+                activation=activation,
                 layer_norm=False,
                 final_activation=False,
             )
@@ -360,8 +331,7 @@ class GNNMapper(nn.Module):
                 hidden_dim=hidden_dim,
                 out_features=hidden_dim,
                 n_extra_layers=mlp_extra_layers,
-                activation_fun=activation_fun,
-                layernorm_to_dtype=layernorm_to_dtype,
+                activation=activation,
             )
 
             self.emb_nodes_dst = gen_mlp(
@@ -369,37 +339,36 @@ class GNNMapper(nn.Module):
                 hidden_dim=hidden_dim,
                 out_features=hidden_dim,
                 n_extra_layers=mlp_extra_layers,
-                activation_fun=activation_fun,
-                layernorm_to_dtype=layernorm_to_dtype,
+                activation=activation,
             )
 
     def forward(
-        self, x: PairTensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, size: Size, model_coms_group: ProcessGroup
+        self, x: PairTensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, size: Size, model_comm_group: ProcessGroup
     ) -> PairTensor:
-        shapes_edge_idx = get_shape_shards(edge_index, 1, model_coms_group)
-        shapes_edge_attr = get_shape_shards(edge_attr, 0, model_coms_group)
-        edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_coms_group)
-        edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_coms_group)
+        shapes_edge_idx = get_shape_shards(edge_index, 1, model_comm_group)
+        shapes_edge_attr = get_shape_shards(edge_attr, 0, model_comm_group)
+        edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_comm_group)
+        edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_comm_group)
         edge_attr = self.emb_edges(edge_attr)
 
         x_src, x_dst = x
         shapes_src, shapes_dst = shape_nodes
 
         if not self.backward_mapper:
-            x_src = shard_tensor(x_src, 0, shapes_src, model_coms_group)
-            x_dst = shard_tensor(x_dst, 0, shapes_dst, model_coms_group)
+            x_src = shard_tensor(x_src, 0, shapes_src, model_comm_group)
+            x_dst = shard_tensor(x_dst, 0, shapes_dst, model_comm_group)
             x_src = self.emb_nodes_src(x_src)
             x_dst = self.emb_nodes_dst(x_dst)
             shapes_src = change_channels_in_shape(shapes_src, self.hidden_dim)
             shapes_dst = change_channels_in_shape(shapes_dst, self.hidden_dim)
 
         (x_src, x_dst), edge_attr = self.proc(
-            (x_src, x_dst), edge_index, edge_attr, (shapes_src, shapes_dst), model_coms_group, size=size
+            (x_src, x_dst), edge_index, edge_attr, (shapes_src, shapes_dst), model_comm_group, size=size
         )
 
         if self.backward_mapper:
             x_dst = self.node_era_extractor(x_dst)
-            x_dst = gather_tensor(x_dst, 0, change_channels_in_shape(shapes_dst, self.out_channels_dst), model_coms_group)
+            x_dst = gather_tensor(x_dst, 0, change_channels_in_shape(shapes_dst, self.out_channels_dst), model_comm_group)
 
         return x_src, x_dst
 
@@ -412,8 +381,7 @@ class GNNBlock(nn.Module):
         in_channels: int,
         out_channels: int,
         mlp_extra_layers: int = 0,
-        activation_fun: str = "SiLU",
-        layernorm_to_dtype: Optional[str] = None,
+        activation: str = "SiLU",
         update_src_nodes: bool = True,
         num_chunks: int = 1,
         **kwargs,
@@ -428,10 +396,8 @@ class GNNBlock(nn.Module):
             Number of output channels.
         mlp_extra_layers : int, optional
             Extra layers in MLP, by default 0
-        activation_fun : str, optional
+        activation : str, optional
             Activation function, by default "SiLU"
-        layernorm_to_dtype : str, optional, by default None
-            Cast manually to dtype after layer norms (amp casts to float32)
         update_src_nodes: bool, by default True
             Update src if src and dst nodes are given
         num_chunks : int, by default 1
@@ -447,16 +413,14 @@ class GNNBlock(nn.Module):
             out_channels,
             out_channels,
             n_extra_layers=mlp_extra_layers,
-            activation_fun=activation_fun,
-            layernorm_to_dtype=layernorm_to_dtype,
+            activation=activation,
         )
 
         self.conv = NodeEdgeInteractions(
             in_channels=in_channels,
             out_channels=out_channels,
             mlp_extra_layers=mlp_extra_layers,
-            activation_fun=activation_fun,
-            layernorm_to_dtype=layernorm_to_dtype,
+            activation=activation,
         )
 
     def forward(
@@ -465,14 +429,14 @@ class GNNBlock(nn.Module):
         edge_index: Adj,
         edge_attr: Tensor,
         shapes: Tuple,
-        model_coms_group: ProcessGroup,
+        model_comm_group: ProcessGroup,
         size: Size = None,
     ):
         if isinstance(x, Tensor):
-            x_in = sync_tensor(x, 0, shapes[1], model_coms_group)
+            x_in = sync_tensor(x, 0, shapes[1], model_comm_group)
         else:
-            x_src = sync_tensor(x[0], 0, shapes[0], model_coms_group)
-            x_dst = sync_tensor(x[1], 0, shapes[1], model_coms_group)
+            x_src = sync_tensor(x[0], 0, shapes[0], model_comm_group)
+            x_dst = sync_tensor(x[1], 0, shapes[1], model_comm_group)
             x_in = (x_src, x_dst)
 
         if self.num_chunks > 1:
@@ -490,7 +454,7 @@ class GNNBlock(nn.Module):
         else:
             out, edges_new = self.conv(x_in, edge_index, edge_attr, size=size)
 
-        out = reduce_shard_tensor(out, 0, shapes[1], model_coms_group)
+        out = reduce_shard_tensor(out, 0, shapes[1], model_comm_group)
 
         if isinstance(x, Tensor):
             nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x
@@ -515,8 +479,7 @@ class NodeEdgeInteractions(MessagePassing):
         in_channels: int,
         out_channels: int,
         mlp_extra_layers: int = 0,
-        activation_fun: str = "SiLU",
-        layernorm_to_dtype: Optional[str] = None,
+        activation: str = "SiLU",
         **kwargs,
     ) -> None:
         """Initialize NodeEdgeInteractions.
@@ -529,10 +492,8 @@ class NodeEdgeInteractions(MessagePassing):
             Number of output channels.
         mlp_extra_layers : int, optional
             Extra layers in MLP, by default 0
-        activation_fun : str, optional
+        activation : str, optional
             Activation function, by default "SiLU"
-        layernorm_to_dtype : str, optional, by default None
-            Cast manually to dtype after layer norms (amp casts to float32)
         """
         super().__init__(**kwargs)
 
@@ -541,8 +502,7 @@ class NodeEdgeInteractions(MessagePassing):
             out_channels,
             out_channels,
             n_extra_layers=mlp_extra_layers,
-            activation_fun=activation_fun,
-            layernorm_to_dtype=layernorm_to_dtype,
+            activation=activation,
         )
 
     def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj, edge_attr: Tensor, size: Size = None):
@@ -566,7 +526,7 @@ class NodeEdgeInteractions(MessagePassing):
         return out, edges_new
 
 
-class CheckpointWrapper(nn.Module):  # not used
+class CheckpointWrapper(nn.Module):
     """Wrapper for checkpointing a module."""
 
     def __init__(self, module: nn.Module) -> None:

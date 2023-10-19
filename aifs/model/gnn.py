@@ -49,8 +49,7 @@ class GraphMSG(nn.Module):
 
         LOGGER.debug("self.in_channels + self.aux_channels == %d", self.in_channels + self.aux_in_channels)
 
-        self.activation_fun = config.model.activation_fun
-        self.layernorm_to_dtype = config.training.precision.manual_cast_after_layernorm
+        self.activation = config.model.activation
 
         # Create Graph edges
         self._create_edges()
@@ -89,8 +88,7 @@ class GraphMSG(nn.Module):
             hidden_dim=self.encoder_out_channels,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
-            activation_fun=self.activation_fun,
-            layernorm_to_dtype=self.layernorm_to_dtype,
+            activation=self.activation,
             num_chunks=config.model.encoder.num_chunks,
         )
 
@@ -101,8 +99,7 @@ class GraphMSG(nn.Module):
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
             chunks=config.model.processor.chunks,
-            activation_fun=self.activation_fun,
-            layernorm_to_dtype=self.layernorm_to_dtype,
+            activation=self.activation,
         )
 
         # Decoder H -> ERA5
@@ -114,8 +111,7 @@ class GraphMSG(nn.Module):
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
             backward_mapper=True,
-            activation_fun=self.activation_fun,
-            layernorm_to_dtype=self.layernorm_to_dtype,
+            activation=self.activation,
             num_chunks=config.model.decoder.num_chunks,
         )
 
@@ -258,10 +254,10 @@ class GraphMSG(nn.Module):
         edge_attr: torch.Tensor,
         shape_nodes: Tuple[List, List],
         size: Size,
-        model_coms_group: ProcessGroup,
+        model_comm_group: ProcessGroup,
         use_reentrant: bool = False,
     ):
-        """Run act. checkpointed mapper.
+        """Run mapper with activation checkpoint.
 
         Parameters
         ----------
@@ -275,8 +271,13 @@ class GraphMSG(nn.Module):
             Edge increment to use
         edge_attr : torch.Tensor
             Trainable edge attribute tensor
-        model_coms_group : ProcessGroup
-            model communication group
+        shape_nodes: Tuple[List, List]
+            Shapes of input fileds the task holds when running with multiple GPUs
+        size: Size
+            Number of source and target nodes of bipartite graph
+        model_comm_group : ProcessGroup
+            model communication group, specifies which GPUs work together
+            in one model instance
         use_reentrant : bool, optional
             Use reentrant, by default False
 
@@ -292,11 +293,11 @@ class GraphMSG(nn.Module):
             edge_attr=edge_attr,
             shape_nodes=shape_nodes,
             size=size,
-            model_coms_group=model_coms_group,
+            model_comm_group=model_comm_group,
             use_reentrant=use_reentrant,
         )
 
-    def forward(self, x: torch.Tensor, model_coms_group: ProcessGroup) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, model_comm_group: Optional[ProcessGroup] = None) -> torch.Tensor:
         self.batch_size = x.shape[0]
 
         # add ERA positional info (lat/lon)
@@ -315,8 +316,8 @@ class GraphMSG(nn.Module):
         size_bwd = (x_h_latent.shape[0], x_era_latent.shape[0])
 
         # shapes of node shards:
-        shape_x_fwd = get_shape_shards(x_era_latent, 0, model_coms_group)
-        shape_h_fwd = get_shape_shards(x_h_latent, 0, model_coms_group)
+        shape_x_fwd = get_shape_shards(x_era_latent, 0, model_comm_group)
+        shape_h_fwd = get_shape_shards(x_h_latent, 0, model_comm_group)
         shape_h_proc = change_channels_in_shape(shape_h_fwd, self.encoder_out_channels)
         shape_h_bwd = shape_h_proc
         shape_x_bwd = change_channels_in_shape(shape_x_fwd, self.encoder_out_channels)
@@ -329,7 +330,7 @@ class GraphMSG(nn.Module):
             edge_e_to_h_latent,
             shape_nodes=(shape_x_fwd, shape_h_fwd),
             size=size_fwd,
-            model_coms_group=model_coms_group,
+            model_comm_group=model_comm_group,
         )
 
         x_latent_proc = self.h_processor(
@@ -337,7 +338,7 @@ class GraphMSG(nn.Module):
             edge_index=self._expand_edges(self.h2h_edge_index, self._h2h_edge_inc),
             edge_attr=edge_h_to_h_latent,
             shape_nodes=shape_h_proc,
-            model_coms_group=model_coms_group,
+            model_comm_group=model_comm_group,
         )
 
         # add skip connection (H -> H)
@@ -351,7 +352,7 @@ class GraphMSG(nn.Module):
             edge_h_to_e_latent,
             shape_nodes=(shape_h_bwd, shape_x_bwd),
             size=size_bwd,
-            model_coms_group=model_coms_group,
+            model_comm_group=model_comm_group,
         )
 
         x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=self.batch_size)

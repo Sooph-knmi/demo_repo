@@ -14,7 +14,7 @@ LOGGER = get_code_logger(__name__)
 class DDPGroupStrategy(DDPStrategy):
     def __init__(self, num_gpus_per_model: int, **kwargs):
         super().__init__(**kwargs)
-        self.num_gpus_per_model = num_gpus_per_model
+        self.model_comm_group_size = num_gpus_per_model
 
     def setup(self, trainer: pl.Trainer) -> None:
         assert self.accelerator is not None
@@ -22,21 +22,23 @@ class DDPGroupStrategy(DDPStrategy):
 
         # determine the model groups that work together:
 
-        assert self.world_size % self.num_gpus_per_model == 0
+        assert self.world_size % self.model_comm_group_size == 0
 
-        comms_groups_ranks = np.split(np.arange(self.world_size, dtype=int), int(self.world_size / self.num_gpus_per_model))
-        comms_groups = [torch.distributed.new_group(x) for x in comms_groups_ranks]  # every rank has to create all of these
+        model_comm_group_ranks = np.split(np.arange(self.world_size, dtype=int), int(self.world_size / self.model_comm_group_size))
+        model_comm_groups = [
+            torch.distributed.new_group(x) for x in model_comm_group_ranks
+        ]  # every rank has to create all of these
 
-        id_model_coms_group, my_model_coms_group, my_model_coms_group_rank = self.get_my_model_coms_group(self.num_gpus_per_model)
-        comms_group = comms_groups[id_model_coms_group]
-        self.model.set_model_coms_groups(comms_group)
+        model_comm_group_id, model_comm_group_nr, model_comm_group_rank = self.get_my_model_comm_group(self.model_comm_group_size)
+        model_comm_group = model_comm_groups[model_comm_group_id]
+        self.model.set_model_comm_group(model_comm_group)
         LOGGER.debug(
-            "Rank %d model_coms_group is %s, group number %d, with local group rank %d and comms_group_ranks %s",
+            "Rank %d model_comm_group is %s, group number %d, with local group rank %d and comms_group_ranks %s",
             self.global_rank,
-            str(my_model_coms_group),
-            id_model_coms_group,
-            my_model_coms_group_rank,
-            str(comms_groups_ranks[id_model_coms_group]),
+            str(model_comm_group_nr),
+            model_comm_group_id,
+            model_comm_group_rank,
+            str(model_comm_group_ranks[model_comm_group_id]),
         )
 
         # register hooks for correct gradient reduction
@@ -71,19 +73,18 @@ class DDPGroupStrategy(DDPStrategy):
             assert self.model is not None
             _sync_module_states(self.model)
 
-    def get_my_model_coms_group(self, num_gpus_per_model):
+    def get_my_model_comm_group(self, num_gpus_per_model):
         """Determine tasks that work together and from a model group."""
-        model_coms_groups = np.arange(0, self.world_size, dtype=np.int32)
-        model_coms_groups = np.split(model_coms_groups, self.world_size / num_gpus_per_model)
+        model_comm_groups = np.arange(0, self.world_size, dtype=np.int32)
+        model_comm_groups = np.split(model_comm_groups, self.world_size / num_gpus_per_model)
 
-        my_model_coms_group = None
-        id_model_coms_group = None
-        for i, model_coms_group in enumerate(model_coms_groups):
-            if self.global_rank in model_coms_group:
-                id_model_coms_group = i
-                my_model_coms_group = model_coms_group
-                model_coms_group_rank = np.ravel(np.asarray(model_coms_group == self.global_rank).nonzero())[0]
-        return id_model_coms_group, my_model_coms_group, model_coms_group_rank
+        model_comm_group_id = None
+        for i, model_comm_group in enumerate(model_comm_groups):
+            if self.global_rank in model_comm_group:
+                model_comm_group_id = i
+                model_comm_group_nr = model_comm_group
+                model_comm_group_rank = np.ravel(np.asarray(model_comm_group == self.global_rank).nonzero())[0]
+        return model_comm_group_id, model_comm_group_nr, model_comm_group_rank
 
     def register_parameter_hooks(self):
         """Register parameter hooks for gradient reduction.
@@ -94,4 +95,4 @@ class DDPGroupStrategy(DDPStrategy):
         """
         for name, param in self.model.named_parameters():
             if param.requires_grad is True and "trainable" not in name:
-                param.register_hook(lambda grad: grad * float(self.num_gpus_per_model))
+                param.register_hook(lambda grad: grad * float(self.model_comm_group_size))
