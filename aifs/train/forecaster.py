@@ -268,7 +268,8 @@ class GraphForecaster(pl.LightningModule):
             x = batch[:, 0 : self.multi_step, ...]
             y_hat = self(x)
 
-        return self.normalizer.denormalize(y_hat.mean(1), in_place=False)
+        # return self.normalizer.denormalize(y_hat.mean(1), in_place=False)
+        return self.normalizer.denormalize(y_hat, in_place=False)
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
