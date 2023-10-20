@@ -49,8 +49,6 @@ class GraphForecaster(pl.LightningModule):
         super().__init__()
 
         self.fcdim = config.data.num_features - config.data.num_aux_features
-        num_levels = len(config.data.pl.levels)
-
         self.graph_data = torch.load(Path(config.hardware.paths.graph, config.hardware.files.graph))
 
         self.model = AIFSModelGNN(
@@ -59,14 +57,50 @@ class GraphForecaster(pl.LightningModule):
             config=DotConfig(OmegaConf.to_container(config, resolve=True)),
         )
 
+        self.multi_step = config.training.multistep_input
+        self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
+        self.lr_iterations = config.training.lr.iterations
+        self.lr_min = config.training.lr.min
+        self.rollout = config.training.rollout.start
+        self.rollout_epoch_increment = config.training.rollout.epoch_increment
+        self.rollout_max = config.training.rollout.max
+        self.enable_plot = config.diagnostics.plot.enabled
+        self.logger_enabled = config.diagnostics.log.wandb.enabled
+
+        self.nens_per_device = config.training.ensemble_size
+        self.nens_per_group = self.nens_per_device * config.hardware.group_size
+        LOGGER.debug("Ensemble size: per device = %d, per group = %d", self.nens_per_device, self.nens_per_group)
+
+        LOGGER.debug("Rollout window length: %d", self.rollout)
+        if self.rollout_epoch_increment > 0:
+            LOGGER.debug("Rollout increase every %d epochs", self.rollout_epoch_increment)
+        LOGGER.debug("Rollout max : %d", self.rollout_max)
+        LOGGER.debug("Multistep: %d", self.multi_step)
+
         self.save_hyperparameters()
 
         self.era_latlons = self.graph_data[("era", "to", "era")].ecoords_rad
         self.era_weights = self.graph_data[("era", "to", "era")].area_weights
 
-        self.logger_enabled = config.diagnostics.log.wandb.enabled
+        # Loss function
+        self._initialize_loss(config)
 
+        # Validation metrics
+        self._initialize_metrics(metadata, config)
+
+        # Rank histogram
+        self.ranks = RankHistogram(nens=self.nens_per_group, nvar=self.fcdim)
+
+        # Spread-skill metric (eval-mode only - see the RolloutEval callback)
+        self.spread_skill = SpreadSkill(rollout=config.diagnostics.eval.rollout, nvar=len(config.diagnostics.plot.parameters))
+
+        # DDP group definitions; TODO: add better documentation!
+        self.mgroupdef: Optional[Tuple] = None
+        self.mgroupdef_single: Optional[Tuple] = None
+
+    def _initialize_loss(self, config: DictConfig) -> None:
         loss_scaling = np.array([], dtype=np.float32)
+
         for pl_name in config.data.pl.parameters:
             if pl_name in config.training.loss_scaling.pl:
                 scl = config.training.loss_scaling.pl[pl_name]
@@ -74,6 +108,7 @@ class GraphForecaster(pl.LightningModule):
                 scl = 1
                 LOGGER.debug("Parameter %s was not scaled.", pl_name)
             loss_scaling = np.append(loss_scaling, [scl] * pressure_level(config.data.pl.levels))
+
         for sfc_name in config.data.sfc.parameters:
             if sfc_name in config.training.loss_scaling.sfc:
                 scl = config.training.loss_scaling.sfc[sfc_name]
@@ -81,17 +116,19 @@ class GraphForecaster(pl.LightningModule):
                 scl = 1
                 LOGGER.debug("Parameter %s was not scaled.", sfc_name)
             loss_scaling = np.append(loss_scaling, [scl])
+
         assert len(loss_scaling) == self.fcdim
         loss_scaling = torch.from_numpy(loss_scaling)
 
-        # Loss function
         self.loss_type = config.training.loss
         assert self.loss_type in [
             "kcrps",
             "energy",
             "patched_energy",
         ], f"Invalid loss type {self.loss_type}! Check your config ..."
+
         self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=loss_scaling)
+
         if self.loss_type == "energy":
             self.energy_score = EnergyScore(area_weights=self.era_weights, loss_scaling=loss_scaling)
         else:
@@ -100,49 +137,19 @@ class GraphForecaster(pl.LightningModule):
             )
             self.energy_score = PatchedEnergyScore(area_weights=self.era_weights, patches=patches_, loss_scaling=loss_scaling)
 
+    def _initialize_metrics(self, metadata: Dict, config: DictConfig) -> None:
+        num_levels = len(config.data.pl.levels)
         self.metric_ranges = {}
         for i, key in enumerate(config.data.pl.parameters):
             self.metric_ranges[key] = [i * num_levels, (i + 1) * num_levels]
         for key in config.training.metrics:
             idx = metadata["name_to_index"][key]
             self.metric_ranges[key] = [idx, idx + 1]
-        LOGGER.debug("metric_ranges: %s", self.metric_ranges)
-
         # Validation metric(s)
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
-        self.nens_per_device = config.training.ensemble_size
-        self.nens_per_group = self.nens_per_device * config.hardware.group_size
-        LOGGER.debug("Ensemble size: per device = %d, per group = %d", self.nens_per_device, self.nens_per_group)
-
-        # Rank histogram
-        self.ranks = RankHistogram(nens=self.nens_per_group, nvar=self.fcdim)
-
-        self.multi_step = config.training.multistep_input
-        self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
-        self.lr_iterations = config.training.lr.iterations
-        self.lr_min = config.training.lr.min
-        self.rollout = config.training.rollout.start
-        self.rollout_epoch_increment = config.training.rollout.epoch_increment
-        self.rollout_max = config.training.rollout.max
-
-        # Spread-skill metric (eval-mode only - see the RolloutEval callback)
-        self.spread_skill = SpreadSkill(rollout=config.diagnostics.eval.rollout, nvar=len(config.diagnostics.plot.parameters))
-
-        LOGGER.debug("Rollout window length: %d", self.rollout)
-        if self.rollout_epoch_increment > 0:
-            LOGGER.debug("Rollout increase every %d epochs", self.rollout_epoch_increment)
-        LOGGER.debug("Rollout max : %d", self.rollout_max)
-        LOGGER.debug("Multistep: %d", self.multi_step)
-
-        self.enable_plot = config.diagnostics.plot.enabled
-
-        # DDP group definitions; TODO: add better documentation!
-        self.mgroupdef: Optional[Tuple] = None
-        self.mgroupdef_single: Optional[Tuple] = None
-
-    def set_mgroupdef(self, mgroupdef: Tuple, mgroupdef_single: Tuple) -> None:
-        LOGGER.debug("set_mgroupdef: %s, %s", mgroupdef, mgroupdef_single)
+    def set_comm_group_def(self, mgroupdef: Tuple, mgroupdef_single: Tuple) -> None:
+        LOGGER.debug("set_comm_group_def: %s, %s", mgroupdef, mgroupdef_single)
         self.mgroupdef = mgroupdef
         self.mgroupdef_single = mgroupdef_single
 
@@ -235,6 +242,7 @@ class GraphForecaster(pl.LightningModule):
         x_ic: Optional[torch.Tensor] = None,
         validation_mode: bool = False,
     ) -> Tuple:
+        """Training / validation step."""
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
         batch = self.model.normalizer(batch)  # normalized in-place
         x = self.model.normalizer(x_ic)  # (bs, nens, multistep, latlon, nvar)
@@ -304,6 +312,7 @@ class GraphForecaster(pl.LightningModule):
         return train_loss
 
     def lr_scheduler_step(self, scheduler, metric):
+        del metric  # not used
         scheduler.step(epoch=self.trainer.global_step)
 
     def on_train_epoch_end(self):
