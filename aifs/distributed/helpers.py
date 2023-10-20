@@ -3,38 +3,133 @@
 # License: https://github.com/NVIDIA/modulus/blob/b18419e9460f6acd3cd3d175f5d6caf6bbc9d2da/modulus/utils/sfno/distributed/helpers.py#L1C6-L1C6
 # todo: add proper license information etc.
 from typing import List
+from typing import Optional
+from typing import Tuple
 
 import torch
 import torch.distributed as dist
+from torch.distributed.distributed_c10d import ProcessGroup
 
 
-def shard_tensor(input_, dim, shapes, mgroup):
-    """Shard tensor."""
+def shard_tensor(input_: torch.Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -> torch.Tensor:
+    """Shard tensor.
+
+    Keeps only part of the tensor that is relevant for the current rank.
+
+    Parameters
+    ----------
+    input_ : Tensor
+        Input
+    dim : int
+        dimension along which to shard
+    shapes : Tuple
+        Shapes of sharded Tensors
+    mgroup : ProcessGroup
+        model communication group
+
+    Returns
+    -------
+    torch.Tensor
+    """
+
     return _ShardParallelSection.apply(input_, dim, shapes, mgroup)
 
 
-def gather_tensor(input_, dim, shapes, mgroup):
-    """Gather tensor."""
+def gather_tensor(input_: torch.Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -> torch.Tensor:
+    """Gather tensor.
+
+    Gathers tensor shards from ranks.
+
+    Parameters
+    ----------
+    input_ : Tensor
+        Input
+    dim : int
+        dimension along which to gather
+    shapes : Tuple
+        Shapes of sharded Tensors
+    mgroup : ProcessGroup
+        model communication group
+
+    Returns
+    -------
+    torch.Tensor
+    """
+
     return _GatherParallelSection.apply(input_, dim, shapes, mgroup)
 
 
-def reduce_tensor(input_, mgroup):
-    """Reduce tensor."""
+def reduce_tensor(input_: torch.Tensor, mgroup: ProcessGroup) -> torch.Tensor:
+    """Reduce tensor.
+
+    Reduces tensor across ranks.
+
+    Parameters
+    ----------
+    input_ : Tensor
+        Input
+    mgroup : ProcessGroup
+        model communication group
+
+    Returns
+    -------
+    torch.Tensor
+    """
+
     return _ReduceParallelSection.apply(input_, mgroup)
 
 
-def sync_tensor(input_, dim, shapes, mgroup):
-    """Sync tensor."""
+def sync_tensor(input_: torch.Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -> torch.Tensor:
+    """Sync tensor.
+
+    Perform a gather in the forward pass and an allreduce followed by a split in the backward pass.
+
+    Parameters
+    ----------
+    input_ : Tensor
+        Input
+    dim : int
+        dimension along which to gather
+    shapes : Tuple
+        Shapes of sharded Tensors
+    mgroup : ProcessGroup
+        model communication group
+
+    Returns
+    -------
+    torch.Tensor
+    """
+
     return _SyncParallelSection.apply(input_, dim, shapes, mgroup)
 
 
-def reduce_shard_tensor(input_, dim, shapes, mgroup):
-    """Reduce shard tensor."""
+def reduce_shard_tensor(input_: torch.Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -> torch.Tensor:
+    """Reduces and then shards tensor.
+
+    Perform an allreduce followed by a split in the forward pass and a gather in the backward pass.
+
+    Parameters
+    ----------
+    input_ : Tensor
+        Input
+    dim : int
+        dimension along which to gather
+    shapes : Tuple
+        Shapes of sharded Tensors
+    mgroup : ProcessGroup
+        model communication group
+
+    Returns
+    -------
+    torch.Tensor
+    """
+
     return _ReduceShardParallelSection.apply(input_, dim, shapes, mgroup)
 
 
-def get_shape_shards(tensor, dim: int, mgroup=None) -> List:
-    """Get shape of shards."""
+def get_shape_shards(tensor: torch.Tensor, dim: int, mgroup: Optional[ProcessGroup] = None) -> List:
+    """Get shape of tensor shards."""
+
     assert dim < tensor.dim(), f"Error, tensor dimension is {tensor.dim()} which cannot be split along {dim}"
 
     if mgroup:
@@ -52,7 +147,8 @@ def get_shape_shards(tensor, dim: int, mgroup=None) -> List:
 
 
 def change_channels_in_shape(shape_list: List, channels: int) -> List:
-    """Change the number of channels in the shape definition list."""
+    """Change the number of channels in the tensor shape definition list."""
+
     if shape_list:
         out = [x[:-1] + [channels] for x in shape_list]
     else:
@@ -182,8 +278,9 @@ class _ReduceParallelSection(torch.autograd.Function):
         return grad_output, None
 
 
-def _split(input_, dim_, shapes_, group=None):
+def _split(input_: torch.Tensor, dim_: int, shapes_: Tuple, group: Optional[ProcessGroup] = None) -> torch.Tensor:
     """Split the tensor along dim and keep the relevant slice."""
+
     # get input format
     input_format = get_memory_format(input_)
 
@@ -195,15 +292,15 @@ def _split(input_, dim_, shapes_, group=None):
     # Split along dim
     input_list = split_tensor_dim(input_, dim_, comm_size)
 
-    # does torch.tensor_split create contiguous tensors by default?
     rank = dist.get_rank(group=group)
     output = input_list[rank].contiguous(memory_format=input_format)
 
     return output
 
 
-def split_tensor_dim(tensor, dim, num_chunks):
+def split_tensor_dim(tensor: torch.Tensor, dim: int, num_chunks: int) -> List[torch.Tensor]:
     """Helper routine to split a tensor along a given dimension."""
+
     assert dim < tensor.dim(), f"Error, tensor dimension is {tensor.dim()} which cannot be split along {dim}"
 
     tensor_list = torch.tensor_split(tensor, num_chunks, dim=dim)
@@ -211,8 +308,9 @@ def split_tensor_dim(tensor, dim, num_chunks):
     return tensor_list
 
 
-def _gather(input_, dim_, shapes, group=None):
+def _gather(input_: torch.Tensor, dim_: int, shapes: Tuple, group: Optional[ProcessGroup] = None) -> torch.Tensor:
     """Gather tensors and concatinate along the last dimension."""
+
     # get input format
     input_format = get_memory_format(input_)
 
@@ -242,7 +340,7 @@ def _gather(input_, dim_, shapes, group=None):
     return output
 
 
-def _reduce(input_, use_fp32=True, group=None):
+def _reduce(input_: torch.Tensor, use_fp32: Optional[bool] = True, group: Optional[ProcessGroup] = None) -> torch.Tensor:
     """All-reduce the input tensor across model parallel group."""
 
     comm_size = dist.get_world_size(group=group)
@@ -262,8 +360,9 @@ def _reduce(input_, use_fp32=True, group=None):
     return input_
 
 
-def get_memory_format(tensor):
+def get_memory_format(tensor: torch.Tensor):
     """Helper routine to get the memory format."""
+
     if tensor.is_contiguous(memory_format=torch.channels_last):
         return torch.channels_last
     else:
