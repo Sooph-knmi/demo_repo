@@ -284,7 +284,7 @@ class GraphForecaster(pl.LightningModule):
         x_ens_ic = self._generate_ens_inicond(batch)
         train_loss, _, _, _ = self._step(batch[0], x_ens_ic)
         self.log(
-            "train_kcrps",
+            "train_" + self.loss_type,
             train_loss,
             on_epoch=True,
             on_step=True,

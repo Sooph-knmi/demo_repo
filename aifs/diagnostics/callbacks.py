@@ -555,9 +555,10 @@ def get_callbacks(config: DictConfig) -> List:
                 PredictedEnsemblePlot(config),
                 KCRPSMapPlot(config),
                 SpreadSkillPlot(config),
-                KCRPSBarPlot(config),
             ]
         )
+        if config.training.loss == "kcrps":
+            trainer_callbacks.append(KCRPSBarPlot(config))
         if config.training.eda_initial_perturbations:
             trainer_callbacks.append(PlotEnsembleInitialConditions(config))
 

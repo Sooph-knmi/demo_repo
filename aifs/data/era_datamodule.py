@@ -66,11 +66,10 @@ class ERA5DataModule(pl.LightningDataModule):
             else self.config.training.rollout.start
         )
         r = max(rollout, rollout_config) if rollout is not None else rollout_config
-        fname_eda = self._get_data_file_path("eda", stage) if self.config.training.eda_initial_perturbations else None
         return ERA5NativeGridDataset(
             fname_an=self._get_data_file_path("an", stage),
             data_reader=read_era_data,
-            fname_eda=fname_eda,
+            fname_eda=self._get_data_file_path("eda", stage) if self.config.training.eda_initial_perturbations else None,
             lead_time=self.config.training.lead_time,
             rollout=r,
             multistep=self.config.training.multistep_input,
@@ -86,7 +85,6 @@ class ERA5DataModule(pl.LightningDataModule):
             self.config.hardware.paths[stage][type_],
             self.config.hardware.files[stage][type_],
         )
-        LOGGER.debug("Path to %s %s zarr: %s", type_, stage, fpath)
         return fpath.as_posix()
 
     def _get_dataloader(self, ds: ERA5NativeGridDataset, num_workers: int, batch_size: int) -> DataLoader:

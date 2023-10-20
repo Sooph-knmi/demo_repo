@@ -19,7 +19,10 @@ class PatchedEnergyScore(EnergyScore):
         if loss_scaling is not None:
             self.register_buffer("scale", loss_scaling, persistent=True)
 
-        self.num_patches = patches.shape[0]
+        self.num_patches = patches.shape[-1]
+        LOGGER.debug("Shape of patches tensor: %s", patches.shape)
+        LOGGER.debug("Number of patches: %d", self.num_patches)
+
         self.register_buffer("patches", patches.to(dtype=torch.float32), persistent=True)
         patch_masks = patches != 0.0
         self.register_buffer("patch_masks", patch_masks, persistent=True)
@@ -29,8 +32,8 @@ class PatchedEnergyScore(EnergyScore):
         for index in range(self.num_patches):
             energy_value = checkpoint(
                 self._calc_energy_score,
-                einops.rearrange(preds[..., self.patch_masks[index]], "bs m v mlatlon -> bs m mlatlon v"),
-                einops.rearrange(target[..., self.patch_masks[index]], "bs v mlatlon -> bs mlatlon v"),
+                einops.rearrange(preds[..., self.patch_masks[..., index]], "bs m v mlatlon -> bs m mlatlon v"),
+                einops.rearrange(target[..., self.patch_masks[..., index]], "bs v mlatlon -> bs mlatlon v"),
                 beta,
                 use_reentrant=False,
             )
@@ -39,8 +42,8 @@ class PatchedEnergyScore(EnergyScore):
             # worth a test, I think
 
             # energy_value = self._calc_energy_score(
-            #     einops.rearrange(preds[..., self.patch_masks[index]], "bs m v mlatlon -> bs m (mlatlon v)"),
-            #     einops.rearrange(target[..., self.patch_masks[index]], "bs v mlatlon -> bs (mlatlon v)"),
+            #     einops.rearrange(preds[..., self.patch_masks[..., index]], "bs m v mlatlon -> bs m (mlatlon v)"),
+            #     einops.rearrange(target[..., self.patch_masks[..., index]], "bs v mlatlon -> bs (mlatlon v)"),
             #     beta,
             # )
             energy_score += energy_value

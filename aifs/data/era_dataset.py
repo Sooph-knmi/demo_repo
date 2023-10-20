@@ -67,9 +67,11 @@ class ERA5NativeGridDataset(IterableDataset):
         self.fname_eda = fname_eda
 
         # master switch for EDA
-        LOGGER.info("self.fname_an = %s", self.fname_an)
-        LOGGER.info("self.fname_eda = %s", self.fname_eda)
         self.eda = self.fname_eda is not None
+
+        LOGGER.info("Are we using the EDA dataset? %s", self.eda)
+        LOGGER.info("Analysis zarr filename: %s", self.fname_an)
+        LOGGER.info("EDA zarr filename: %s", self.fname_eda if self.eda else "N/A")
 
         self.ds_an: Optional[Array] = None
         self.ds_eda: Optional[Array] = None

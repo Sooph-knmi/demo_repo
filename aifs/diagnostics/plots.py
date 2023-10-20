@@ -375,8 +375,6 @@ def plot_ensemble_initial_conditions(
     """
     nens = y_pert.shape[0]
     n_plots_x, n_plots_y = len(parameters), nens + 1  # plot the mean and perturbations
-    LOGGER.debug("nens = %d, n_plots_x = %d, n_plots_y = %d", nens, n_plots_x, n_plots_y)
-    LOGGER.debug("y_pert.shape = %s", y_pert.shape)
 
     figsize = (n_plots_y * 4, n_plots_x * 3)
     fig, ax = plt.subplots(n_plots_x, n_plots_y, figsize=figsize)
@@ -386,8 +384,6 @@ def plot_ensemble_initial_conditions(
         yp = y_pert[..., variable_idx].squeeze()
         LOGGER.debug("Variable idx %d name %s -- yp.shape = %s", variable_idx, variable_name, yp.shape)
         ax_ = ax[plot_idx, :] if n_plots_x > 1 else ax
-        if n_plots_x > 1:
-            LOGGER.debug("Axis length: %d", len(ax_))
         plot_ensemble_ic(fig, ax_, pc, latlons, yp, variable_name)
 
     return fig
@@ -399,8 +395,7 @@ def plot_kcrps(parameters: Dict[str, int], latlons: np.ndarray, pkcrps: np.ndarr
     latlons: lat/lon coordinates array, shape (lat*lon, 2)
     pkcrps: array of pointwise kcrps values, shape (nvar, latlon)
     """
-    LOGGER.debug("latlons.shape = %s, pkcrps.shape = %s", latlons.shape, pkcrps.shape)
-    assert latlons.shape[0] == pkcrps.shape[1], "OOPS - shape mismatch!"
+    assert latlons.shape[0] == pkcrps.shape[1], "Error: shape mismatch!"
 
     fig, ax = plt.subplots(1, len(parameters), figsize=(len(parameters) * 4, 3))
     lat, lon = latlons[:, 0], latlons[:, 1]
