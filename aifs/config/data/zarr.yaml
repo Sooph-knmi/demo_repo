@@ -1,5 +1,5 @@
 format: zarr
-resolution: o96
+resolution: o160 #o96
 num_features: 98
 num_aux_features: 13  # all 2D fields
 # features that are not part of the forecast state

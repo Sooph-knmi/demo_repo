@@ -17,6 +17,8 @@ from aifs.diagnostics.logging import get_tensorboard_logger
 from aifs.train.forecaster import GraphForecaster
 from aifs.utils.logger import get_code_logger
 
+import time
+
 LOGGER = get_code_logger(__name__)
 
 
@@ -180,7 +182,10 @@ class AIFSTrainer:
             profiler=self.profiler,
         )
 
+        start = time.time()
         trainer.fit(self.model, datamodule=self.datamodule, ckpt_path=self.last_checkpoint)
+        end = time.time()
+        print( f'Elapsed time [s]: {end - start}')
         LOGGER.debug("---- DONE. ----")
 
 
