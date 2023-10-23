@@ -76,7 +76,7 @@ class GraphMSG(nn.Module):
         self._register_latlon("era")
         self._register_latlon("h")
 
-        self.encoder_out_channels = config.model.num_channels
+        self.num_channels = config.model.num_channels
         mlp_extra_layers = config.model.mlp.extra_layers
 
         # Encoder from ERA -> H
@@ -85,7 +85,7 @@ class GraphMSG(nn.Module):
             + self.era_latlons.shape[1]
             + self.era_trainable_size,
             in_channels_dst=self.h_latlons.shape[1] + self.h_trainable_size,
-            hidden_dim=self.encoder_out_channels,
+            hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
             activation=self.activation,
@@ -94,7 +94,7 @@ class GraphMSG(nn.Module):
 
         # Processor H -> H
         self.h_processor = GNNProcessor(
-            hidden_dim=self.encoder_out_channels,
+            hidden_dim=self.num_channels,
             hidden_layers=config.model.processor.num_layers,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
@@ -104,10 +104,10 @@ class GraphMSG(nn.Module):
 
         # Decoder H -> ERA5
         self.backward_mapper = GNNMapper(
-            in_channels_src=self.encoder_out_channels,
-            in_channels_dst=self.encoder_out_channels,
+            in_channels_src=self.num_channels,
+            in_channels_dst=self.num_channels,
             out_channels_dst=self.in_channels,
-            hidden_dim=config.model.num_channels,
+            hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
             backward_mapper=True,
@@ -318,9 +318,9 @@ class GraphMSG(nn.Module):
         # shapes of node shards:
         shape_x_fwd = get_shape_shards(x_era_latent, 0, model_comm_group)
         shape_h_fwd = get_shape_shards(x_h_latent, 0, model_comm_group)
-        shape_h_proc = change_channels_in_shape(shape_h_fwd, self.encoder_out_channels)
+        shape_h_proc = change_channels_in_shape(shape_h_fwd, self.num_channels)
         shape_h_bwd = shape_h_proc
-        shape_x_bwd = change_channels_in_shape(shape_x_fwd, self.encoder_out_channels)
+        shape_x_bwd = change_channels_in_shape(shape_x_fwd, self.num_channels)
 
         x_era_latent, x_latent = self._run_mapper(
             self.forward_mapper,
