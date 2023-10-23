@@ -76,7 +76,7 @@ def gen_mlp(
         raise RuntimeError from ae
 
     mlp1 = nn.Sequential(nn.Linear(in_features, hidden_dim), act_func())
-    for _ in range(n_extra_layers):
+    for _ in range(n_extra_layers + 1):
         mlp1.append(nn.Linear(hidden_dim, hidden_dim))
         mlp1.append(act_func())
     mlp1.append(nn.Linear(hidden_dim, out_features))
@@ -215,7 +215,7 @@ class GNNProcessorChunk(nn.Module):
                 activation=activation,
             )
         else:
-            self.emb_edges = False
+            self.emb_edges = None
 
         self.proc = nn.ModuleList(
             [
