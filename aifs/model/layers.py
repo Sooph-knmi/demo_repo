@@ -94,7 +94,7 @@ class AutocastLayerNorm(nn.LayerNorm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Tensor) -> Tensor:
         """Forward with explicit autocast back to the input type.
 
         This casts the output to (b)float16 (instead of float32) when we run in mixed
