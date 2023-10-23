@@ -1,4 +1,6 @@
 import re
+from collections import Counter
+from collections import defaultdict
 from typing import Any
 from typing import Dict
 from typing import List
@@ -7,30 +9,27 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
-import torch
+from pytorch_lightning.accelerators.cpu import _PSUTIL_AVAILABLE
+from pytorch_lightning.accelerators.cpu import get_cpu_stats
+from pytorch_lightning.accelerators.cuda import get_nvidia_gpu_stats
 from pytorch_lightning.callbacks import TQDMProgressBar
-from pytorch_lightning.callbacks.progress.tqdm_progress import _update_n
 from pytorch_lightning.profilers import Profiler
-from pytorch_lightning.profilers import PyTorchProfiler
 from pytorch_lightning.profilers import SimpleProfiler
+from pytorch_lightning.strategies import ParallelStrategy
 from pytorch_lightning.utilities.types import STEP_OUTPUT
 
 import wandb
 from aifs.utils.logger import get_code_logger
 
+
 LOGGER = get_code_logger(__name__)
 
-TIME_PROFILER_ACTIONS = [
-    "on_train_epoch_start",
-    "on_train_batch_start",
+PROFILER_ACTIONS = [
     "on_train_epoch_end",
     "on_train_batch_end",
-    "on_validation_epoch_start",
-    "on_validation_batch_start",
     "on_validation_epoch_end",
     "on_validation_batch_end",
     "model_backward",
-    "on_train_start",
     "on_train_end",
     "validation_step",
     "training_step",
@@ -71,7 +70,7 @@ def summarize_wandb_system_metrics(run_id_path: str) -> dict:
 
     n_cpus = metadata_dict["cpu_count"]
     system_metrics["avg_cpu_usage"] = (system_metrics_df[cpu_cols].sum(axis=1) / n_cpus).mean()
-    system_metrics["execution_time"] = system_metrics_df["_runtime"].iloc[-1]  # in seconds
+    execution_time = system_metrics_df["_runtime"].iloc[-1]  # in seconds
 
     system_metrics_gpu = summarize_gpu_metrics(system_metrics_df, col_names)
     system_metrics.update(system_metrics_gpu)
@@ -80,14 +79,86 @@ def summarize_wandb_system_metrics(run_id_path: str) -> dict:
     system_metrics["disk_usage_gb"] = system_metrics_df["system.disk.\\.usageGB"].mean()
     system_metrics["disk_usage_percentage"] = system_metrics_df["system.disk.\\.usagePercent"].mean()
     #! todo different from metadata_dict['disk']
-    return system_metrics
+    return system_metrics, execution_time
+
+
+class MemoryProfiler(Profiler):
+    def __init__(
+        self,
+        config,
+        trainer,
+        cpu_stats: Optional[bool] = True,
+    ) -> None:
+        """!TODO."""
+        super().__init__()
+        self.config = config
+        self.current_actions: Dict[str, float] = {}
+        self.recorded_memory: Dict = defaultdict(list)
+        self._cpu_stats = cpu_stats
+
+        devices = (
+            trainer.strategy.parallel_devices if isinstance(trainer.strategy, ParallelStrategy) else [trainer.strategy.root_device]
+        )
+        self.device = devices[0]
+
+        if self._cpu_stats is None and self.device.type == "cpu" and not _PSUTIL_AVAILABLE:
+            raise ModuleNotFoundError(
+                f"`DeviceStatsMonitor` cannot log CPU stats as `psutil` is not installed. {str(_PSUTIL_AVAILABLE)} "
+            )
+
+    def start(self, action_name: str) -> None:
+        if action_name in self.current_actions:
+            raise ValueError(f"Attempted to start {action_name} which has already started.")
+        self.current_actions[action_name] = Counter(self._get_device_stats())
+
+    def stop(self, action_name: str) -> None:
+        usage_at_the_end = Counter(self._get_device_stats())
+        if action_name not in self.current_actions:
+            raise ValueError(f"Attempting to stop recording an action ({action_name}) which was never started.")
+        usage_at_the_start = self.current_actions.pop(action_name)
+        usage_at_the_end.subtract(usage_at_the_start)
+        self.recorded_memory[action_name].append(dict(usage_at_the_end))
+
+    def _get_device_stats(self) -> Dict[str, Any]:
+        # ! TODO CHECK MULTIPLE GPUS
+        """Gets stats for the given GPU device.
+
+        Args:
+            device: GPU device for which to get stats
+
+        Returns:
+            A dictionary mapping the metrics to their values.
+
+        Raises:
+            FileNotFoundError:
+                If nvidia-smi installation not found
+        """
+
+        device_stats = {}
+        # _CPU_VM_PERCENT: psutil.virtual_memory().percent,
+        # _CPU_PERCENT: psutil.cpu_percent(),
+        # _CPU_SWAP_PERCENT: psutil.swap_memory().percent,
+        device_stats.update(get_cpu_stats())
+        # gpu_stat_metrics = [
+        #     ("utilization.gpu", "%"),
+        #     ("memory.used", "MB"),
+        #     ("memory.free", "MB"),
+        #     ("utilization.memory", "%"),
+        #     ("fan.speed", "%"),
+        #     ("temperature.gpu", "°C"),
+        #     ("temperature.memory", "°C"),
+        # ]
+        device_stats.update(get_nvidia_gpu_stats(self.device))
+
+        return device_stats
 
 
 class BenchmarkProfiler(Profiler):
-    def __init__(self, config):
+    def __init__(self, config, trainer):
         super().__init__(config)
 
         self.config = config
+        self.trainer = trainer
         self.dirpath = self.config.hardware.paths.logs.tensorboard
         self.filename = "aifs-benchmark-profiler"
 
@@ -97,18 +168,7 @@ class BenchmarkProfiler(Profiler):
         self.time_profiler = SimpleProfiler(
             dirpath=self.config.hardware.paths.logs.tensorboard,
         )
-        self.memory_profiler = PyTorchProfiler(
-            dirpath=self.config.hardware.paths.logs.tensorboard,
-            export_to_chrome=False,
-            # profiler-specific keywords
-            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],  # this is memory-hungry
-            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
-            # on_trace_ready=torch.profiler.tensorboard_trace_handler(dir_name=self.config.hardware.paths.logs.tensorboard),
-            profile_memory=True,
-            with_modules=True,
-            record_shapes=True,
-            with_stack=True,  # Enable stack tracing, adds extra profiling overhead.
-        )
+        self.memory_profiler = MemoryProfiler(config=self.config, trainer=self.trainer)
 
     def start(self, action_name: str) -> None:
         self.time_profiler.start(action_name)
@@ -118,32 +178,39 @@ class BenchmarkProfiler(Profiler):
         self.time_profiler.stop(action_name)
         self.memory_profiler.stop(action_name)
 
-    def _trim_time_report(self) -> None:
-        #! TODO - clean up time report
-        all_actions = self.time_profiler.recorded_durations.keys()
-        trimmed_actions = []
-        for action in all_actions:
+    def _trim_report(self, recorded_actions) -> None:
+        all_actions_names = recorded_actions.keys()
+        trimmed_actions_names = []
+        for action in all_actions_names:
             if "Callback" not in action:
-                if any(map(action.__contains__, TIME_PROFILER_ACTIONS)):
-                    trimmed_actions.append(action)
-        cleaned_recorded_actions = {key: self.time_profiler.recorded_durations[key] for key in trimmed_actions}
-        self.time_profiler.recorded_durations = cleaned_recorded_actions
+                if any(map(action.__contains__, PROFILER_ACTIONS)):
+                    trimmed_actions_names.append(action)
+        cleaned_recorded_actions = {key: recorded_actions[key] for key in trimmed_actions_names}
+        return cleaned_recorded_actions
 
     def get_time_profiler_df(self) -> pd.DataFrame:
-        self._trim_time_report()
+        self.time_profiler.recorded_durations = self._trim_report(recorded_actions=self.time_profiler.recorded_durations)
         time_df = pd.DataFrame(self.time_profiler.recorded_durations.items())
         time_df[2] = time_df[1].apply(lambda x: len(x))
         time_df[3] = time_df[1].apply(lambda x: np.mean(x))
         time_df[1] = time_df[1].apply(lambda x: sum(x))
         time_df.columns = ["name", "total_time", "n_calls", "avg_time"]
-        # time_df=time_df.style.set_properties(subset=['name'], **{'width': '300px'})
         return time_df
 
-    # def _get_memory_profiler_df(self) -> pd.DataFrame:
-
-    #     total_average=self.memory_profiler.function_events.total_average()
-    #     total_average.self_cpu_time_total # divide by 10e6 to get seconds
-    #     total_average.self_cuda_memory_usage*(1e-9) #bytes to gB
+    def get_memory_profiler_df(self) -> pd.DataFrame:
+        self.memory_profiler.recorded_memory = self._trim_report(recorded_actions=self.memory_profiler.recorded_memory)
+        memory_df = []
+        for action, sub_dict in self.memory_profiler.recorded_memory.items():
+            sub_dict_df = pd.DataFrame(sub_dict)
+            sub_dict_df = sub_dict_df.drop(
+                ["fan.speed (%)", "temperature.gpu (°C)", "temperature.memory (°C)", "memory.free (MB)"], axis=1
+            )
+            action_df = pd.DataFrame(sub_dict_df.mean()).T
+            action_df["action"] = action
+            action_df["n_calls"] = sub_dict_df.shape[0]
+            memory_df.append(action_df)
+        memory_df = pd.concat(memory_df)
+        return memory_df
 
     def mem_summary(self, memory_profiler):
         memory_profiler._delete_profilers()
@@ -160,28 +227,6 @@ class BenchmarkProfiler(Profiler):
         recorded_stats = {"records": table}
         return memory_profiler._stats_to_str(recorded_stats)
 
-    def summary(self) -> str:
-        self._trim_time_report()
-        time_report = self.time_profiler.summary()
-
-        memory_report = self.mem_summary(self.memory_profiler)
-        #! TODO - find a way to combine these two reports while including also the info from the progress bar
-        return [time_report, memory_report]
-
-    def describe(self) -> None:
-        """Logs a profile report after the conclusion of run."""
-        # users might call `describe` directly as the profilers can be used by themselves.
-        # to allow this, we open and close the files within this function by calling `_prepare_streams` and `teardown`
-        # manually instead of letting the `Trainer` do it through `setup` and `teardown`
-        self._prepare_streams()
-        # summaries = self.summary()
-        # if summaries and self._write_stream is not None:
-        #    for summary in summaries:
-        #        self._write_stream(summary)
-        # if self._output_file is not None:
-        #    self._output_file.flush()
-        self.teardown(stage=self._stage)
-
 
 class ProfilerProrgressBar(TQDMProgressBar):
     def __init__(self):
@@ -197,10 +242,8 @@ class ProfilerProrgressBar(TQDMProgressBar):
     def on_train_batch_end(
         self, trainer: "pl.Trainer", pl_module: "pl.LightningModule", outputs: STEP_OUTPUT, batch: Any, batch_idx: int
     ) -> None:
-        n = batch_idx + 1
-        if self._should_update(n, self.train_progress_bar.total):
-            _update_n(self.train_progress_bar, n)
-            self.train_progress_bar.set_postfix(self.get_metrics(trainer, pl_module))
+        batch_idx + 1
+        super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
         self.training_rates.append(self._extract_rate(self.train_progress_bar))
 
     def on_validation_batch_end(
@@ -212,9 +255,7 @@ class ProfilerProrgressBar(TQDMProgressBar):
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:
-        n = batch_idx + 1
-        if self._should_update(n, self.val_progress_bar.total):
-            _update_n(self.val_progress_bar, n)
+        super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
         self.validation_rates.append(self._extract_rate(self.val_progress_bar))
 
     def summarize_metrics(self, config):

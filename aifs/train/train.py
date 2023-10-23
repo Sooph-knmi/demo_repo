@@ -3,11 +3,11 @@ from pathlib import Path
 from typing import List
 from typing import Optional
 
-import hydra
 import pytorch_lightning as pl
 import torch
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
+from pytorch_lightning.profilers import PassThroughProfiler
 from pytorch_lightning.profilers import PyTorchProfiler
 
 from aifs.data.era_datamodule import ERA5DataModule
@@ -35,6 +35,7 @@ class AIFSTrainer:
         # Default to not warm-starting from a checkpoint
         self.start_from_checkpoint = bool(self.config.training.run_id) or bool(self.config.training.fork_run_id)
         self.config.training.run_id = self.run_id
+        self.profiler = PassThroughProfiler
 
         # Update paths to contain the run ID
         self.update_paths()
@@ -101,37 +102,11 @@ class AIFSTrainer:
 
     @cached_property
     def callbacks(self) -> List[pl.callbacks.Callback]:
-        return get_callbacks(self.config)
-
-    @cached_property
-    def profiler(self) -> Optional[PyTorchProfiler]:
-        """Returns a pytorch profiler object, if profiling is enabled, otherwise
-        None."""
-        if self.config.diagnostics.profiler:
-            assert (
-                self.config.diagnostics.log.tensorboard.enabled
-            ), "Tensorboard logging must be enabled when profiling! Check your job config."
-            return PyTorchProfiler(
-                dirpath=self.config.hardware.paths.logs.tensorboard,
-                filename="aifs-profiler",
-                export_to_chrome=False,
-                # profiler-specific keywords
-                activities=[
-                    # torch.profiler.ProfilerActivity.CPU,  # this is memory-hungry
-                    torch.profiler.ProfilerActivity.CUDA
-                ],
-                schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
-                on_trace_ready=torch.profiler.tensorboard_trace_handler(dir_name=self.config.hardware.paths.logs.tensorboard),
-                profile_memory=True,
-                record_shapes=True,
-                with_stack=True,
-            )
-        elif self.config.diagnostics.benchmark_profiler:
+        callbacks = get_callbacks(self.config)
+        if self.config.diagnostics.benchmark_profiler:
             speed_profiler = ProfilerProrgressBar()
-            self.callbacks.append(speed_profiler)
-            benchmark_profiler = BenchmarkProfiler(self.config)
-            return benchmark_profiler
-        return None
+            callbacks.append(speed_profiler)
+        return callbacks
 
     @cached_property
     def loggers(self) -> List:
@@ -163,6 +138,33 @@ class AIFSTrainer:
         self.config.hardware.paths.checkpoints = Path(self.config.hardware.paths.checkpoints, self.run_id)
         self.config.hardware.paths.plots = Path(self.config.hardware.paths.plots, self.run_id)
 
+    def load_profiler(self) -> Optional[PyTorchProfiler]:
+        """Returns a pytorch profiler object, if profiling is enabled, otherwise
+        None."""
+        if self.config.diagnostics.profiler:
+            assert (
+                self.config.diagnostics.log.tensorboard.enabled
+            ), "Tensorboard logging must be enabled when profiling! Check your job config."
+            self.profiler = PyTorchProfiler(
+                dirpath=self.config.hardware.paths.logs.tensorboard,
+                filename="aifs-profiler",
+                export_to_chrome=False,
+                # profiler-specific keywords
+                activities=[
+                    # torch.profiler.ProfilerActivity.CPU,  # this is memory-hungry
+                    torch.profiler.ProfilerActivity.CUDA
+                ],
+                schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(dir_name=self.config.hardware.paths.logs.tensorboard),
+                profile_memory=True,
+                record_shapes=True,
+                with_stack=True,
+            )
+
+    def update_profiler(self, ptl_trainer) -> None:
+        self.profiler = BenchmarkProfiler(self.config, ptl_trainer)
+        return self.profiler
+
     def train(self) -> None:
         """Training entry point."""
 
@@ -187,14 +189,10 @@ class AIFSTrainer:
             gradient_clip_algorithm=self.config.training.gradient_clip.algorithm,
             # we have our own DDP-compliant sampler logic baked into the dataset
             use_distributed_sampler=False,
-            profiler=self.profiler,
+            profiler=self.load_profiler(),
         )
+        if self.config.diagnostics.benchmark_profiler:
+            trainer.profiler = self.update_profiler(trainer)
 
         trainer.fit(self.model, datamodule=self.datamodule, ckpt_path=self.last_checkpoint)
         LOGGER.debug("---- DONE. ----")
-
-
-@hydra.main(version_base=None, config_path="../config", config_name="debug")
-def main(config: DictConfig):
-    trainer_aifs = AIFSTrainer(config)
-    trainer_aifs.train()
