@@ -33,7 +33,7 @@ setup(
     ],
     extras_require={
         "training": [
-            "pytorch-lightning>=2.0.8",
+            "pytorch-lightning<2.1.0",
             "timm>=0.9.2",
             "hydra-core>=1.3",
             "matplotlib>=3.7.1",
@@ -41,6 +41,11 @@ setup(
             "wandb>=0.15.0",
             "zarr>=2.14.2",
             "pre-commit>=3.3.3",
+        ],
+        "profile": [
+            "pandas>=1.3.2",
+            "rich>=13.6.0",
+            "tabulate>=0.9.0",
         ],
         "graph": [
             "networkx>=3.1",
@@ -60,6 +65,7 @@ setup(
     entry_points={
         "console_scripts": [
             "aifs-train=aifs.train.train:main",
+            "aifs-profile=aifs.train.profiler:main",
         ]
     },
 )

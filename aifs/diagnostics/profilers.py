@@ -1,6 +1,4 @@
 import re
-from collections import Counter
-from collections import defaultdict
 from typing import Any
 from typing import Dict
 from typing import List
@@ -9,13 +7,10 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
-from pytorch_lightning.accelerators.cpu import _PSUTIL_AVAILABLE
-from pytorch_lightning.accelerators.cpu import get_cpu_stats
-from pytorch_lightning.accelerators.cuda import get_nvidia_gpu_stats
 from pytorch_lightning.callbacks import TQDMProgressBar
 from pytorch_lightning.profilers import Profiler
+from pytorch_lightning.profilers import PyTorchProfiler
 from pytorch_lightning.profilers import SimpleProfiler
-from pytorch_lightning.strategies import ParallelStrategy
 from pytorch_lightning.utilities.types import STEP_OUTPUT
 
 import wandb
@@ -82,83 +77,83 @@ def summarize_wandb_system_metrics(run_id_path: str) -> dict:
     return system_metrics, execution_time
 
 
-class MemoryProfiler(Profiler):
-    def __init__(
-        self,
-        config,
-        trainer,
-        cpu_stats: Optional[bool] = True,
-    ) -> None:
-        """!TODO."""
-        super().__init__()
-        self.config = config
-        self.current_actions: Dict[str, float] = {}
-        self.recorded_memory: Dict = defaultdict(list)
-        self._cpu_stats = cpu_stats
+# class MemoryProfiler(Profiler):
+#     def __init__(
+#         self,
+#         config,
+#         trainer,
+#         cpu_stats: Optional[bool] = True,
+#     ) -> None:
+#         """!TODO."""
+#         super().__init__()
+#         self.config = config
+#         self.current_actions: Dict[str, float] = {}
+#         self.recorded_memory: Dict = defaultdict(list)
+#         self._cpu_stats = cpu_stats
 
-        devices = (
-            trainer.strategy.parallel_devices if isinstance(trainer.strategy, ParallelStrategy) else [trainer.strategy.root_device]
-        )
-        self.device = devices[0]
+#         devices = (
+#             trainer.strategy.parallel_devices if isinstance(trainer.strategy,
+# ParallelStrategy) else [trainer.strategy.root_device]
+#         )
+#         self.device = devices[0]
 
-        if self._cpu_stats is None and self.device.type == "cpu" and not _PSUTIL_AVAILABLE:
-            raise ModuleNotFoundError(
-                f"`DeviceStatsMonitor` cannot log CPU stats as `psutil` is not installed. {str(_PSUTIL_AVAILABLE)} "
-            )
+#         if self._cpu_stats is None and self.device.type == "cpu" and not _PSUTIL_AVAILABLE:
+#             raise ModuleNotFoundError(
+#                 f"`DeviceStatsMonitor` cannot log CPU stats as `psutil` is not installed. {str(_PSUTIL_AVAILABLE)} "
+#             )
 
-    def start(self, action_name: str) -> None:
-        if action_name in self.current_actions:
-            raise ValueError(f"Attempted to start {action_name} which has already started.")
-        self.current_actions[action_name] = Counter(self._get_device_stats())
+#     def start(self, action_name: str) -> None:
+#         if action_name in self.current_actions:
+#             raise ValueError(f"Attempted to start {action_name} which has already started.")
+#         self.current_actions[action_name] = Counter(self._get_device_stats())
 
-    def stop(self, action_name: str) -> None:
-        usage_at_the_end = Counter(self._get_device_stats())
-        if action_name not in self.current_actions:
-            raise ValueError(f"Attempting to stop recording an action ({action_name}) which was never started.")
-        usage_at_the_start = self.current_actions.pop(action_name)
-        usage_at_the_end.subtract(usage_at_the_start)
-        self.recorded_memory[action_name].append(dict(usage_at_the_end))
+#     def stop(self, action_name: str) -> None:
+#         usage_at_the_end = Counter(self._get_device_stats())
+#         if action_name not in self.current_actions:
+#             raise ValueError(f"Attempting to stop recording an action ({action_name}) which was never started.")
+#         usage_at_the_start = self.current_actions.pop(action_name)
+#         usage_at_the_end.subtract(usage_at_the_start)
+#         self.recorded_memory[action_name].append(dict(usage_at_the_end))
 
-    def _get_device_stats(self) -> Dict[str, Any]:
-        # ! TODO CHECK MULTIPLE GPUS
-        """Gets stats for the given GPU device.
+#     def _get_device_stats(self) -> Dict[str, Any]:
+#         # ! TODO CHECK MULTIPLE GPUS
+#         """Gets stats for the given GPU device.
 
-        Args:
-            device: GPU device for which to get stats
+#         Args:
+#             device: GPU device for which to get stats
 
-        Returns:
-            A dictionary mapping the metrics to their values.
+#         Returns:
+#             A dictionary mapping the metrics to their values.
 
-        Raises:
-            FileNotFoundError:
-                If nvidia-smi installation not found
-        """
+#         Raises:
+#             FileNotFoundError:
+#                 If nvidia-smi installation not found
+#         """
 
-        device_stats = {}
-        # _CPU_VM_PERCENT: psutil.virtual_memory().percent,
-        # _CPU_PERCENT: psutil.cpu_percent(),
-        # _CPU_SWAP_PERCENT: psutil.swap_memory().percent,
-        device_stats.update(get_cpu_stats())
-        # gpu_stat_metrics = [
-        #     ("utilization.gpu", "%"),
-        #     ("memory.used", "MB"),
-        #     ("memory.free", "MB"),
-        #     ("utilization.memory", "%"),
-        #     ("fan.speed", "%"),
-        #     ("temperature.gpu", "°C"),
-        #     ("temperature.memory", "°C"),
-        # ]
-        device_stats.update(get_nvidia_gpu_stats(self.device))
+#         device_stats = {}
+#         # _CPU_VM_PERCENT: psutil.virtual_memory().percent,
+#         # _CPU_PERCENT: psutil.cpu_percent(),
+#         # _CPU_SWAP_PERCENT: psutil.swap_memory().percent,
+#         device_stats.update(get_cpu_stats())
+#         # gpu_stat_metrics = [
+#         #     ("utilization.gpu", "%"),
+#         #     ("memory.used", "MB"),
+#         #     ("memory.free", "MB"),
+#         #     ("utilization.memory", "%"),
+#         #     ("fan.speed", "%"),
+#         #     ("temperature.gpu", "°C"),
+#         #     ("temperature.memory", "°C"),
+#         # ]
+#         device_stats.update(get_nvidia_gpu_stats(self.device))
 
-        return device_stats
+#         return device_stats
 
 
 class BenchmarkProfiler(Profiler):
-    def __init__(self, config, trainer):
+    def __init__(self, config):
         super().__init__(config)
 
         self.config = config
-        self.trainer = trainer
         self.dirpath = self.config.hardware.paths.logs.tensorboard
         self.filename = "aifs-benchmark-profiler"
 
@@ -166,9 +161,16 @@ class BenchmarkProfiler(Profiler):
 
     def _create_profilers(self) -> None:
         self.time_profiler = SimpleProfiler(
-            dirpath=self.config.hardware.paths.logs.tensorboard,
+            dirpath=self.dirpath,
         )
-        self.memory_profiler = MemoryProfiler(config=self.config, trainer=self.trainer)
+        self.memory_profiler = PyTorchProfiler(
+            dirpath=self.dirpath,
+            export_to_chrome=False,
+            profile_memory=True,
+            # profiler-specific keywords
+            # activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],  # this is memory-hungry
+            # schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+        )
 
     def start(self, action_name: str) -> None:
         self.time_profiler.start(action_name)
@@ -212,32 +214,34 @@ class BenchmarkProfiler(Profiler):
         memory_df = pd.concat(memory_df)
         return memory_df
 
-    def mem_summary(self, memory_profiler):
-        memory_profiler._delete_profilers()
+    def mem_summary(self):
+        self.memory_profiler._delete_profilers()
 
-        data = memory_profiler.function_events.key_averages()
-        table = data.table(
-            sort_by=memory_profiler._sort_by_key,
-            row_limit=memory_profiler._row_limit,
-            max_src_column_width=75,
-            max_name_column_width=100,
-            max_shapes_column_width=80,
+        # total_data = self.memory_profiler.function_events.total_averages()
+        key_data = self.memory_profiler.function_events.key_averages()
+        memory_df = pd.DataFrame(
+            columns=["Self CPU time", "CPU time", "CUDA time", "Self CUDA time", "CPU Memory usage", "CUDA Memory usage"]
         )
+        for data in key_data:
+            memory_df.loc[data.key[:30]] = {
+                "Self CPU time": data.self_cpu_time_total,
+                "CPU time": data.cpu_time_total,
+                "CUDA time": data.cuda_time_total,
+                "Self CUDA time": data.self_cuda_time_total,
+                "CPU Memory usage": data.cpu_memory_usage,
+                "CUDA Memory usage": data.cuda_memory_usage,
+            }
+        return memory_df.sort_values(by="CUDA Memory usage", ascending=False)
 
-        recorded_stats = {"records": table}
-        return memory_profiler._stats_to_str(recorded_stats)
 
-
-class ProfilerProrgressBar(TQDMProgressBar):
+class ProfilerProgressBar(TQDMProgressBar):
     def __init__(self):
         super().__init__()
         self.training_rates = []
         self.validation_rates = []
 
     def _extract_rate(self, pbar) -> float:
-        rate = (pbar.format_dict["n"] - pbar.format_dict["initial"]) / pbar.format_dict["elapsed"]
-        inv_rate = 1 / rate if rate else None
-        return inv_rate if inv_rate and inv_rate > 1 else rate
+        return (pbar.format_dict["n"] - pbar.format_dict["initial"]) / pbar.format_dict["elapsed"]
 
     def on_train_batch_end(
         self, trainer: "pl.Trainer", pl_module: "pl.LightningModule", outputs: STEP_OUTPUT, batch: Any, batch_idx: int
@@ -261,19 +265,19 @@ class ProfilerProrgressBar(TQDMProgressBar):
     def summarize_metrics(self, config):
         speed_metrics = {}
 
-        n_epochs = config["training"]["max_epochs"]
-        n_batches_tr = config["dataloader"]["limit_batches"]["training"]
-        n_batches_val = config["dataloader"]["limit_batches"]["validation"]
+        n_epochs = config.training.max_epochs
+        n_batches_tr = config.dataloader.limit_batches.training
+        n_batches_val = config.dataloader.limit_batches.validation
 
-        batch_size_tr = config["dataloader"]["batch_size"]["training"]
-        batch_size_val = config["dataloader"]["batch_size"]["validation"]
+        batch_size_tr = config.dataloader.batch_size.training
+        batch_size_val = config.dataloader.batch_size.validation
 
         training_rates_array = np.array(self.training_rates).reshape(n_epochs, n_batches_tr)
-        speed_metrics["training_avg_speed"] = training_rates_array.mean()  #! if we want per epoch mean(axis=1)?
-        speed_metrics["training_avg_speed_norm"] = training_rates_array.mean() / batch_size_tr
+        speed_metrics["training_avg_speed"] = training_rates_array.mean()
+        speed_metrics["training_avg_speed_per_sample"] = training_rates_array.mean() / batch_size_tr
 
         validation_rates_array = np.array(self.validation_rates).reshape(n_epochs, n_batches_val)
-        speed_metrics["validation_avg_speed"] = validation_rates_array.mean()  #! if we want per epoch mean(axis=1)?
-        speed_metrics["validation_avg_speed_norm"] = validation_rates_array.mean() / batch_size_val
+        speed_metrics["validation_avg_speed"] = validation_rates_array.mean()
+        speed_metrics["validation_avg_speed_per_sample"] = validation_rates_array.mean() / batch_size_val
 
         return speed_metrics
