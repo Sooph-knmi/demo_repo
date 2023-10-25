@@ -258,7 +258,7 @@ class InferenceCheckpoint(ModelCheckpoint):
 
     def _torch_drop_down(self, trainer: pl.Trainer) -> torch.nn.Module:
         # Get the model from the DataParallel wrapper
-        return trainer.model.module._forward_module.model if hasattr(trainer.model, "module") else trainer.model.model
+        return trainer.model.module.model if hasattr(trainer.model, "module") else trainer.model.model
 
     def _sanitise_checkpoints(self, model) -> None:
         # Delete paths from checkpoint
