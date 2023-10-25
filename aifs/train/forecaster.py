@@ -26,7 +26,7 @@ from aifs.utils.distributed import gather_tensor
 from aifs.utils.distributed import split_tensor
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__, debug=False)
+LOGGER = get_code_logger(__name__, debug=True)
 
 
 class GraphForecaster(pl.LightningModule):
@@ -182,7 +182,7 @@ class GraphForecaster(pl.LightningModule):
         assert (
             y_pred_group.shape[1] == self.nens_per_group
         ), f"Group ensemble shape mismatch: got {y_pred_group.shape[1]} -- expected {self.nens_per_group}!"
-        loss_inc = self._compute_loss(y_pred_group, y[..., : self.fcdim])
+        loss_inc = checkpoint(self._compute_loss, y_pred_group, y[..., : self.fcdim], use_reentrant=False)
         y_pred = split_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.mgroupdef[1], mgroup=self.mgroupdef[0])
 
         # during validation, we also return the "full" (group-generated) ensemble so we can run diagnostics
@@ -214,7 +214,6 @@ class GraphForecaster(pl.LightningModule):
             return torch.stack([x_] * self.nens_per_device, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
 
         x, x_eda = batch
-        LOGGER.debug("x.shape = %s, x_ens.shape = %s", x.shape, x_eda.shape)
         assert self.nens_per_group <= x_eda.shape[-1], (
             f"Requested number of ensemble members per GPU group {self.nens_per_group} "
             + f"is larger than that of the EDA ensemble {x_eda.shape[-1]}. "
@@ -259,10 +258,7 @@ class GraphForecaster(pl.LightningModule):
         for rstep in range(self.rollout):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
-
-            y_pred, loss_rstep, y_pred_group = checkpoint(
-                self.gather_and_compute_loss, y_pred, y, validation_mode=validation_mode, use_reentrant=False
-            )
+            y_pred, loss_rstep, y_pred_group = self.gather_and_compute_loss(y_pred, y, validation_mode=validation_mode)
             loss += loss_rstep
 
             x = self.advance_input(x, y, y_pred)
