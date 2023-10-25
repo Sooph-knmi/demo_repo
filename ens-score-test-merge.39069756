@@ -1,0 +1,372 @@
+[ECMWF-INFO -sbatch] - -------------------------------------------------------------------------------------
+[ECMWF-INFO -sbatch] -  This is the ECMWF jobfilter
+[ECMWF-INFO -sbatch] -  +++ Please report issues using the Support portal +++
+[ECMWF-INFO -sbatch] -  +++ https://support.ecmwf.int                     +++
+[ECMWF-INFO -sbatch] -  /usr/local/bin/ecsbatch: size: 49002, mtime: Thu Oct 19 14:39:55 2023
+[ECMWF-INFO -sbatch] - -------------------------------------------------------------------------------------
+[ECMWF-INFO -sbatch] - Time at submit: Wed Oct 25 13:28:50 2023 (1698240530.8242595) on ac6-100.bullx:/etc/ecmwf/nfs/dh1_perm_a/momc/AIFS/aifs-mono
+[ECMWF-INFO -sbatch] - --- SLURM VARIABLES ---
+[ECMWF-INFO -sbatch] - EC_CLUSTER=ac
+[ECMWF-INFO -sbatch] - SLURM_EXPORT_ENV=ALL
+[ECMWF-INFO -sbatch] - SBATCH_EXPORT=NONE
+[ECMWF-INFO -sbatch] - -----------------------
+[ECMWF-INFO -sbatch] - jobscript: /etc/ecmwf/nfs/dh1_perm_a/momc/AIFS/aifs-mono/jobscript-atos-debug.sh
+[ECMWF-INFO -sbatch] - --- SCRIPT OPTIONS ---
+[ECMWF-INFO -sbatch] - #SBATCH --qos=ng
+[ECMWF-INFO -sbatch] - #SBATCH --nodes=1
+[ECMWF-INFO -sbatch] - #SBATCH --ntasks-per-node=2
+[ECMWF-INFO -sbatch] - #SBATCH --gpus-per-node=2
+[ECMWF-INFO -sbatch] - #SBATCH --cpus-per-task=16
+[ECMWF-INFO -sbatch] - #SBATCH --mem=128G
+[ECMWF-INFO -sbatch] - #SBATCH --time=00:15:00
+[ECMWF-INFO -sbatch] - #SBATCH --output=ens-score-test-merge.%j
+[ECMWF-INFO -sbatch] - -----------------------
+[ECMWF-INFO -sbatch] - --- POST-PROCESSED OPTIONS ---
+[ECMWF-INFO -sbatch] - ARG --positional=['jobscript-atos-debug.sh']
+[ECMWF-INFO -sbatch] - ARG --cpus_per_task=16
+[ECMWF-INFO -sbatch] - ARG --ntasks_per_node=2
+[ECMWF-INFO -sbatch] - ARG --nodes=1
+[ECMWF-INFO -sbatch] - ARG --output=ens-score-test-merge.%j
+[ECMWF-INFO -sbatch] - ARG --qos=ng
+[ECMWF-INFO -sbatch] - ARG --time=00:15:00
+[ECMWF-INFO -sbatch] - ARG --mem=128G
+[ECMWF-INFO -sbatch] - ARG --gpus_per_node=2
+[ECMWF-INFO -sbatch] - ------------------------------
+[ECMWF-INFO -sbatch] - jobtag: momc-jobscript-_s-debug.sh-1x32-/etc/ecmwf/nfs/dh1_perm_a/momc/AIFS/aifs-mono/ens-score-test-merge._JOBID_
+[ECMWF-INFO -sbatch] - ['/usr/bin/sbatch', '--cpus-per-task=16', '--ntasks-per-node=2', '--nodes=1', '--output=ens-score-test-merge.%j', '--qos=ng', '--time=00:15:00', '--mem=128G', '--gpus-per-node=2', '--licenses=h2resw01', '--export=EC_user_time_limit=00:15:00', '/etc/ecmwf/nfs/dh1_perm_a/momc/AIFS/aifs-mono/jobscript-atos-debug.sh']
+[ECMWF-INFO -sbatch] - sbatch executed on ac
+[ECMWF-INFO -sbatch] - Job queued on ac using method local
+[ECMWF-INFO -sbatch] - Submitted batch job 39069756
+[ECMWF-INFO -ecprofile] /usr/bin/bash NON_INTERACTIVE on ac6-308 at 20231025_132922.384, PID: 726083, JOBID: 39069756
+[ECMWF-INFO -ecprofile] $SCRATCH=/ec/res4/scratch/momc
+[ECMWF-INFO -ecprofile] $PERM=/perm/momc
+[ECMWF-INFO -ecprofile] $HPCPERM=/ec/res4/hpcperm/momc
+[ECMWF-INFO -ecprofile] $TMPDIR=/dev/shm/_tmpdir_.momc.39069756
+[ECMWF-INFO -ecprofile] $SCRATCHDIR=/ec/res4/scratchdir/momc/4/39069756
+
+Lmod is automatically replacing "prgenv/gnu" with "conda/22.11.1-2".
+
+-------------------------------------------------------------------------------
+There are messages associated with the following module(s):
+-------------------------------------------------------------------------------
+
+conda/22.11.1-2:
+   Using conda effectively disables any other loaded modules. Use "module
+   reset" to return to the default environment.
+
+-------------------------------------------------------------------------------
+
+[2023-10-25T13:29:35Z] [train.py:147 - log_information] [DEBUG] Total number of prognostic variables: 85
+[2023-10-25T13:29:35Z] [train.py:148 - log_information] [DEBUG] Total number of auxiliary variables: 13
+[2023-10-25T13:29:35Z] [train.py:152 - log_information] [DEBUG] Number of GPUs per group: 2
+[2023-10-25T13:29:35Z] [train.py:153 - log_information] [DEBUG] Total GPU count: 2 - NB: the learning rate will be scaled by this factor!
+[2023-10-25T13:29:35Z] [train.py:154 - log_information] [DEBUG] Effective learning rate: 1.250e-04
+[2023-10-25T13:29:35Z] [train.py:155 - log_information] [DEBUG] Rollout window length: 1
+[2023-10-25T13:29:35Z] [train.py:147 - log_information] [DEBUG] Total number of prognostic variables: 85
+[2023-10-25T13:29:35Z] [train.py:148 - log_information] [DEBUG] Total number of auxiliary variables: 13
+[2023-10-25T13:29:35Z] [train.py:152 - log_information] [DEBUG] Number of GPUs per group: 2
+[2023-10-25T13:29:35Z] [train.py:153 - log_information] [DEBUG] Total GPU count: 2 - NB: the learning rate will be scaled by this factor!
+[2023-10-25T13:29:35Z] [train.py:154 - log_information] [DEBUG] Effective learning rate: 1.250e-04
+[2023-10-25T13:29:35Z] [train.py:155 - log_information] [DEBUG] Rollout window length: 1
+[2023-10-25T13:29:35Z] [callbacks.py:70 - __init__] [DEBUG] Setting up RolloutEval callback with rollout = 4, frequency = 5 ...
+[2023-10-25T13:29:35Z] [callbacks.py:583 - get_callbacks] [DEBUG] Setting up a callback to plot the trainable graph node features ...
+[2023-10-25T13:29:35Z] [era_datamodule.py:46 - __init__] [INFO] self.config.training.eda_initial_perturbations = False
+[2023-10-25T13:29:35Z] [era_datamodule.py:47 - __init__] [INFO] type(self.config.training.eda_initial_perturbations) = <class 'bool'>
+[2023-10-25T13:29:35Z] [era_dataset.py:72 - __init__] [INFO] Are we using the EDA dataset? False
+[2023-10-25T13:29:35Z] [era_dataset.py:73 - __init__] [INFO] Analysis zarr filename: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-o96/panguweather-o96-1979-2015-6h.zarr
+[2023-10-25T13:29:35Z] [era_dataset.py:74 - __init__] [INFO] EDA zarr filename: N/A
+[2023-10-25T13:29:35Z] [era_dataset.py:72 - __init__] [INFO] Are we using the EDA dataset? False
+[2023-10-25T13:29:35Z] [era_dataset.py:73 - __init__] [INFO] Analysis zarr filename: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-o96/panguweather-o96-2016-2017-6h.zarr
+[2023-10-25T13:29:35Z] [era_dataset.py:74 - __init__] [INFO] EDA zarr filename: N/A
+[2023-10-25T13:29:35Z] [callbacks.py:70 - __init__] [DEBUG] Setting up RolloutEval callback with rollout = 4, frequency = 5 ...
+[2023-10-25T13:29:35Z] [callbacks.py:583 - get_callbacks] [DEBUG] Setting up a callback to plot the trainable graph node features ...
+[2023-10-25T13:29:35Z] [era_datamodule.py:46 - __init__] [INFO] self.config.training.eda_initial_perturbations = False
+[2023-10-25T13:29:35Z] [era_datamodule.py:47 - __init__] [INFO] type(self.config.training.eda_initial_perturbations) = <class 'bool'>
+[2023-10-25T13:29:35Z] [era_dataset.py:72 - __init__] [INFO] Are we using the EDA dataset? False
+[2023-10-25T13:29:35Z] [era_dataset.py:73 - __init__] [INFO] Analysis zarr filename: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-o96/panguweather-o96-1979-2015-6h.zarr
+[2023-10-25T13:29:35Z] [era_dataset.py:74 - __init__] [INFO] EDA zarr filename: N/A
+[2023-10-25T13:29:35Z] [era_dataset.py:72 - __init__] [INFO] Are we using the EDA dataset? False
+[2023-10-25T13:29:35Z] [era_dataset.py:73 - __init__] [INFO] Analysis zarr filename: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-o96/panguweather-o96-2016-2017-6h.zarr
+[2023-10-25T13:29:35Z] [era_dataset.py:74 - __init__] [INFO] EDA zarr filename: N/A
+[2023-10-25T13:29:35Z] [gnn.py:48 - __init__] [DEBUG] in_channels + aux_channels == 98
+[2023-10-25T13:29:35Z] [gnn.py:49 - __init__] [DEBUG] noise_channels = 0
+[2023-10-25T13:29:35Z] [gnn.py:48 - __init__] [DEBUG] in_channels + aux_channels == 98
+[2023-10-25T13:29:35Z] [gnn.py:49 - __init__] [DEBUG] noise_channels = 0
+[2023-10-25T13:29:35Z] [spread.py:29 - __init__] [DEBUG] Setting up a SpreadSkill metric with rollout = 4, nvar = 4, time_step = 6
+[2023-10-25T13:29:35Z] [spread.py:29 - __init__] [DEBUG] Setting up a SpreadSkill metric with rollout = 4, nvar = 4, time_step = 6
+Initializing distributed: GLOBAL_RANK: 1, MEMBER: 2/2
+wandb: WARNING Tried to auto resume run with id 26211762-6724-4bcb-8f75-ae0c3fced644 but id 6e45aa8d-75c6-4ff3-be93-b46af012e420 is set.
+wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id 6e45aa8d-75c6-4ff3-be93-b46af012e420.
+wandb: Tracking run with wandb version 0.15.0
+wandb: W&B syncing is set to `offline` in this directory.
+wandb: Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+Using 16bit Automatic Mixed Precision (AMP)
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+IPU available: False, using: 0 IPUs
+HPU available: False, using: 0 HPUs
+Initializing distributed: GLOBAL_RANK: 0, MEMBER: 1/2
+----------------------------------------------------------------------------------------------------
+distributed_backend=nccl
+All distributed processes registered. Starting with 2 processes
+----------------------------------------------------------------------------------------------------
+
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1]
+LOCAL_RANK: 1 - CUDA_VISIBLE_DEVICES: [0,1]
+[2023-10-25T13:29:46Z] [strategy.py:38 - setup] [DEBUG] Rank 1 mgroup is [0 1], group number 0, with local group rank 1 and comms_group_ranks [0 1]
+[2023-10-25T13:29:46Z] [strategy.py:38 - setup] [DEBUG] Rank 0 mgroup is [0 1], group number 0, with local group rank 0 and comms_group_ranks [0 1]
+
+  | Name         | Type            | Params
+-------------------------------------------------
+0 | model        | AIFSModelGNN    | 3.0 M
+1 | kcrps        | KernelCRPS      | 0
+2 | metrics      | WeightedMSELoss | 0
+3 | ranks        | RankHistogram   | 0
+4 | spread_skill | SpreadSkill     | 0
+-------------------------------------------------
+3.0 M     Trainable params
+0         Non-trainable params
+3.0 M     Total params
+11.820    Total estimated model params size (MB)
+SLURM auto-requeueing enabled. Setting signal handlers.
+SLURM auto-requeueing enabled. Setting signal handlers.
+Error executing job with overrides: ['hardware=atos_slurm']
+Traceback (most recent call last):
+  File "/perm/momc/conda/envs/aifs_dev/bin/aifs-ens-train", line 33, in <module>
+    sys.exit(load_entry_point('aifs', 'console_scripts', 'aifs-ens-train')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/main.py", line 90, in decorated_main
+    _run_hydra(
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/_internal/utils.py", line 394, in _run_hydra
+    _run_app(
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/_internal/utils.py", line 457, in _run_app
+    run_and_report(
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/_internal/utils.py", line 222, in run_and_report
+    raise ex
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/_internal/utils.py", line 219, in run_and_report
+    return func()
+           ^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/_internal/utils.py", line 458, in <lambda>
+    lambda: hydra.run(
+            ^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/_internal/hydra.py", line 132, in run
+    _ = ret.return_value
+        ^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/core/utils.py", line 260, in return_value
+    raise self._return_value
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/core/utils.py", line 186, in run_job
+    ret.return_value = task_function(task_cfg)
+                       ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/etc/ecmwf/nfs/dh1_perm_a/momc/AIFS/aifs-mono/aifs/train/train.py", line 199, in main
+    AIFSTrainer(config).train()
+  File "/etc/ecmwf/nfs/dh1_perm_a/momc/AIFS/aifs-mono/aifs/train/train.py", line 193, in train
+    trainer.fit(self.model, datamodule=self.datamodule, ckpt_path=self.last_checkpoint)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 545, in fit
+    call._call_and_handle_interrupt(
+Error executing job with overrides: ['hardware=atos_slurm']
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/call.py", line 43, in _call_and_handle_interrupt
+    return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/strategies/launchers/subprocess_script.py", line 102, in launch
+    return function(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 581, in _fit_impl
+    self._run(model, ckpt_path=ckpt_path)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 990, in _run
+    results = self._run_stage()
+              ^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 1036, in _run_stage
+    self.fit_loop.run()
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/fit_loop.py", line 202, in run
+    self.advance()
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/fit_loop.py", line 359, in advance
+    self.epoch_loop.run(self._data_fetcher)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/training_epoch_loop.py", line 136, in run
+    self.advance(data_fetcher)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/training_epoch_loop.py", line 240, in advance
+    batch_output = self.automatic_optimization.run(trainer.optimizers[0], batch_idx, kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 187, in run
+    self._optimizer_step(batch_idx, closure)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 265, in _optimizer_step
+    call._call_lightning_module_hook(
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/call.py", line 157, in _call_lightning_module_hook
+    output = fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/core/module.py", line 1282, in optimizer_step
+    optimizer.step(closure=optimizer_closure)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/core/optimizer.py", line 151, in step
+    step_output = self._strategy.optimizer_step(self._optimizer, closure, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/strategies/ddp.py", line 263, in optimizer_step
+    optimizer_output = super().optimizer_step(optimizer, closure, model, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/strategies/strategy.py", line 230, in optimizer_step
+    return self.precision_plugin.optimizer_step(optimizer, model=model, closure=closure, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/plugins/precision/amp.py", line 77, in optimizer_step
+    closure_result = closure()
+                     ^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 140, in __call__
+    self._result = self.closure(*args, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 115, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 135, in closure
+    self._backward_fn(step_output.closure_loss)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 236, in backward_fn
+    call._call_strategy_hook(self.trainer, "backward", loss, optimizer)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/call.py", line 309, in _call_strategy_hook
+    output = fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/strategies/strategy.py", line 204, in backward
+    self.precision_plugin.backward(closure_loss, self.lightning_module, optimizer, *args, **kwargs)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/plugins/precision/precision_plugin.py", line 69, in backward
+    model.backward(tensor, *args, **kwargs)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/core/module.py", line 1069, in backward
+    loss.backward(*args, **kwargs)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/torch/_tensor.py", line 492, in backward
+    torch.autograd.backward(
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/torch/autograd/__init__.py", line 251, in backward
+    Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/torch/utils/checkpoint.py", line 1065, in unpack_hook
+    args = ctx.get_args(ctx.saved_tensors)
+                        ^^^^^^^^^^^^^^^^^
+RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.cuda.FloatTensor [2, 2, 40320, 85]], which is output 0 of AddBackward0, is at version 1; expected version 0 instead. Hint: enable anomaly detection to find the operation that failed to compute its gradient, with torch.autograd.set_detect_anomaly(True).
+Traceback (most recent call last):
+  File "/perm/momc/conda/envs/aifs_dev/bin/aifs-ens-train", line 33, in <module>
+    sys.exit(load_entry_point('aifs', 'console_scripts', 'aifs-ens-train')())
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/main.py", line 90, in decorated_main
+    _run_hydra(
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/_internal/utils.py", line 394, in _run_hydra
+    _run_app(
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/_internal/utils.py", line 457, in _run_app
+    run_and_report(
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/_internal/utils.py", line 222, in run_and_report
+    raise ex
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/_internal/utils.py", line 219, in run_and_report
+    return func()
+           ^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/_internal/utils.py", line 458, in <lambda>
+    lambda: hydra.run(
+            ^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/_internal/hydra.py", line 132, in run
+    _ = ret.return_value
+        ^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/core/utils.py", line 260, in return_value
+    raise self._return_value
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/hydra/core/utils.py", line 186, in run_job
+    ret.return_value = task_function(task_cfg)
+                       ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/etc/ecmwf/nfs/dh1_perm_a/momc/AIFS/aifs-mono/aifs/train/train.py", line 199, in main
+    AIFSTrainer(config).train()
+  File "/etc/ecmwf/nfs/dh1_perm_a/momc/AIFS/aifs-mono/aifs/train/train.py", line 193, in train
+    trainer.fit(self.model, datamodule=self.datamodule, ckpt_path=self.last_checkpoint)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 545, in fit
+    call._call_and_handle_interrupt(
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/call.py", line 43, in _call_and_handle_interrupt
+    return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/strategies/launchers/subprocess_script.py", line 102, in launch
+    return function(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 581, in _fit_impl
+    self._run(model, ckpt_path=ckpt_path)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 990, in _run
+    results = self._run_stage()
+              ^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 1036, in _run_stage
+    self.fit_loop.run()
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/fit_loop.py", line 202, in run
+    self.advance()
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/fit_loop.py", line 359, in advance
+    self.epoch_loop.run(self._data_fetcher)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/training_epoch_loop.py", line 136, in run
+    self.advance(data_fetcher)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/training_epoch_loop.py", line 240, in advance
+    batch_output = self.automatic_optimization.run(trainer.optimizers[0], batch_idx, kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 187, in run
+    self._optimizer_step(batch_idx, closure)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 265, in _optimizer_step
+    call._call_lightning_module_hook(
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/call.py", line 157, in _call_lightning_module_hook
+    output = fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/core/module.py", line 1282, in optimizer_step
+    optimizer.step(closure=optimizer_closure)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/core/optimizer.py", line 151, in step
+    step_output = self._strategy.optimizer_step(self._optimizer, closure, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/strategies/ddp.py", line 263, in optimizer_step
+    optimizer_output = super().optimizer_step(optimizer, closure, model, **kwargs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/strategies/strategy.py", line 230, in optimizer_step
+    return self.precision_plugin.optimizer_step(optimizer, model=model, closure=closure, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/plugins/precision/amp.py", line 77, in optimizer_step
+    closure_result = closure()
+                     ^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 140, in __call__
+    self._result = self.closure(*args, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 115, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 135, in closure
+    self._backward_fn(step_output.closure_loss)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 236, in backward_fn
+    call._call_strategy_hook(self.trainer, "backward", loss, optimizer)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/trainer/call.py", line 309, in _call_strategy_hook
+    output = fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/strategies/strategy.py", line 204, in backward
+    self.precision_plugin.backward(closure_loss, self.lightning_module, optimizer, *args, **kwargs)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/plugins/precision/precision_plugin.py", line 69, in backward
+    model.backward(tensor, *args, **kwargs)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/pytorch_lightning/core/module.py", line 1069, in backward
+    loss.backward(*args, **kwargs)
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/torch/_tensor.py", line 492, in backward
+    torch.autograd.backward(
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/torch/autograd/__init__.py", line 251, in backward
+    Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+  File "/perm/momc/conda/envs/aifs_dev/lib/python3.11/site-packages/torch/utils/checkpoint.py", line 1065, in unpack_hook
+    args = ctx.get_args(ctx.saved_tensors)
+                        ^^^^^^^^^^^^^^^^^
+RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.cuda.FloatTensor [2, 2, 40320, 85]], which is output 0 of AddBackward0, is at version 1; expected version 0 instead. Hint: enable anomaly detection to find the operation that failed to compute its gradient, with torch.autograd.set_detect_anomaly(True).
+wandb: Waiting for W&B process to finish... (failed 1).
+wandb: You can sync this run to the cloud by running:
+wandb: wandb sync /ec/res4/scratch/momc/aifs/o96/logs/wandb/wandb/offline-run-20231025_132937-6e45aa8d-75c6-4ff3-be93-b46af012e420
+wandb: Find logs at: /ec/res4/scratch/momc/aifs/o96/logs/wandb/wandb/offline-run-20231025_132937-6e45aa8d-75c6-4ff3-be93-b46af012e420/logs
+srun: error: ac6-308: task 1: Exited with exit code 1
+srun: launch/slurm: _step_signal: Terminating StepId=39069756.0
+slurmstepd: error: *** STEP 39069756.0 ON ac6-308 CANCELLED AT 2023-10-25T13:29:50 ***
+Training: |          | 0/? [00:00<?, ?it/s]Training:   0%|          | 0/150 [00:00<?, ?it/s]Epoch 0:   0%|          | 0/150 [00:00<?, ?it/s] srun: error: ac6-308: task 0: Terminated
+srun: Force Terminated StepId=39069756.0
+[ECMWF-INFO -ecepilog] ----------------------------------------------------------------------------------------------------
+[ECMWF-INFO -ecepilog] This is the ECMWF job Epilogue
+[ECMWF-INFO -ecepilog] +++ Please report issues using the Support portal +++
+[ECMWF-INFO -ecepilog] +++ https://support.ecmwf.int                     +++
+[ECMWF-INFO -ecepilog] ----------------------------------------------------------------------------------------------------
+[ECMWF-INFO -ecepilog] Run at 2023-10-25T13:29:51 on ac
+[ECMWF-INFO -ecepilog] JobName                   : jobscript-atos-debug.sh
+[ECMWF-INFO -ecepilog] JobID                     : 39069756
+[ECMWF-INFO -ecepilog] Submit                    : 2023-10-25T13:28:50
+[ECMWF-INFO -ecepilog] Start                     : 2023-10-25T13:29:19
+[ECMWF-INFO -ecepilog] End                       : 2023-10-25T13:29:51
+[ECMWF-INFO -ecepilog] QueuedTime                : 29.0
+[ECMWF-INFO -ecepilog] ElapsedRaw                : 32
+[ECMWF-INFO -ecepilog] ExitCode                  : 15:0
+[ECMWF-INFO -ecepilog] DerivedExitCode           : 0:15
+[ECMWF-INFO -ecepilog] State                     : FAILED
+[ECMWF-INFO -ecepilog] Account                   : ecrdmomu
+[ECMWF-INFO -ecepilog] QOS                       : ng
+[ECMWF-INFO -ecepilog] User                      : momc
+[ECMWF-INFO -ecepilog] StdOut                    : /etc/ecmwf/nfs/dh1_perm_a/momc/AIFS/aifs-mono/ens-score-test-merge.39069756
+[ECMWF-INFO -ecepilog] StdErr                    : /etc/ecmwf/nfs/dh1_perm_a/momc/AIFS/aifs-mono/ens-score-test-merge.39069756
+[ECMWF-INFO -ecepilog] NNodes                    : 1
+[ECMWF-INFO -ecepilog] NCPUS                     : 32
+[ECMWF-INFO -ecepilog] SBU                       : 2.689
+[ECMWF-INFO -ecepilog] ----------------------------------------------------------------------------------------------------
