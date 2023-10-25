@@ -1,0 +1,56 @@
+defaults:
+  - hardware: atos_slurm
+  - data: zarr
+  - dataloader: default
+  - model: gnn
+  - training: default
+  - diagnostics: eval_rollout
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+  - _self_
+
+### This file is for local experimentation.
+##  When you commit your changes, assign the new features and keywords
+##  to the correct defaults.
+# For example to change from default GPU count:
+# hardware:
+#   num_gpus_per_node: 1
+hardware:
+  files:
+    graph: graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4.pt
+    patches_path: /ec/res4/perm/momc/AIFS/aifs-mono/aifs/data/patches/patches_voronoi_o96.npy
+  group_size: 2
+model:
+  num_channels: 128
+
+dataloader:
+  batch_size:
+    training: 4
+    validation: 4
+  limit_batches:
+    training: 4000
+    validation: null # no limit
+training:
+  initial_seed: null
+  max_epochs: 50
+  loss: patched_energy
+  lr:
+    rate: 0.125e-3
+  dropout:
+    h2h: True
+    h2e: False
+  ensemble_size: 4
+
+diagnostics:
+  eval:
+    enabled: True
+    rollout: 2
+    frequency: 5
+  plot:
+    parameters:
+      23: t_850
+      36: u_850
+      49: v_850
+      72: z_500
+  logging:
+    interval: 50
