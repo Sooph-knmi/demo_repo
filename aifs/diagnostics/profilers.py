@@ -1,18 +1,22 @@
+import ast
+import os
 import re
 from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
 
+import memray
 import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
+from bs4 import BeautifulSoup
 from pytorch_lightning.callbacks import TQDMProgressBar
 from pytorch_lightning.profilers import Profiler
-from pytorch_lightning.profilers import PyTorchProfiler
 from pytorch_lightning.profilers import SimpleProfiler
 from pytorch_lightning.utilities.types import STEP_OUTPUT
 
+import aifs
 import wandb
 from aifs.utils.logger import get_code_logger
 
@@ -20,26 +24,23 @@ from aifs.utils.logger import get_code_logger
 LOGGER = get_code_logger(__name__)
 
 PROFILER_ACTIONS = [
-    "on_train_epoch_end",
-    "on_train_batch_end",
-    "on_validation_epoch_end",
-    "on_validation_batch_end",
     "model_backward",
-    "on_train_end",
     "validation_step",
     "training_step",
     "run_training_epoch",
     "train_dataloader_next",
     "backward",
-    "run_training_batch",
+    "run_training_epoch" "run_training_batch",
+    "run_validation_batch",
+    "run_validation_epoch",
 ]
 
-GPU_METRICS = ["powerPercent", "temp", "powerWatts", "gpu", "memory", "memoryAllocatedBytes", "memoryAllocated"]
+GPU_METRICS = ["powerPercent", "gpu", "memory", "memoryAllocatedBytes", "memoryAllocated"]
 
 
 def get_wandb_metrics(run_id_path: str) -> (pd.DataFrame, dict):
     run = wandb.Api().run(run_id_path)
-    system_metrics = run.history(stream="system")
+    system_metrics = run.history(stream="events")
     metadata_dict = run.metadata
     system_metrics = system_metrics.dropna()
     return system_metrics, metadata_dict
@@ -65,88 +66,21 @@ def summarize_wandb_system_metrics(run_id_path: str) -> dict:
 
     n_cpus = metadata_dict["cpu_count"]
     system_metrics["avg_cpu_usage"] = (system_metrics_df[cpu_cols].sum(axis=1) / n_cpus).mean()
-    execution_time = system_metrics_df["_runtime"].iloc[-1]  # in seconds
+    try:
+        execution_time = system_metrics_df["_runtime"].iloc[-1]  # in seconds
+    except KeyError:
+        execution_time = 0
 
     system_metrics_gpu = summarize_gpu_metrics(system_metrics_df, col_names)
     system_metrics.update(system_metrics_gpu)
+
+    print(system_metrics_df[[name for name in col_names if "memory" in name]])
 
     system_metrics["memory_usage"] = system_metrics_df["system.memory"].mean()  #! todo different from metadata_dict['memory']
     system_metrics["disk_usage_gb"] = system_metrics_df["system.disk.\\.usageGB"].mean()
     system_metrics["disk_usage_percentage"] = system_metrics_df["system.disk.\\.usagePercent"].mean()
     #! todo different from metadata_dict['disk']
     return system_metrics, execution_time
-
-
-# class MemoryProfiler(Profiler):
-#     def __init__(
-#         self,
-#         config,
-#         trainer,
-#         cpu_stats: Optional[bool] = True,
-#     ) -> None:
-#         """!TODO."""
-#         super().__init__()
-#         self.config = config
-#         self.current_actions: Dict[str, float] = {}
-#         self.recorded_memory: Dict = defaultdict(list)
-#         self._cpu_stats = cpu_stats
-
-#         devices = (
-#             trainer.strategy.parallel_devices if isinstance(trainer.strategy,
-# ParallelStrategy) else [trainer.strategy.root_device]
-#         )
-#         self.device = devices[0]
-
-#         if self._cpu_stats is None and self.device.type == "cpu" and not _PSUTIL_AVAILABLE:
-#             raise ModuleNotFoundError(
-#                 f"`DeviceStatsMonitor` cannot log CPU stats as `psutil` is not installed. {str(_PSUTIL_AVAILABLE)} "
-#             )
-
-#     def start(self, action_name: str) -> None:
-#         if action_name in self.current_actions:
-#             raise ValueError(f"Attempted to start {action_name} which has already started.")
-#         self.current_actions[action_name] = Counter(self._get_device_stats())
-
-#     def stop(self, action_name: str) -> None:
-#         usage_at_the_end = Counter(self._get_device_stats())
-#         if action_name not in self.current_actions:
-#             raise ValueError(f"Attempting to stop recording an action ({action_name}) which was never started.")
-#         usage_at_the_start = self.current_actions.pop(action_name)
-#         usage_at_the_end.subtract(usage_at_the_start)
-#         self.recorded_memory[action_name].append(dict(usage_at_the_end))
-
-#     def _get_device_stats(self) -> Dict[str, Any]:
-#         # ! TODO CHECK MULTIPLE GPUS
-#         """Gets stats for the given GPU device.
-
-#         Args:
-#             device: GPU device for which to get stats
-
-#         Returns:
-#             A dictionary mapping the metrics to their values.
-
-#         Raises:
-#             FileNotFoundError:
-#                 If nvidia-smi installation not found
-#         """
-
-#         device_stats = {}
-#         # _CPU_VM_PERCENT: psutil.virtual_memory().percent,
-#         # _CPU_PERCENT: psutil.cpu_percent(),
-#         # _CPU_SWAP_PERCENT: psutil.swap_memory().percent,
-#         device_stats.update(get_cpu_stats())
-#         # gpu_stat_metrics = [
-#         #     ("utilization.gpu", "%"),
-#         #     ("memory.used", "MB"),
-#         #     ("memory.free", "MB"),
-#         #     ("utilization.memory", "%"),
-#         #     ("fan.speed", "%"),
-#         #     ("temperature.gpu", "°C"),
-#         #     ("temperature.memory", "°C"),
-#         # ]
-#         device_stats.update(get_nvidia_gpu_stats(self.device))
-
-#         return device_stats
 
 
 class BenchmarkProfiler(Profiler):
@@ -163,30 +97,23 @@ class BenchmarkProfiler(Profiler):
         self.time_profiler = SimpleProfiler(
             dirpath=self.dirpath,
         )
-        self.memory_profiler = PyTorchProfiler(
-            dirpath=self.dirpath,
-            export_to_chrome=False,
-            profile_memory=True,
-            # profiler-specific keywords
-            # activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],  # this is memory-hungry
-            # schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
-        )
+        self.memfile_name = "aifs-benchmark-mem-profiler.bin"
+        self.memfile_path = os.path.join(self.dirpath, self.memfile_name)
+        self.memory_profiler = memray.Tracker(self.memfile_path)
 
     def start(self, action_name: str) -> None:
         self.time_profiler.start(action_name)
-        self.memory_profiler.start(action_name)
 
     def stop(self, action_name: str) -> None:
         self.time_profiler.stop(action_name)
-        self.memory_profiler.stop(action_name)
 
     def _trim_report(self, recorded_actions) -> None:
         all_actions_names = recorded_actions.keys()
         trimmed_actions_names = []
         for action in all_actions_names:
             if "Callback" not in action:
-                if any(map(action.__contains__, PROFILER_ACTIONS)):
-                    trimmed_actions_names.append(action)
+                # if any(map(action.__contains__, PROFILER_ACTIONS)):
+                trimmed_actions_names.append(action)
         cleaned_recorded_actions = {key: recorded_actions[key] for key in trimmed_actions_names}
         return cleaned_recorded_actions
 
@@ -199,39 +126,35 @@ class BenchmarkProfiler(Profiler):
         time_df.columns = ["name", "total_time", "n_calls", "avg_time"]
         return time_df
 
+    def _generate_memray_table(self):
+        os.system(f"memray table {self.memfile_path}")  # nosec
+
+    def _from_html_to_df(self) -> pd.DataFrame:
+        self.memfile_path_html = os.path.join(self.dirpath, f"memray-table-{self.memfile_name.replace('.bin','.html')}")
+        soup = BeautifulSoup(open(self.memfile_path_html).read(), features="lxml")
+        table = soup.find("script", type="text/javascript")
+        packed_data = ast.literal_eval(re.search("const packed_data = (.+?);\n", table.string).group(1))
+        df = pd.DataFrame(packed_data)
+        return df
+
+    def _trim_memray_df(self, memray_df: pd.DataFrame) -> pd.DataFrame:
+        # !TODO
+        cleaned_memray_df = memray_df.drop("tid", axis=1)
+        module_path = aifs.__path__[0]
+        cleaned_memray_df["stack_trace"] = cleaned_memray_df["stack_trace"].apply(lambda x: x.replace(module_path, ""))
+        cleaned_memray_df = memray_df[memray_df["stack_trace"].str.contains("era_datamodule")]
+        return cleaned_memray_df
+
     def get_memory_profiler_df(self) -> pd.DataFrame:
-        self.memory_profiler.recorded_memory = self._trim_report(recorded_actions=self.memory_profiler.recorded_memory)
-        memory_df = []
-        for action, sub_dict in self.memory_profiler.recorded_memory.items():
-            sub_dict_df = pd.DataFrame(sub_dict)
-            sub_dict_df = sub_dict_df.drop(
-                ["fan.speed (%)", "temperature.gpu (°C)", "temperature.memory (°C)", "memory.free (MB)"], axis=1
-            )
-            action_df = pd.DataFrame(sub_dict_df.mean()).T
-            action_df["action"] = action
-            action_df["n_calls"] = sub_dict_df.shape[0]
-            memory_df.append(action_df)
-        memory_df = pd.concat(memory_df)
-        return memory_df
+        self._generate_memray_table()
+        memray_df = self._from_html_to_df()
+        cleaned_memray_df = self._trim_memray_df(memray_df)
+        self._delete_memory_profiler()
+        return cleaned_memray_df
 
-    def mem_summary(self):
-        self.memory_profiler._delete_profilers()
-
-        # total_data = self.memory_profiler.function_events.total_averages()
-        key_data = self.memory_profiler.function_events.key_averages()
-        memory_df = pd.DataFrame(
-            columns=["Self CPU time", "CPU time", "CUDA time", "Self CUDA time", "CPU Memory usage", "CUDA Memory usage"]
-        )
-        for data in key_data:
-            memory_df.loc[data.key[:30]] = {
-                "Self CPU time": data.self_cpu_time_total,
-                "CPU time": data.cpu_time_total,
-                "CUDA time": data.cuda_time_total,
-                "Self CUDA time": data.self_cuda_time_total,
-                "CPU Memory usage": data.cpu_memory_usage,
-                "CUDA Memory usage": data.cuda_memory_usage,
-            }
-        return memory_df.sort_values(by="CUDA Memory usage", ascending=False)
+    def _delete_memory_profiler(self) -> None:
+        os.remove(self.memfile_path)
+        os.remove(self.memfile_path_html)
 
 
 class ProfilerProgressBar(TQDMProgressBar):

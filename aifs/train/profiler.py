@@ -84,7 +84,7 @@ class AIFSProfiler(AIFSTrainer):
     def wandb_profile(self):
         """Get system metrics from W&B."""
         if not self.config.diagnostics.log.wandb.offline:
-            run_dict = self.loggers[0]._wandb_init
+            run_dict = self.wandb_logger._wandb_init
             run_path = f"{run_dict['entity']}/{run_dict['project']}/{run_dict['id']}"
             wandb_memory_metrics_dict, execution_time = summarize_wandb_system_metrics(run_path)
             return self.to_df(wandb_memory_metrics_dict)
@@ -96,7 +96,7 @@ class AIFSProfiler(AIFSTrainer):
 
         Get system metrics from W&B.
         """
-        return self.profiler.mem_summary()
+        return self.profiler.get_memory_profiler_df()
 
     @cached_property
     def time_profile(self):
@@ -108,8 +108,8 @@ class AIFSProfiler(AIFSTrainer):
         self.print_benchmark_profiler_report(
             speed_metrics_df=self.speed_profile,
             memory_metrics_df=self.memory_profile,
-            wandb_memory_metrics_df=self.wandb_profile,
             time_metrics_df=self.time_profile,
+            wandb_memory_metrics_df=self.wandb_profile,
         )
 
     def to_wandb(self) -> None:
@@ -133,10 +133,14 @@ class AIFSProfiler(AIFSTrainer):
 @hydra.main(version_base=None, config_path="../config", config_name="debug")
 def main(config: DictConfig):
     # TODO: Override wandb offline
+
     trainer_aifs = AIFSProfiler(config)
-    trainer_aifs.train()
-    print(trainer_aifs.profiler)
+    with trainer_aifs.profiler.memory_profiler:
+        trainer_aifs.train()
+    print("printing Profiler report")
     trainer_aifs.report()
+    print("logging to W&B Profiler report")
+    trainer_aifs.to_wandb()
 
 
 if __name__ == "__main__":
