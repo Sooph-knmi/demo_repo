@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
 from omegaconf import DictConfig
+from pytorch_lightning.loggers.wandb import WandbLogger
 from rich import print as rprint
 
 import wandb
@@ -14,6 +15,7 @@ from aifs.diagnostics.profilers import ProfilerProgressBar
 from aifs.diagnostics.profilers import summarize_wandb_system_metrics
 from aifs.train.train import AIFSTrainer
 from aifs.utils.logger import get_code_logger
+
 
 LOGGER = get_code_logger(__name__)
 
@@ -84,8 +86,8 @@ class AIFSProfiler(AIFSTrainer):
     def wandb_profile(self):
         """Get system metrics from W&B."""
         if not self.config.diagnostics.log.wandb.offline:
-            run_dict = self.wandb_logger._wandb_init
-            run_path = f"{run_dict['entity']}/{run_dict['project']}/{run_dict['id']}"
+            self.run_dict = self.wandb_logger._wandb_init
+            run_path = f"{self.run_dict['entity']}/{self.run_dict['project']}/{self.run_dict['id']}"
             wandb_memory_metrics_dict, execution_time = summarize_wandb_system_metrics(run_path)
             return self.to_df(wandb_memory_metrics_dict)
         return pd.DataFrame()
@@ -102,6 +104,7 @@ class AIFSProfiler(AIFSTrainer):
 
     def report(self) -> str:
         """Print report to console."""
+        self._close_logger()
         self.print_benchmark_profiler_report(
             speed_metrics_df=self.speed_profile,
             memory_metrics_df=self.memory_profile,
@@ -111,10 +114,19 @@ class AIFSProfiler(AIFSTrainer):
 
     def to_wandb(self) -> None:
         """Log report into W&B."""
-        self.wandb_logger.experiment.log({"speed_metrics_report": wandb.Table(dataframe=self.speed_profile)})
-        self.wandb_logger.experiment.log({"memory_metrics_report": wandb.Table(dataframe=self.memory_profile)})
-        self.wandb_logger.experiment.log({"wandb_memory_metrics_report": wandb.Table(dataframe=self.wandb_profile)})
-        self.wandb_logger.experiment.log({"time_metrics_report": wandb.Table(dataframe=self.time_profile)})
+        logger = WandbLogger(
+            project=self.run_dict["project"],
+            entity=self.run_dict["entity"],
+            id=self.run_dict["id"],
+            offline=self.config.diagnostics.log.wandb.offline,
+            resume=self.run_dict["id"],
+        )
+
+        logger.experiment.log({"speed_metrics_report": wandb.Table(dataframe=self.speed_profile)})
+        logger.experiment.log({"memory_metrics_report": wandb.Table(dataframe=self.memory_profile)})
+        logger.experiment.log({"wandb_memory_metrics_report": wandb.Table(dataframe=self.wandb_profile)})
+        logger.experiment.log({"time_metrics_report": wandb.Table(dataframe=self.time_profile)})
+        logger.experiment.finish()
 
     @cached_property
     def callbacks(self) -> List[pl.callbacks.Callback]:
@@ -125,6 +137,9 @@ class AIFSProfiler(AIFSTrainer):
     @cached_property
     def profiler(self) -> BenchmarkProfiler:
         return BenchmarkProfiler(self.config)
+
+    def _close_logger(self) -> None:
+        self.wandb_logger.experiment.finish()
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="debug")
