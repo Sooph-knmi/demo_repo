@@ -92,10 +92,7 @@ class AIFSProfiler(AIFSTrainer):
 
     @cached_property
     def memory_profile(self):
-        """Memory Profiler.
-
-        Get system metrics from W&B.
-        """
+        """Memory Profiler."""
         return self.profiler.get_memory_profiler_df()
 
     @cached_property
