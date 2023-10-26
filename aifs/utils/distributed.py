@@ -116,6 +116,7 @@ class _ReduceParallelSection(torch.autograd.Function):
 
 def _split(input_, dim_, shapes_, group=None):  # pragma: no cover
     """Split the tensor along dim and keep the corresponding slice."""
+    del shapes_  # not used; TODO: remove this argument to avoid confusion
     # get input format
     input_format = get_memory_format(input_)
 

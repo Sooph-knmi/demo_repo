@@ -183,7 +183,7 @@ class GraphForecaster(pl.LightningModule):
             y_pred_group.shape[1] == self.nens_per_group
         ), f"Group ensemble shape mismatch: got {y_pred_group.shape[1]} -- expected {self.nens_per_group}!"
         loss_inc = checkpoint(self._compute_loss, y_pred_group, y[..., : self.fcdim], use_reentrant=False)
-        y_pred = split_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.mgroupdef[1], mgroup=self.mgroupdef[0])
+        y_pred = split_tensor(y_pred_group, dim=1, shapes=[y_pred.shape] * self.mgroupdef[1], mgroup=self.mgroupdef[0])
 
         # during validation, we also return the "full" (group-generated) ensemble so we can run diagnostics
         return y_pred, loss_inc, y_pred_group if validation_mode else None
