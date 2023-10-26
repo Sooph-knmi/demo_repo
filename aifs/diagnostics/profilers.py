@@ -112,8 +112,8 @@ class BenchmarkProfiler(Profiler):
         trimmed_actions_names = []
         for action in all_actions_names:
             if "Callback" not in action:
-                # if any(map(action.__contains__, PROFILER_ACTIONS)):
-                trimmed_actions_names.append(action)
+                if any(map(action.__contains__, PROFILER_ACTIONS)):
+                    trimmed_actions_names.append(action)
         cleaned_recorded_actions = {key: recorded_actions[key] for key in trimmed_actions_names}
         return cleaned_recorded_actions
 
@@ -127,6 +127,7 @@ class BenchmarkProfiler(Profiler):
         return time_df
 
     def _generate_memray_table(self):
+        # !TODO FOR NOW SKIP BANDIT WARNING B605, CHECK BEST WAY TO GO
         os.system(f"memray table {self.memfile_path}")  # nosec
 
     def _from_html_to_df(self) -> pd.DataFrame:
