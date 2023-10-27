@@ -76,14 +76,19 @@ class GraphMSG(nn.Module):
         self._register_latlon("era")
         self._register_latlon("h")
 
+        # for kstep
+        self.register_buffer("kstep", torch.ones([self.era_latlons.shape[0], 1]), persistent=True)
+
         self.num_channels = config.model.num_channels
         mlp_extra_layers = config.model.mlp.extra_layers
 
         # Encoder from ERA -> H
         self.forward_mapper = GNNMapper(
             in_channels_src=self.multi_step * (self.in_channels + self.aux_in_channels)
+            + self.in_channels  # xk
             + self.era_latlons.shape[1]
-            + self.era_trainable_size,
+            + self.era_trainable_size
+            + self.kstep.shape[1],
             in_channels_dst=self.h_latlons.shape[1] + self.h_trainable_size,
             hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
@@ -297,12 +302,19 @@ class GraphMSG(nn.Module):
             use_reentrant=use_reentrant,
         )
 
-    def forward(self, x: torch.Tensor, model_comm_group: Optional[ProcessGroup] = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, xk: torch.Tensor, kstep: int = 0, model_comm_group: Optional[ProcessGroup] = None
+    ) -> torch.Tensor:
         self.batch_size = x.shape[0]
 
         # add ERA positional info (lat/lon)
         x_era_latent = torch.cat(
-            (einops.rearrange(x, "b m n f -> (b n) (m f)"), self._fuse_trainable_tensors(self.era_latlons, self.era_trainable)),
+            (
+                einops.rearrange(x, "b m n f -> (b n) (m f)"),
+                einops.repeat(self.kstep * kstep, "e f -> (repeat e) f", repeat=self.batch_size),
+                einops.rearrange(xk, "b n f -> (b n) f"),
+                self._fuse_trainable_tensors(self.era_latlons, self.era_trainable),
+            ),
             dim=-1,  # feature dimension
         )
 

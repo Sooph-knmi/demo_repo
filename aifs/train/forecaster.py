@@ -104,6 +104,9 @@ class GraphForecaster(pl.LightningModule):
         self.rollout_epoch_increment = config.training.rollout.epoch_increment
         self.rollout_max = config.training.rollout.max
 
+        self.num_ksteps = config.training.denoising.ksteps
+        self.min_noise_std = config.training.denoising.min_noise_std
+
         self.use_zero_optimizer = config.training.zero_optimizer
 
         self.model_comm_group = None
@@ -121,8 +124,8 @@ class GraphForecaster(pl.LightningModule):
             config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.num_gpus_per_model
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x, self.model_comm_group)
+    def forward(self, x: torch.Tensor, xk: torch.Tensor, kstep: int = 0) -> torch.Tensor:
+        return self.model(x, xk=xk, kstep=kstep, model_comm_group=self.model_comm_group)
 
     def set_model_comm_group(self, model_comm_group) -> None:
         LOGGER.debug("set_model_comm_group: %s", model_comm_group)
@@ -152,11 +155,18 @@ class GraphForecaster(pl.LightningModule):
         y_preds = []
         for rstep in range(self.rollout):
             # if rstep > 0: torch.cuda.empty_cache() # uncomment if rollout fails with OOM
-            y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+
+            assert self.rollout == 1, "Rollout > 1 is not supported"
 
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
+            # y_pred = self(x, kstep=0)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+            if validation_mode:
+                y_pred, target = self._step_val_denoise(x, y)
+            else:
+                y_pred, target = self._step_denoise(x, y)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
-            loss += checkpoint(self.loss, y_pred, y[..., : self.fcdim], use_reentrant=False)
+            # loss += checkpoint(self.loss, y_pred, y[..., : self.fcdim], use_reentrant=False)
+            loss += checkpoint(self.loss, y_pred, target[..., : self.fcdim], use_reentrant=False)
 
             x = self.advance_input(x, y, y_pred)
 
@@ -172,6 +182,33 @@ class GraphForecaster(pl.LightningModule):
         # scale loss
         loss *= 1.0 / self.rollout
         return loss, metrics, y_preds
+
+    def _step_denoise(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        k = torch.randint(
+            0, self.num_ksteps + 1, (1,), device=x.device
+        )  # same k for all samples in batch ... different way to do this?
+        if k == 0:
+            pred = self(x, xk=torch.zeros_like(y[..., : self.fcdim]), kstep=k)
+            target = y
+        else:
+            xloss_fact = 0.5  # scale loss?
+            noise_std = self.min_noise_std ** (k / self.num_ksteps)
+            noise = torch.randn_like(y[..., : self.fcdim])
+            y_noised = y[..., : self.fcdim] + noise * noise_std
+            pred = self(x, xk=y_noised, kstep=k) * xloss_fact
+            target = noise * xloss_fact
+        return pred, target
+
+    def _step_val_denoise(self, x: torch.Tensor, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        pred0 = self(x, xk=torch.zeros_like(y[..., : self.fcdim]), kstep=0)
+        target = y
+        for k in range(1, self.num_ksteps + 1):
+            noise_std = self.min_noise_std ** (k / self.num_ksteps)
+            noise = torch.randn_like(y[..., : self.fcdim])
+            pred0_noised = pred0 + noise * noise_std
+            pred = self(x, xk=pred0_noised, kstep=k)
+            pred0 = pred0_noised - pred * noise_std
+        return pred0, target
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         train_loss, _, _ = self._step(batch, batch_idx)
