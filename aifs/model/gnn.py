@@ -7,6 +7,9 @@ import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
+from torch_geometric.utils import contains_isolated_nodes
+from torch_geometric.utils import dropout_edge
+from torch_geometric.utils import mask_select
 
 from aifs.model.layers import MessagePassingMapper
 from aifs.model.layers import NoisyMessagePassingProcessor
@@ -74,7 +77,11 @@ class GraphMSG(nn.Module):
 
         encoder_out_channels = config.model.num_channels
         mlp_extra_layers = config.model.mlp.extra_layers
+
+        # Dropout options
         mlp_dropout = config.model.mlp.dropout
+        self.dropout_h2e = config.model.edge_dropout.h2e
+        self.dropout_h2h = config.model.edge_dropout.h2h
 
         # Encoder from ERA -> H
         self.forward_mapper = MessagePassingMapper(
@@ -271,6 +278,48 @@ class GraphMSG(nn.Module):
             use_reentrant=use_reentrant,
         )
 
+    def dropout_edge_force_undirected(
+        self, edge_index: torch.Tensor, p: float = 0.5, training: bool = True
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Randomly drops edges from the adjacency matrix
+        :obj:`edge_index` with probability :obj:`p` using samples from
+        a Bernoulli distribution.
+
+        If an edge is dropped in one direction then it will be automatically dropped in
+        the other direction ie. will either drop or keep both edges
+
+        Parameters
+        ----------
+        edge_index : Tensor
+            Edge index to start
+        p : int
+            Dropout rate
+        training" (bool, optional)
+            If set to False then this operation does not occur during training
+
+        Returns
+        -------
+        edge_index : Tensor
+            New edge index with dropped-out edges
+        edge_mask : Tensor
+            Masked Tensor with edges to be dropped
+
+        """
+
+        # dropout edges using torch geometric functionality
+        _, edge_mask = dropout_edge(edge_index, p=p, training=training)
+        row, col = edge_index
+
+        #  in one direction so that only have unidirectional edges
+        edge_mask[row > col] = False
+
+        # remo
+        edge_index = edge_index[:, edge_mask]
+
+        edge_index_concat = torch.cat([edge_index, edge_index.flip(0)], dim=1)
+
+        return edge_index_concat, edge_mask
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward operator.
 
@@ -281,6 +330,40 @@ class GraphMSG(nn.Module):
         """
         bs, e = x.shape[0], x.shape[1]
         bse = bs * e  # merge the batch and ensemble dimensions
+
+        if self.dropout_h2e > 0:
+            isolated_nodes_h2e = True
+
+            total_num_h2e_nodes = self.h2e_edge_index.max() + 1
+
+            while isolated_nodes_h2e:
+                edge_index_h2e_edge, edge_h2e_mask = dropout_edge(self.h2e_edge_index, p=self.dropout_h2e)
+                isolated_nodes_h2e = contains_isolated_nodes(edge_index_h2e_edge, num_nodes=total_num_h2e_nodes)
+
+        else:
+            edge_index_h2e_edge, edge_h2e_mask = dropout_edge(self.h2e_edge_index, p=0)
+
+        if self.dropout_h2h > 0:
+            isolated_nodes_h2h = True
+
+            total_num_h2h_nodes = self._h_size
+
+            while isolated_nodes_h2h:
+                edge_index_h2h_edge, edge_h2h_mask = self.dropout_edge_force_undirected(self.h2h_edge_index, p=self.dropout_h2h)
+                isolated_nodes_h2h = contains_isolated_nodes(edge_index_h2h_edge, num_nodes=total_num_h2h_nodes)
+
+            edge_attr = self.h2h_edge_attr[edge_h2h_mask, :]
+
+            h2h_attr = torch.cat([edge_attr, edge_attr], dim=0)
+
+            if self.h2h_trainable is not None:
+                h2h_train = self.h2h_trainable[edge_h2h_mask, :]
+                h2h_trainable = torch.cat([h2h_train, h2h_train], dim=0)
+
+        else:
+            edge_index_h2h_edge = self.h2h_edge_index
+            h2h_attr = self.h2h_edge_attr
+            h2h_trainable = self.h2h_trainable
 
         # add ERA positional info (lat/lon)
         x_era_latent = torch.cat(
@@ -293,8 +376,10 @@ class GraphMSG(nn.Module):
 
         x_h_latent = self._fuse_trainable_tensors(self.h_latlons, bse, self.h_trainable)
         edge_e_to_h_latent = self._fuse_trainable_tensors(self.e2h_edge_attr, bse, self.e2h_trainable)
-        edge_h_to_h_latent = self._fuse_trainable_tensors(self.h2h_edge_attr, bse, self.h2h_trainable)
-        edge_h_to_e_latent = self._fuse_trainable_tensors(self.h2e_edge_attr, bse, self.h2e_trainable)
+        edge_h_to_h_latent = self._fuse_trainable_tensors(h2h_attr, bse, h2h_trainable)
+        edge_h_to_e_latent = self._fuse_trainable_tensors(
+            mask_select(self.h2e_edge_attr, 0, edge_h2e_mask), bse, mask_select(self.h2e_trainable, 0, edge_h2e_mask)
+        )
 
         x_era_latent, x_latent = self._create_processor(
             self.forward_mapper,
@@ -312,7 +397,7 @@ class GraphMSG(nn.Module):
             # concat noise tensor to the latent features
             x_noisy=torch.cat([x_latent, z], dim=-1),
             edge_index=torch.cat(
-                [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bse)],
+                [edge_index_h2h_edge + i * self._h2h_edge_inc for i in range(bse)],
                 dim=1,
             ),
             edge_attr=edge_h_to_h_latent,
@@ -324,7 +409,7 @@ class GraphMSG(nn.Module):
         _, x_out = self._create_processor(
             self.backward_mapper,
             (x_latent_proc, x_era_latent),
-            self.h2e_edge_index,
+            edge_index_h2e_edge,
             self._h2e_edge_inc,
             edge_h_to_e_latent,
             bse,
@@ -336,3 +421,26 @@ class GraphMSG(nn.Module):
         # residual connection (just for the predicted variables at the current step)
         # x.shape = (bs, e, m, n, f)
         return x_out + x[:, :, -1, :, : self.in_channels]
+
+
+if __name__ == "__main__":
+
+    def dropout_edge_force_undirected(
+        edge_index: torch.Tensor, p: float = 0.5, training: bool = True
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        _, edge_mask = dropout_edge(edge_index, p=p, training=training)
+        row, col = edge_index
+
+        edge_mask[row > col] = False
+
+        edge_index = edge_index[:, edge_mask]
+
+        edge_index_concat = torch.cat([edge_index, edge_index.flip(0)], dim=1)
+
+        return edge_index_concat, edge_mask
+
+    edge_tensor = torch.tensor([[0, 1, 1, 2, 2, 3], [1, 0, 2, 1, 3, 2]])
+
+    edge_index_mc, edge_mask_mc = dropout_edge_force_undirected(edge_tensor, p=0.2)
+
+    edge_index_torch, edge_mask_torch = dropout_edge(edge_tensor, p=0.2, force_undirected=True)

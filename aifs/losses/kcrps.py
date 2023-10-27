@@ -38,6 +38,10 @@ class KernelCRPS(nn.Module):
         """
         ens_size = preds.shape[-1]
         mae = torch.mean(torch.abs(targets[..., None] - preds), dim=-1)
+
+        if ens_size == 1:
+            return mae
+
         if fair:
             coef = -1.0 / (2.0 * ens_size * (ens_size - 1))
         else:

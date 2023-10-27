@@ -159,3 +159,8 @@ scratch
 # hydra outputs
 outputs/
 .hydra/
+
+# jobscript
+jobscript-atos-*
+model_small*
+jobscript-dr*

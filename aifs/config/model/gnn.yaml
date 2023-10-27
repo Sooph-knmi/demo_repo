@@ -16,6 +16,11 @@ hidden:
   num_layers: 16
   num_noise_channels: 1
 
+# choose rate of dropout of edges
+edge_dropout:
+  h2h: 0
+  h2e: 0
+
 trainable_parameters:
   era: 8
   hidden: 8

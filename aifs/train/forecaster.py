@@ -131,7 +131,7 @@ class GraphForecaster(pl.LightningModule):
 
         if self.loss_type == "energy":
             self.energy_score = EnergyScore(area_weights=self.era_weights, loss_scaling=loss_scaling)
-        else:
+        elif self.loss_type == "patched_energy":
             patches_ = torch.from_numpy(
                 np.load(Path(config.hardware.paths.patches, config.hardware.files.patches)).astype(np.float32)
             )
