@@ -24,15 +24,31 @@ from aifs.utils.logger import get_code_logger
 LOGGER = get_code_logger(__name__)
 
 PROFILER_ACTIONS = [
-    "model_backward",
-    "validation_step",
-    "training_step",
+    r"\[Strategy]\w+\.batch_to_device",
+    r"\[Strategy]\w+\.backward",
+    r"\[Strategy]\w+\.validation_step",
+    r"\[Strategy]\w+\.batch_to_device",
     "run_training_epoch",
-    "train_dataloader_next",
-    "backward",
-    "run_training_epoch" "run_training_batch",
-    "run_validation_batch",
-    "run_validation_epoch",
+    "run_training_batch",
+    r"\[_EvaluationLoop\]\.\w+",
+    r"\[_TrainingEpochLoop\]\.\w+",
+    r"\[LightningDataModule]\w+\.train_dataloader",
+    r"\[LightningDataModule]\w+\.val_dataloader",
+    r"\[LightningDataModule]\w+\.state_dict",
+    r"\[LightningDataModule]\w+\.setup",
+    r"\[LightningDataModule]\w+\.prepare_data",
+    r"\[LightningDataModule]\w+\.teardown",
+    r"\[LightningModule]\w+\.optimizer_step",
+    r"\[LightningModule]\w+\.configure_gradient_clipping",
+    r"\[LightningModule]\w+\.on_validation_model_eval",
+    r"\[LightningModule]\w+\.optimizer_zero_grad",
+    r"\[LightningModule]\w+\.transfer_batch_to_device",
+    r"\[LightningModule]\w+\.on_validation_model_train",
+    r"\[LightningModule]\w+\.configure_optimizers",
+    r"\[LightningModule]\w+\.lr_scheduler_step",
+    r"\[LightningModule]\w+\.configure_sharded_model",
+    r"\[LightningModule]\w+\.setup",
+    r"\[LightningModule]\w+\.prepare_data",
 ]
 
 GPU_METRICS = ["powerPercent", "gpu", "memory", "memoryAllocatedBytes", "memoryAllocated"]
@@ -112,8 +128,10 @@ class BenchmarkProfiler(Profiler):
         trimmed_actions_names = []
         for action in all_actions_names:
             if "Callback" not in action:
-                if any(map(action.__contains__, PROFILER_ACTIONS)):
-                    trimmed_actions_names.append(action)
+                for pattern in PROFILER_ACTIONS:
+                    filtered_list = list(filter(re.compile(pattern).match, all_actions_names))
+                    if filtered_list:
+                        trimmed_actions_names.append(filtered_list[0])
         cleaned_recorded_actions = {key: recorded_actions[key] for key in trimmed_actions_names}
         return cleaned_recorded_actions
 
@@ -124,6 +142,8 @@ class BenchmarkProfiler(Profiler):
         time_df[3] = time_df[1].apply(lambda x: np.mean(x))
         time_df[1] = time_df[1].apply(lambda x: sum(x))
         time_df.columns = ["name", "total_time", "n_calls", "avg_time"]
+        pattern = r"\[(.*?)\]|(.*)"
+        time_df["category"] = time_df["name"].str.extract(pattern, expand=False)[0].fillna(time_df["name"])
         return time_df
 
     def _generate_memray_table(self):
@@ -138,13 +158,44 @@ class BenchmarkProfiler(Profiler):
         df = pd.DataFrame(packed_data)
         return df
 
+    def _aggregate_per_category(self, df: pd.DataFrame) -> pd.DataFrame:
+        # At function level (#! i think that's too much ?)
+        # pattern = r'^(.*?) at (.*?)\.py'
+        # aifs_memray['category'] = aifs_memray['stack_trace'].str.extract(pattern, expand=False).agg(' '.join, axis=1)
+
+        pattern = r"at (.*?)\.py"
+        df["category"] = df["stack_trace"].str.extract(pattern, expand=False)
+        df_agg = df.groupby("category").sum()
+        df_agg.reset_index(inplace=True)
+        return df_agg
+
     def _trim_memray_df(self, memray_df: pd.DataFrame) -> pd.DataFrame:
-        # !TODO
         cleaned_memray_df = memray_df.drop("tid", axis=1)
-        module_path = aifs.__path__[0]
+        cleaned_memray_df = cleaned_memray_df.drop("allocator", axis=1)
+
+        module_path = aifs.__path__[0].replace("aifs-mono/aifs", "")
+        env_path = pl.__path__[0].replace("pytorch_lightning", "")
+        base_env_path = pl.__path__[0].replace("/site-packages/pytorch_lightning", "")
+
         cleaned_memray_df["stack_trace"] = cleaned_memray_df["stack_trace"].apply(lambda x: x.replace(module_path, ""))
-        cleaned_memray_df = memray_df[memray_df["stack_trace"].str.contains("era_datamodule")]
-        return cleaned_memray_df
+        cleaned_memray_df["stack_trace"] = cleaned_memray_df["stack_trace"].apply(lambda x: x.replace(env_path, ""))
+        cleaned_memray_df["stack_trace"] = cleaned_memray_df["stack_trace"].apply(lambda x: x.replace(base_env_path, ""))
+
+        cleaned_memray_df["size_MiB"] = cleaned_memray_df["size"] * 9.5367e-7
+        cleaned_memray_df.sort_values("size_MiB", ascending=False, inplace=True)
+        cleaned_memray_df = cleaned_memray_df.drop("size", axis=1)
+        top_most_memory_consuming_df = cleaned_memray_df[~cleaned_memray_df["stack_trace"].str.contains("aifs")].head(10)
+        top_most_memory_consuming_df = self._aggregate_per_category(top_most_memory_consuming_df)
+        aifs_memray = cleaned_memray_df[cleaned_memray_df["stack_trace"].str.contains("aifs")]
+        aifs_memray = self._aggregate_per_category(aifs_memray)
+
+        aifs_memray["group"] = "aifs-operations"
+        top_most_memory_consuming_df["group"] = "general-operations"
+
+        merged_memory_df = pd.concat([top_most_memory_consuming_df, aifs_memray])
+        merged_memory_df.drop("stack_trace", axis=1, inplace=True)
+        # ! do we want to keep the stack_trace??
+        return merged_memory_df
 
     def get_memory_profiler_df(self) -> pd.DataFrame:
         self._generate_memray_table()
