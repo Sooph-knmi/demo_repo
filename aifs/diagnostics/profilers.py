@@ -51,7 +51,11 @@ PROFILER_ACTIONS = [
     r"\[LightningModule]\w+\.prepare_data",
 ]
 
-GPU_METRICS = ["powerPercent", "gpu", "memory", "memoryAllocatedBytes", "memoryAllocated"]
+GPU_METRICS_DICT = {
+    "GPU device utilization (%)": "gpu",
+    "GPU memory use (%)": "memory",
+    "GPU memory allocated (%)": "memoryAllocated",
+}
 
 
 def get_wandb_metrics(run_id_path: str) -> (pd.DataFrame, dict):
@@ -63,39 +67,50 @@ def get_wandb_metrics(run_id_path: str) -> (pd.DataFrame, dict):
 
 
 def summarize_gpu_metrics(df: pd.DataFrame, col_names: List[str]) -> Dict[str, float]:
+    """
+    gpu.{gpu_index}.memory - GPU memory utilization in percent for each GPU
+    gpu.{gpu_index}.memoryAllocated - GPU memory allocated as a percentage of the total available memory for each GPU
+    #! use it? gpu.{gpu_index}.memoryAllocatedBytes - GPU memory allocated in bytes for each GPU
+    gpu.{gpu_index}.gpu - GPU utilization in percent for each GPU
+    """
     average_metric = {}
-    for gpu_metric in GPU_METRICS:
+    for gpu_metric_name, gpu_metric in GPU_METRICS_DICT.items():
         pattern = r"system.gpu.\d.{}$".format(gpu_metric)
         sub_gpu_cols = [string for string in col_names if re.match(pattern, string)]
-        average_metric[f"gpu_{gpu_metric}"] = df[sub_gpu_cols].mean(axis=1).median()
+        average_metric[gpu_metric_name] = df[sub_gpu_cols].mean(axis=1).median()
     return average_metric
 
 
 def summarize_wandb_system_metrics(run_id_path: str) -> dict:
+    """
+    cpu.{}.cpu_percent - CPU usage of the system on a per-core basis.
+    system.memory - Represents the total system memory usage as a percentage of the total available memory.
+    system.cpu - Percentage of CPU usage by the process, normalized by the number of available CPUs
+    system.disk.\\.usageGB - (Represents the total system disk usage in gigabytes (GB))
+    system.proc.memory.percent - Indicates the memory usage of the process as a percentage of the total available memory
+    !TODO decide if the system.proc.memory.percent is relevant
+
+    More information about W&B system metrics can be found here:
+    https://docs.wandb.ai/guides/app/features/system-metrics
+    """
     system_metrics_df, metadata_dict = get_wandb_metrics(run_id_path)
 
     col_names = system_metrics_df.columns
     system_metrics = {}
-    # networks_cols=list(filter(lambda k: 'network.' in k, col_names)) #! is this useful?
-    cpu_cols = list(filter(lambda k: "cpu." in k, col_names))
-    list(filter(lambda k: "proc." in k, col_names))  #! how should I interpret this?
 
     n_cpus = metadata_dict["cpu_count"]
-    system_metrics["avg_cpu_usage"] = (system_metrics_df[cpu_cols].sum(axis=1) / n_cpus).mean()
-    try:
-        execution_time = system_metrics_df["_runtime"].iloc[-1]  # in seconds
-    except KeyError:
-        execution_time = 0
+    cpu_cols = list(filter(lambda k: "cpu." in k, col_names))
+    system_metrics["avg CPU usage (%)"] = (system_metrics_df[cpu_cols].sum(axis=1) / n_cpus).mean()
 
     system_metrics_gpu = summarize_gpu_metrics(system_metrics_df, col_names)
     system_metrics.update(system_metrics_gpu)
 
-    print(system_metrics_df[[name for name in col_names if "memory" in name]])
+    system_metrics["avg Memory usage (%)"] = system_metrics_df["system.memory"].mean()
+    system_metrics["avg Disk usage (GB)"] = system_metrics_df["system.disk.\\.usageGB"].mean()
+    system_metrics["avg Disk usage  (%)"] = system_metrics_df["system.disk.\\.usagePercent"].mean()
 
-    system_metrics["memory_usage"] = system_metrics_df["system.memory"].mean()  #! todo different from metadata_dict['memory']
-    system_metrics["disk_usage_gb"] = system_metrics_df["system.disk.\\.usageGB"].mean()
-    system_metrics["disk_usage_percentage"] = system_metrics_df["system.disk.\\.usagePercent"].mean()
-    #! todo different from metadata_dict['disk']
+    execution_time = system_metrics_df["_runtime"].iloc[-1]  # in seconds
+
     return system_metrics, execution_time
 
 
@@ -160,12 +175,22 @@ class BenchmarkProfiler(Profiler):
 
     def _aggregate_per_category(self, df: pd.DataFrame) -> pd.DataFrame:
         # At function level (#! i think that's too much ?)
-        # pattern = r'^(.*?) at (.*?)\.py'
-        # aifs_memray['category'] = aifs_memray['stack_trace'].str.extract(pattern, expand=False).agg(' '.join, axis=1)
+        pattern = r"^(.*?) at (.*?)\.py"
+        df[["function", "category"]] = df["stack_trace"].str.extract(pattern)
 
-        pattern = r"at (.*?)\.py"
-        df["category"] = df["stack_trace"].str.extract(pattern, expand=False)
-        df_agg = df.groupby("category").sum()
+        # pattern = r"at (.*?)\.py"
+        # df["category"] = df["stack_trace"].str.extract(pattern, expand=False)
+        df.drop("stack_trace", axis=1, inplace=True)
+
+        df_agg = df.groupby("category").apply(
+            lambda x: pd.Series(
+                {
+                    "n_allocations": x["n_allocations"].sum(),
+                    "size (MiB)": x["size (MiB)"].sum(),
+                    "function": x.loc[x["size (MiB)"].idxmax()]["function"],
+                }
+            )
+        )
         df_agg.reset_index(inplace=True)
         return df_agg
 
@@ -181,11 +206,13 @@ class BenchmarkProfiler(Profiler):
         cleaned_memray_df["stack_trace"] = cleaned_memray_df["stack_trace"].apply(lambda x: x.replace(env_path, ""))
         cleaned_memray_df["stack_trace"] = cleaned_memray_df["stack_trace"].apply(lambda x: x.replace(base_env_path, ""))
 
-        cleaned_memray_df["size_MiB"] = cleaned_memray_df["size"] * 9.5367e-7
-        cleaned_memray_df.sort_values("size_MiB", ascending=False, inplace=True)
+        cleaned_memray_df["size (MiB)"] = cleaned_memray_df["size"] * 9.5367e-7
+        cleaned_memray_df.sort_values("size (MiB)", ascending=False, inplace=True)
         cleaned_memray_df = cleaned_memray_df.drop("size", axis=1)
+
         top_most_memory_consuming_df = cleaned_memray_df[~cleaned_memray_df["stack_trace"].str.contains("aifs")].head(10)
         top_most_memory_consuming_df = self._aggregate_per_category(top_most_memory_consuming_df)
+
         aifs_memray = cleaned_memray_df[cleaned_memray_df["stack_trace"].str.contains("aifs")]
         aifs_memray = self._aggregate_per_category(aifs_memray)
 
@@ -193,7 +220,6 @@ class BenchmarkProfiler(Profiler):
         top_most_memory_consuming_df["group"] = "general-operations"
 
         merged_memory_df = pd.concat([top_most_memory_consuming_df, aifs_memray])
-        merged_memory_df.drop("stack_trace", axis=1, inplace=True)
         # ! do we want to keep the stack_trace??
         return merged_memory_df
 

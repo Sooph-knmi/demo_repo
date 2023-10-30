@@ -7,7 +7,7 @@ import pandas as pd
 import pytorch_lightning as pl
 from omegaconf import DictConfig
 from pytorch_lightning.loggers.wandb import WandbLogger
-from rich import print as rprint
+from rich.console import Console
 
 import wandb
 from aifs.diagnostics.profilers import BenchmarkProfiler
@@ -18,6 +18,7 @@ from aifs.utils.logger import get_code_logger
 
 
 LOGGER = get_code_logger(__name__)
+console = Console(record=True)
 
 
 class AIFSProfiler(AIFSTrainer):
@@ -29,11 +30,11 @@ class AIFSProfiler(AIFSTrainer):
         assert self.config.diagnostics.log.wandb.enabled, "Profiling requires W&B logging"
 
     def print_report(self, title, dataframe, color="white", emoji=""):
-        rprint(f"[bold {color}]{title}[/bold {color}]", f":{emoji}:")
-        rprint(dataframe.to_markdown(), end="\n\n")
+        console.print(f"[bold {color}]{title}[/bold {color}]", f":{emoji}:")
+        console.print(dataframe.to_markdown(headers="keys", tablefmt="psql"), end="\n\n")
 
     def print_title(self):
-        rprint("[bold magenta] Benchmark Profiler Summary [/bold magenta]!", ":book:")
+        console.print("[bold magenta] Benchmark Profiler Summary [/bold magenta]!", ":book:")
 
     def print_benchmark_profiler_report(
         self,
@@ -49,7 +50,8 @@ class AIFSProfiler(AIFSTrainer):
         self.print_report("Wandb Memory Profiling", wandb_memory_metrics_df, color="purple", emoji="disk")
 
     def write_benchmark_profiler_report(self) -> None:
-        raise NotImplementedError("No saving yet")
+        # console.save_text("report.txt")
+        console.save_html("report.html")
 
     @staticmethod
     def to_df(sample_dict, precision: str = ".5") -> pd.DataFrame:
@@ -111,6 +113,7 @@ class AIFSProfiler(AIFSTrainer):
             time_metrics_df=self.time_profile,
             wandb_memory_metrics_df=self.wandb_profile,
         )
+        self.write_benchmark_profiler_report()
 
     def to_wandb(self) -> None:
         """Log report into W&B."""
@@ -126,6 +129,8 @@ class AIFSProfiler(AIFSTrainer):
         logger.experiment.log({"memory_metrics_report": wandb.Table(dataframe=self.memory_profile)})
         logger.experiment.log({"wandb_memory_metrics_report": wandb.Table(dataframe=self.wandb_profile)})
         logger.experiment.log({"time_metrics_report": wandb.Table(dataframe=self.time_profile)})
+
+        logger.experiment.log({"reports_benchmark_profiler": wandb.Html(open("report.html"))})
         logger.experiment.finish()
 
     @cached_property
