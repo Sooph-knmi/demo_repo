@@ -125,7 +125,9 @@ class RolloutEval(Callback):
                         pl_module.metrics(y_pred_denorm[..., pidx : pidx + 1].mean(dim=1), y_denorm[..., pidx : pidx + 1])
                     )
                     # mean spread (ensemble stdev)
-                    spread[rstep, midx] = y_pred_denorm[..., pidx : pidx + 1].std(dim=1).mean()
+                    spread[rstep, midx] = torch.sqrt(
+                        (torch.square(y_pred_denorm[..., pidx : pidx + 1] - y_pred_denorm[..., pidx : pidx + 1].mean(dim=1))).mean()
+                    )
 
             # update spread-skill metric state
             _ = pl_module.spread_skill(rmse, spread)

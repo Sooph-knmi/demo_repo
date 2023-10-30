@@ -1,7 +1,7 @@
 defaults:
   - hardware: leo_slurm
   - data: zarr
-  - dataloader: default
+  - dataloader: rollout
   - model: gnn
   - training: default
   - diagnostics: eval_rollout

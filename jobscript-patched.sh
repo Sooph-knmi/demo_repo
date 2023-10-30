@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=48:00:00
-#SBATCH --output=ens-kcrps-h4-2.out.%j
+#SBATCH --output=ens-patched-h5-atos-roll28.out.%j
 
 # debugging flags (optional)
 # export NCCL_DEBUG=INFO
@@ -24,12 +24,12 @@ export HYDRA_FULL_ERROR=1
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="2 gpu"
-export WANDB_NOTES="test 2 gpu"
+export WANDB_NAME="ens-patched-h4"
+export WANDB_NOTES="patched ensemble"
 
 # generic settings
 CONDA_ENV=aifs_dev
-GITDIR=/perm/momc/AIFS/aifs-mono
+GITDIR=/home/momc/AIFS/aifs-mono
 WORKDIR=$GITDIR
 
 cd $WORKDIR
