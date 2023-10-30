@@ -1,4 +1,5 @@
 from functools import cached_property
+from typing import Dict
 from typing import List
 
 import hydra
@@ -29,7 +30,7 @@ class AIFSProfiler(AIFSTrainer):
 
         assert self.config.diagnostics.log.wandb.enabled, "Profiling requires W&B logging"
 
-    def print_report(self, title, dataframe, color="white", emoji=""):
+    def print_report(self, title: str, dataframe: pd.DataFrame, color="white", emoji=""):
         console.print(f"[bold {color}]{title}[/bold {color}]", f":{emoji}:")
         console.print(dataframe.to_markdown(headers="keys", tablefmt="psql"), end="\n\n")
 
@@ -54,7 +55,7 @@ class AIFSProfiler(AIFSTrainer):
         console.save_html("report.html")
 
     @staticmethod
-    def to_df(sample_dict, precision: str = ".5") -> pd.DataFrame:
+    def to_df(sample_dict: Dict[str, float], precision: str = ".5") -> pd.DataFrame:
         df = pd.DataFrame(sample_dict.items())
         df.columns = ["metric", "value"]
         df.value = df.value.apply(lambda x: f"%{precision}f" % x)
@@ -90,7 +91,7 @@ class AIFSProfiler(AIFSTrainer):
         if not self.config.diagnostics.log.wandb.offline:
             self.run_dict = self.wandb_logger._wandb_init
             run_path = f"{self.run_dict['entity']}/{self.run_dict['project']}/{self.run_dict['id']}"
-            wandb_memory_metrics_dict, execution_time = summarize_wandb_system_metrics(run_path)
+            wandb_memory_metrics_dict = summarize_wandb_system_metrics(run_path)
             return self.to_df(wandb_memory_metrics_dict)
         return pd.DataFrame()
 

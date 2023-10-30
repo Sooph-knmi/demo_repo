@@ -81,7 +81,7 @@ def summarize_gpu_metrics(df: pd.DataFrame, col_names: List[str]) -> Dict[str, f
     return average_metric
 
 
-def summarize_wandb_system_metrics(run_id_path: str) -> dict:
+def summarize_wandb_system_metrics(run_id_path: str) -> Dict[str, float]:
     """
     cpu.{}.cpu_percent - CPU usage of the system on a per-core basis.
     system.memory - Represents the total system memory usage as a percentage of the total available memory.
@@ -109,9 +109,8 @@ def summarize_wandb_system_metrics(run_id_path: str) -> dict:
     system_metrics["avg Disk usage (GB)"] = system_metrics_df["system.disk.\\.usageGB"].mean()
     system_metrics["avg Disk usage  (%)"] = system_metrics_df["system.disk.\\.usagePercent"].mean()
 
-    execution_time = system_metrics_df["_runtime"].iloc[-1]  # in seconds
-
-    return system_metrics, execution_time
+    system_metrics["execution time (sec)"] = system_metrics_df["_runtime"].iloc[-1]  # in seconds
+    return system_metrics
 
 
 class BenchmarkProfiler(Profiler):
@@ -138,7 +137,7 @@ class BenchmarkProfiler(Profiler):
     def stop(self, action_name: str) -> None:
         self.time_profiler.stop(action_name)
 
-    def _trim_report(self, recorded_actions) -> None:
+    def _trim_report(self, recorded_actions: dict) -> Dict[str, float]:
         all_actions_names = recorded_actions.keys()
         trimmed_actions_names = []
         for action in all_actions_names:
@@ -150,7 +149,7 @@ class BenchmarkProfiler(Profiler):
         cleaned_recorded_actions = {key: recorded_actions[key] for key in trimmed_actions_names}
         return cleaned_recorded_actions
 
-    def get_time_profiler_df(self) -> pd.DataFrame:
+    def get_time_profiler_df(self, precision: int = 5) -> pd.DataFrame:
         self.time_profiler.recorded_durations = self._trim_report(recorded_actions=self.time_profiler.recorded_durations)
         time_df = pd.DataFrame(self.time_profiler.recorded_durations.items())
         time_df[2] = time_df[1].apply(lambda x: len(x))
@@ -159,6 +158,7 @@ class BenchmarkProfiler(Profiler):
         time_df.columns = ["name", "total_time", "n_calls", "avg_time"]
         pattern = r"\[(.*?)\]|(.*)"
         time_df["category"] = time_df["name"].str.extract(pattern, expand=False)[0].fillna(time_df["name"])
+        time_df = time_df.round(5)
         return time_df
 
     def _generate_memray_table(self):
@@ -176,12 +176,11 @@ class BenchmarkProfiler(Profiler):
     def _aggregate_per_category(self, df: pd.DataFrame) -> pd.DataFrame:
         # At function level (#! i think that's too much ?)
         pattern = r"^(.*?) at (.*?)\.py"
+        # !TODO - FIX WARNING
         df[["function", "category"]] = df["stack_trace"].str.extract(pattern)
-
         # pattern = r"at (.*?)\.py"
         # df["category"] = df["stack_trace"].str.extract(pattern, expand=False)
-        df.drop("stack_trace", axis=1, inplace=True)
-
+        df = df.drop("stack_trace", axis=1)
         df_agg = df.groupby("category").apply(
             lambda x: pd.Series(
                 {
@@ -194,7 +193,7 @@ class BenchmarkProfiler(Profiler):
         df_agg.reset_index(inplace=True)
         return df_agg
 
-    def _trim_memray_df(self, memray_df: pd.DataFrame) -> pd.DataFrame:
+    def _trim_memray_df(self, memray_df: pd.DataFrame, precision: int = 5) -> pd.DataFrame:
         cleaned_memray_df = memray_df.drop("tid", axis=1)
         cleaned_memray_df = cleaned_memray_df.drop("allocator", axis=1)
 
@@ -221,6 +220,7 @@ class BenchmarkProfiler(Profiler):
 
         merged_memory_df = pd.concat([top_most_memory_consuming_df, aifs_memray])
         # ! do we want to keep the stack_trace??
+        merged_memory_df = merged_memory_df.round(precision)
         return merged_memory_df
 
     def get_memory_profiler_df(self) -> pd.DataFrame:
