@@ -1,3 +1,5 @@
+import math
+import os
 from pathlib import Path
 from typing import Dict
 from typing import Mapping
@@ -9,6 +11,8 @@ import torch
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from timm.scheduler import CosineLRScheduler
+from torch.distributed.optim import ZeroRedundancyOptimizer
+from torch.utils.checkpoint import checkpoint
 
 from aifs.data.scaling import pressure_level
 from aifs.model.losses import grad_scaler
@@ -16,8 +20,6 @@ from aifs.model.losses import WeightedMSELoss
 from aifs.model.model import AIFSModelGNN
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
-
-# from torch.autograd.graph import save_on_cpu
 
 LOGGER = get_code_logger(__name__)
 
@@ -90,12 +92,21 @@ class GraphForecaster(pl.LightningModule):
         self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
         self.multi_step = config.training.multistep_input
-        self.lr = config.hardware.num_nodes * config.hardware.num_gpus_per_node * config.training.lr.rate
+        self.lr = (
+            config.hardware.num_nodes
+            * config.hardware.num_gpus_per_node
+            * config.training.lr.rate
+            / config.hardware.num_gpus_per_model
+        )
         self.lr_iterations = config.training.lr.iterations
         self.lr_min = config.training.lr.min
         self.rollout = config.training.rollout.start
         self.rollout_epoch_increment = config.training.rollout.epoch_increment
         self.rollout_max = config.training.rollout.max
+
+        self.use_zero_optimizer = config.training.zero_optimizer
+
+        self.model_comm_group = None
 
         LOGGER.debug("Rollout window length: %d", self.rollout)
         LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
@@ -104,8 +115,18 @@ class GraphForecaster(pl.LightningModule):
 
         self.enable_plot = config.diagnostics.plot.enabled
 
+        self.model_comm_group_id = int(os.environ.get("SLURM_PROCID", "0")) // config.hardware.num_gpus_per_model
+        self.model_comm_group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.num_gpus_per_model
+        self.model_comm_num_groups = math.ceil(
+            config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.num_gpus_per_model
+        )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x)
+        return self.model(x, self.model_comm_group)
+
+    def set_model_comm_group(self, model_comm_group) -> None:
+        LOGGER.debug("set_model_comm_group: %s", model_comm_group)
+        self.model_comm_group = model_comm_group
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         x = x.roll(-1, dims=1)
@@ -129,12 +150,13 @@ class GraphForecaster(pl.LightningModule):
         x = batch[:, 0 : self.multi_step, ...]  # (bs, multi_step, latlon, nvar)
 
         y_preds = []
-        # with save_on_cpu(pin_memory=True):
         for rstep in range(self.rollout):
+            # if rstep > 0: torch.cuda.empty_cache() # uncomment if rollout fails with OOM
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             # y includes the auxiliary variables, so we must leave those out when computing the loss
-            loss += self.loss(y_pred, y[..., : self.fcdim])
+            loss += checkpoint(self.loss, y_pred, y[..., : self.fcdim], use_reentrant=False)
 
             x = self.advance_input(x, y, y_pred)
 
@@ -218,7 +240,13 @@ class GraphForecaster(pl.LightningModule):
         return self.normalizer.denormalize(y_hat, in_place=False)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
+        if self.use_zero_optimizer:
+            optimizer = ZeroRedundancyOptimizer(
+                self.trainer.model.parameters(), optimizer_class=torch.optim.AdamW, betas=(0.9, 0.95), lr=self.lr
+            )
+        else:
+            optimizer = torch.optim.AdamW(self.trainer.model.parameters(), betas=(0.9, 0.95), lr=self.lr)  # , fused=True)
+
         scheduler = CosineLRScheduler(
             optimizer,
             lr_min=self.lr_min,

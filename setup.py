@@ -21,19 +21,19 @@ setup(
     version=version,
     long_description=read("README.md"),
     long_description_content_type="text/markdown",
-    license="Apache Lincense Version 2.0",
+    license="Apache License Version 2.0",
     author="European Centre for Medium-Range Weather Forecasts (ECMWF)",
     author_email="ecmwf-authors@ecmwf.int",
     description="ERA5 forecasting with Graph Neural Networks",
     url="https://github.com/ecmwf-lab/aifs-mono",
     install_requires=[
-        "torch>=2.0.1",
+        "torch>=2.0.1,<2.1",
         "torch_geometric>=2.3.1",
         "einops>=0.6.1",
     ],
     extras_require={
         "training": [
-            "pytorch-lightning<2.1.0",
+            "pytorch-lightning>=2.1.0",
             "timm>=0.9.2",
             "hydra-core>=1.3",
             "matplotlib>=3.7.1",

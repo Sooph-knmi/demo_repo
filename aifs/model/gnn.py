@@ -1,3 +1,4 @@
+from typing import List
 from typing import Optional
 from typing import Tuple
 
@@ -5,11 +6,16 @@ import einops
 import numpy as np
 import torch
 from torch import nn
+from torch.distributed.distributed_c10d import ProcessGroup
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
+from torch_geometric.typing import Adj
+from torch_geometric.typing import Size
 
-from aifs.model.layers import MessagePassingMapper
-from aifs.model.layers import MessagePassingProcessor
+from aifs.distributed.helpers import change_channels_in_shape
+from aifs.distributed.helpers import get_shape_shards
+from aifs.model.layers import GNNMapper
+from aifs.model.layers import GNNProcessor
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
@@ -70,45 +76,43 @@ class GraphMSG(nn.Module):
         self._register_latlon("era")
         self._register_latlon("h")
 
-        encoder_out_channels = config.model.num_channels
+        self.num_channels = config.model.num_channels
         mlp_extra_layers = config.model.mlp.extra_layers
 
         # Encoder from ERA -> H
-        self.forward_mapper = MessagePassingMapper(
+        self.forward_mapper = GNNMapper(
             in_channels_src=self.multi_step * (self.in_channels + self.aux_in_channels)
             + self.era_latlons.shape[1]
             + self.era_trainable_size,
             in_channels_dst=self.h_latlons.shape[1] + self.h_trainable_size,
-            hidden_dim=encoder_out_channels,
-            hidden_layers=config.model.encoder.num_layers,
+            hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
-            chunks=1,
             activation=self.activation,
+            num_chunks=config.model.encoder.num_chunks,
         )
 
         # Processor H -> H
-        self.h_processor = MessagePassingProcessor(
-            hidden_dim=encoder_out_channels,
-            hidden_layers=config.model.hidden.num_layers,
+        self.h_processor = GNNProcessor(
+            hidden_dim=self.num_channels,
+            hidden_layers=config.model.processor.num_layers,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
-            chunks=2,
+            chunks=config.model.processor.chunks,
             activation=self.activation,
         )
 
         # Decoder H -> ERA5
-        self.backward_mapper = MessagePassingMapper(
-            in_channels_src=encoder_out_channels,
-            in_channels_dst=encoder_out_channels,
+        self.backward_mapper = GNNMapper(
+            in_channels_src=self.num_channels,
+            in_channels_dst=self.num_channels,
             out_channels_dst=self.in_channels,
-            hidden_dim=config.model.num_channels,
-            hidden_layers=config.model.decoder.num_layers,
+            hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
             backward_mapper=True,
-            chunks=1,
             activation=self.activation,
+            num_chunks=config.model.decoder.num_chunks,
         )
 
     def _register_latlon(self, name: str) -> None:
@@ -218,16 +222,42 @@ class GraphMSG(nn.Module):
             dim=-1,  # feature dimension
         )
 
-    def _create_processor(
+    def _expand_edges(self, edge_index: Adj, edge_inc: torch.Tensor) -> Adj:
+        """Expand edge index correct number of times while adding the proper number to
+        the edge index.
+
+        Parameters
+        ----------
+        edge_index : Adj
+            Edge index to start
+        edge_inc : torch.Tensor
+            Edge increment to use
+
+        Returns
+        -------
+        torch.Tensor
+            Edge Index
+        """
+        edge_index = torch.cat(
+            [edge_index + i * edge_inc for i in range(self.batch_size)],
+            dim=1,
+        )
+
+        return edge_index
+
+    def _run_mapper(
         self,
         mapper: nn.Module,
         data: Tuple[torch.Tensor],
-        edge_index: int,
-        edge_inc: int,
+        edge_index: Adj,
+        edge_inc: torch.Tensor,
         edge_attr: torch.Tensor,
+        shape_nodes: Tuple[List, List],
+        size: Size,
+        model_comm_group: ProcessGroup,
         use_reentrant: bool = False,
     ):
-        """Create processor from checkpoint.
+        """Run mapper with activation checkpoint.
 
         Parameters
         ----------
@@ -241,6 +271,13 @@ class GraphMSG(nn.Module):
             Edge increment to use
         edge_attr : torch.Tensor
             Trainable edge attribute tensor
+        shape_nodes: Tuple[List, List]
+            Shapes of input fileds the task holds when running with multiple GPUs
+        size: Size
+            Number of source and target nodes of bipartite graph
+        model_comm_group : ProcessGroup
+            model communication group, specifies which GPUs work together
+            in one model instance
         use_reentrant : bool, optional
             Use reentrant, by default False
 
@@ -252,16 +289,15 @@ class GraphMSG(nn.Module):
         return checkpoint(
             mapper,
             data,
-            # expand edge index correct number of times while adding the proper number to the edge index
-            edge_index=torch.cat(
-                [edge_index + i * edge_inc for i in range(self.batch_size)],
-                dim=1,
-            ),
+            edge_index=self._expand_edges(edge_index, edge_inc),
             edge_attr=edge_attr,
+            shape_nodes=shape_nodes,
+            size=size,
+            model_comm_group=model_comm_group,
             use_reentrant=use_reentrant,
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, model_comm_group: Optional[ProcessGroup] = None) -> torch.Tensor:
         self.batch_size = x.shape[0]
 
         # add ERA positional info (lat/lon)
@@ -275,25 +311,48 @@ class GraphMSG(nn.Module):
         edge_h_to_h_latent = self._fuse_trainable_tensors(self.h2h_edge_attr, self.h2h_trainable)
         edge_h_to_e_latent = self._fuse_trainable_tensors(self.h2e_edge_attr, self.h2e_trainable)
 
-        x_era_latent, x_latent = self._create_processor(
-            self.forward_mapper, (x_era_latent, x_h_latent), self.e2h_edge_index, self._e2h_edge_inc, edge_e_to_h_latent
+        # size for mappers:
+        size_fwd = (x_era_latent.shape[0], x_h_latent.shape[0])
+        size_bwd = (x_h_latent.shape[0], x_era_latent.shape[0])
+
+        # shapes of node shards:
+        shape_x_fwd = get_shape_shards(x_era_latent, 0, model_comm_group)
+        shape_h_fwd = get_shape_shards(x_h_latent, 0, model_comm_group)
+        shape_h_proc = change_channels_in_shape(shape_h_fwd, self.num_channels)
+        shape_h_bwd = shape_h_proc
+        shape_x_bwd = change_channels_in_shape(shape_x_fwd, self.num_channels)
+
+        x_era_latent, x_latent = self._run_mapper(
+            self.forward_mapper,
+            (x_era_latent, x_h_latent),
+            self.e2h_edge_index,
+            self._e2h_edge_inc,
+            edge_e_to_h_latent,
+            shape_nodes=(shape_x_fwd, shape_h_fwd),
+            size=size_fwd,
+            model_comm_group=model_comm_group,
         )
 
-        x_latent_proc = self.h_processor(  # has skipped connections and checkpoints inside
+        x_latent_proc = self.h_processor(
             x_latent,
-            # expand edge index correct number of times while adding the proper number to the edge index
-            edge_index=torch.cat(
-                [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(self.batch_size)],
-                dim=1,
-            ),
+            edge_index=self._expand_edges(self.h2h_edge_index, self._h2h_edge_inc),
             edge_attr=edge_h_to_h_latent,
+            shape_nodes=shape_h_proc,
+            model_comm_group=model_comm_group,
         )
 
         # add skip connection (H -> H)
         x_latent_proc = x_latent_proc + x_latent
 
-        _, x_out = self._create_processor(
-            self.backward_mapper, (x_latent_proc, x_era_latent), self.h2e_edge_index, self._h2e_edge_inc, edge_h_to_e_latent
+        _, x_out = self._run_mapper(
+            self.backward_mapper,
+            (x_latent_proc, x_era_latent),
+            self.h2e_edge_index,
+            self._h2e_edge_inc,
+            edge_h_to_e_latent,
+            shape_nodes=(shape_h_bwd, shape_x_bwd),
+            size=size_bwd,
+            model_comm_group=model_comm_group,
         )
 
         x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=self.batch_size)

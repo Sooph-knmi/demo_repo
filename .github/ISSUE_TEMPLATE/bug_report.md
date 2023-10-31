@@ -24,10 +24,10 @@ A clear and concise description of what you expected to happen.
 If applicable, add log location to help explain your problem.
 
 **Hardware and Environment:**
- - System [e.g. ATOS, LUMI, CCI]: 
- - Runtime [e.g. interactive, sbatch]: 
+ - System [e.g. ATOS, LUMI, CCI]:
+ - Runtime [e.g. interactive, sbatch]:
  - Special branch [e.g. e.g. main, develop]:
- - Python version [e.g. 3.11]: 
+ - Python version [e.g. 3.11]:
 
 **Additional context**
 Add any other context about the problem here.

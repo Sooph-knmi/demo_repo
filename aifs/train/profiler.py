@@ -151,6 +151,8 @@ class AIFSProfiler(AIFSTrainer):
 @hydra.main(version_base=None, config_path="../config", config_name="debug")
 def main(config: DictConfig):
     # TODO: Override wandb offline
+    if config.diagnostics.log.wandb.offline:
+        config.diagnostics.log.wandb.offline = False
 
     trainer_aifs = AIFSProfiler(config)
     with trainer_aifs.profiler.memory_profiler:
