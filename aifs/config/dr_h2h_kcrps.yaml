@@ -1,7 +1,7 @@
 defaults:
   - hardware: atos_slurm
   - data: zarr
-  - dataloader: rollout
+  - dataloader: default
   - model: gnn
   - training: default
   - diagnostics: eval_rollout

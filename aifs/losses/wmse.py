@@ -67,7 +67,6 @@ class WeightedMSELoss(nn.Module):
         torch.Tensor
             Weighted MSE loss
         """
-
         if hasattr(self, "ivar"):
             if squash:
                 out = (torch.square(pred - target) * self.ivar).mean(dim=-1)
