@@ -474,7 +474,7 @@ def plot_spread_skill_bins(
     for i, (_, pname) in enumerate(parameters.items()):
         ax_ = ax[i] if nplots > 1 else ax
         for j in range(rollout):
-            (line,) = ax_.plot(bins_spread[j, i, :], bins_rmse[j, i, :], "-o", label=str(rollout * time_step))
+            (line,) = ax_.plot(bins_spread[j, i, :], bins_rmse[j, i, :], "-o", label=str(i * time_step))
             ax_.plot(bins_spread[j, i, :], bins_spread[j, i, :], "--", color=line.get_color(), label="__nolabel__")
         ax_.legend()
         ax_.set_title(f"{pname} spread-skill binnes")
