@@ -20,7 +20,8 @@ from aifs.diagnostics.plots import plot_loss
 from aifs.diagnostics.plots import plot_predicted_ensemble
 from aifs.diagnostics.plots import plot_rank_histograms
 from aifs.diagnostics.plots import plot_spread_skill
-from aifs.distributed.helpers import gather_tensor
+from aifs.diagnostics.plots import plot_spread_skill_bins
+from aifs.utils.distributed import gather_tensor
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
@@ -206,6 +207,10 @@ class SpreadSkillPlot(PlotCallback):
         rmse, spread, bins_rmse, bins_spread = (r.cpu().numpy() for r in pl_module.spread_skill.compute())
         fig = plot_spread_skill(self.config.diagnostics.plot.parameters, (rmse, spread), pl_module.spread_skill.time_step)
         self._output_figure(trainer, fig, tag="ens_spread_skill", exp_log_tag=f"val_spread_skill_{pl_module.global_rank}")
+        fig = plot_spread_skill_bins(
+            self.config.diagnostics.plot.parameters, (bins_rmse, bins_spread), pl_module.spread_skill.time_step
+        )
+        self._output_figure(trainer, fig, tag="ens_spread_skill_bins", exp_log_tag=f"val_spread_skill_bins_{pl_module.global_rank}")
         pl_module.ranks.reset()
 
 
