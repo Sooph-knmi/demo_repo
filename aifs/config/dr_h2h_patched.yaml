@@ -1,5 +1,5 @@
 defaults:
-  - hardware: leo_slurm
+  - hardware: atos_slurm
   - data: zarr
   - dataloader: rollout
   - model: gnn
@@ -37,9 +37,10 @@ training:
   initial_seed: null
   rollout:
     start: 1
-    epoch_increment: 0
-    max: 1
+    epoch_increment: 1
+    max: 12
   ensemble_size: 4
+  max_epochs: 40
   loss: 'patched_energy'
 
 diagnostics:

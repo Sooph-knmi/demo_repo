@@ -1,5 +1,5 @@
 defaults:
-  - hardware: leo_slurm
+  - hardware: atos_slurm
   - data: zarr
   - dataloader: rollout
   - model: gnn

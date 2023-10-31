@@ -13,25 +13,27 @@
 # export NCCL_DEBUG=INFO
 # export PYTHONFAULTHANDLER=1
 export HYDRA_FULL_ERROR=1
-#export NCCL_DEBUG=TRACE
-#export TORCH_CPP_LOG_LEVEL=INFO
-#export TORCH_DISTRIBUTED_DEBUG=DETAIL
+# export NCCL_DEBUG=TRACE
+# export TORCH_CPP_LOG_LEVEL=INFO
+# export TORCH_DISTRIBUTED_DEBUG=DETAIL
 # export CUDA_LAUNCH_BLOCKING=1
 
 # on your cluster you might need these:
 # set the network interface
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
+# Name and notes optional
+export WANDB_NAME="ens-patched-h4"
+export WANDB_NOTES="patched ensemble"
 
 # generic settings
 CONDA_ENV=aifs_dev
-GITDIR=/perm/momc/AIFS/aifs-mono
+GITDIR=/home/momc/AIFS/aifs-mono
 WORKDIR=$GITDIR
 
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
 
-
 wandb offline
-srun aifs-ens-train --config-name=debug
+srun aifs-ens-train hardware=atos_slurm --config-name=debug-ens-dmp-h4
