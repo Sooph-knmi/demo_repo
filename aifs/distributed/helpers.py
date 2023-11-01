@@ -10,9 +10,16 @@ import torch
 import torch.distributed as dist
 from torch import Tensor
 from torch.distributed.distributed_c10d import ProcessGroup
+from torch_geometric.typing import Adj
+from torch_geometric.typing import Size
+from torch_geometric.utils import bipartite_subgraph
+from torch_geometric.utils import k_hop_subgraph
+from torch_geometric.utils import mask_to_index
 
 
-def shard_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -> Tensor:
+def shard_tensor(
+    input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup, gather_in_backward: Optional[bool] = True
+) -> Tensor:
     """Shard tensor.
 
     Keeps only part of the tensor that is relevant for the current rank.
@@ -27,7 +34,8 @@ def shard_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) 
         Shapes of sharded Tensors
     mgroup : ProcessGroup
         model communication group
-
+    gather_in_backward : Optional, bool
+        perform gather in backward, default True
     Returns
     -------
     Tensor
@@ -102,6 +110,53 @@ def sync_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -
     """
 
     return _SyncParallelSection.apply(input_, dim, shapes, mgroup)
+
+
+def get_1hop_edges(nodes: Tensor, edge_index: Adj, edge_attr: Tensor, num_hops: Optional[int] = 1) -> Tuple[Adj, Tensor]:
+    """Return 1 hop subgraph."""
+    nodes1, edge_index1, inv1, edge_mask1 = k_hop_subgraph(node_idx=nodes, num_hops=num_hops, edge_index=edge_index, directed=True)
+
+    return edge_index1, edge_attr[mask_to_index(edge_mask1)]
+
+
+def get_bipartite_edges(nodes_src: Tensor, nodes_dst: Tensor, edge_index: Adj, edge_attr: Tensor, size: Size) -> Tuple[Adj, Tensor]:
+    """Return bipartite subgraph."""
+    edge_index1, edge_attr1 = bipartite_subgraph((nodes_src, nodes_dst), edge_index, edge_attr, size=size)
+
+    return edge_index1, edge_attr1
+
+
+def partition_edges(
+    num_nodes: Tuple[int, Optional[int]], edge_index: Adj, edge_attr: Tensor, mgroup: Optional[ProcessGroup] = None
+) -> Tuple[Adj, Tensor, List, List]:
+    """Partition edges."""
+
+    if mgroup:
+        num_chunks = dist.get_world_size(group=mgroup)
+
+        if isinstance(num_nodes, int):
+            node_chunks = torch.arange(num_nodes, device=edge_index.device).tensor_split(num_chunks)
+        else:
+            nodes_src = torch.arange(num_nodes[0], device=edge_index.device)
+            node_chunks = torch.arange(num_nodes[1], device=edge_index.device).tensor_split(num_chunks)
+
+        edge_index_list = []
+        edge_attr_list = []
+        for node_chunk in node_chunks:
+            if isinstance(num_nodes, int):
+                edge_index_chunk, edge_attr_chunk = get_1hop_edges(node_chunk, edge_index, edge_attr)
+            else:
+                edge_index_chunk, edge_attr_chunk = get_bipartite_edges(
+                    nodes_src, node_chunk, edge_index, edge_attr, size=(num_nodes[0], num_nodes[1])
+                )
+            edge_index_list.append(edge_index_chunk)
+            edge_attr_list.append(edge_attr_chunk)
+        edge_index_shapes = [x.shape for x in edge_index_list]
+        edge_attr_shapes = [x.shape for x in edge_attr_list]
+
+        return torch.cat(edge_index_list, dim=1), torch.cat(edge_attr_list, dim=0), edge_index_shapes, edge_attr_shapes
+    else:
+        return edge_index, edge_attr, [], []
 
 
 def reduce_shard_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -> Tensor:
@@ -216,10 +271,11 @@ class _ShardParallelSection(torch.autograd.Function):
     """Split the input and keep only the relevant chunck to the rank."""
 
     @staticmethod
-    def forward(ctx, input_, dim_, shapes_, mgroup_):
+    def forward(ctx, input_, dim_, shapes_, mgroup_, gather_in_backward_=True):
         ctx.dim = dim_
         ctx.comm_group = mgroup_
         ctx.shapes = shapes_
+        ctx.gather_in_backward = gather_in_backward_
         if mgroup_:
             return _split(input_, dim_, shapes_, group=mgroup_)
         else:
@@ -229,7 +285,7 @@ class _ShardParallelSection(torch.autograd.Function):
     def backward(ctx, grad_output):
         if ctx.comm_group:
             return (
-                _gather(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
+                _gather(grad_output, ctx.dim, ctx.shapes, gather_in_backward=ctx.gather_in_backward, group=ctx.comm_group),
                 None,
                 None,
                 None,
@@ -290,8 +346,10 @@ def _split(input_: Tensor, dim_: int, shapes_: Tuple, group: Optional[ProcessGro
     if comm_size == 1:
         return input_
 
-    # Split along dim
-    input_list = split_tensor_dim(input_, dim_, comm_size)
+    # sanity checks
+    assert dim_ < input_.dim(), f"Error, cannot split along {dim_} for tensor with {input_.dim()} dimensions."
+
+    input_list = torch.split(input_, [x[dim_] for x in shapes_], dim=dim_)
 
     rank = dist.get_rank(group=group)
     output = input_list[rank].contiguous(memory_format=input_format)
@@ -299,17 +357,9 @@ def _split(input_: Tensor, dim_: int, shapes_: Tuple, group: Optional[ProcessGro
     return output
 
 
-def split_tensor_dim(tensor: Tensor, dim: int, num_chunks: int) -> List[Tensor]:
-    """Helper routine to split a tensor along a given dimension."""
-
-    assert dim < tensor.dim(), f"Error, tensor dimension is {tensor.dim()} which cannot be split along {dim}"
-
-    tensor_list = torch.tensor_split(tensor, num_chunks, dim=dim)
-
-    return tensor_list
-
-
-def _gather(input_: Tensor, dim_: int, shapes: Tuple, group: Optional[ProcessGroup] = None) -> Tensor:
+def _gather(
+    input_: Tensor, dim_: int, shapes: Tuple, gather_in_backward: Optional[bool] = True, group: Optional[ProcessGroup] = None
+) -> Tensor:
     """Gather tensors and concatinate along the last dimension."""
 
     # get input format
@@ -333,7 +383,8 @@ def _gather(input_: Tensor, dim_: int, shapes: Tuple, group: Optional[ProcessGro
     ]
 
     tensor_list[comm_rank] = input_
-    dist.all_gather(tensor_list, input_, group=group)
+    if gather_in_backward:
+        dist.all_gather(tensor_list, input_, group=group)
 
     # Note: torch.cat already creates a contiguous tensor.
     output = torch.cat(tensor_list, dim=dim_).contiguous(memory_format=input_format)

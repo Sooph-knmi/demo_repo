@@ -170,25 +170,35 @@ def to_rad(xyz, radius=1.0):
     return np.array((lat, lon), dtype=np.float32).transpose()
 
 
-def get_one_ring(sp):
+def get_x_hops(sp, hops):
     g = nx.from_edgelist(sp.edges_unique)
-    one_ring = [list(g[i].keys()) for i in range(len(sp.vertices))]
 
-    return one_ring
+    neighbs = []
+    for ii in range(len(sp.vertices)):
+        x_hop_subgraph = nx.ego_graph(g, ii, radius=hops, center=False)  # no self-loop
+        neighbs.append(set(sorted({n for n in x_hop_subgraph})))
+
+    return neighbs
 
 
-def multi_mesh2(resolutions):
-    G = nx.Graph()
+def multi_mesh2(resolutions, xhops=1):
+    G = nx.DiGraph()
+
+    assert xhops > 0, "xhops == 0, graph would have no edges ..."
 
     sp1 = create_sphere(resolutions[-1])
     sp1_rad = to_rad(sp1.vertices)
-    one_rings = get_one_ring(sp1)
+    x_hops = get_x_hops(sp1, xhops)
 
-    for ii, coords in enumerate(sp1_rad):
-        G.add_node(ii, hcoords_rad=sp1_rad[ii])
+    ind = np.argsort(sp1_rad[:, 1])
+    node_ids = np.arange(sp1_rad.shape[0])
 
-    for ii in range(len(sp1.vertices)):
-        for ineighb in one_rings[ii]:
+    for ii, coords in enumerate(sp1_rad[ind]):
+        node_id = node_ids[ind][ii]
+        G.add_node(node_id, hcoords_rad=sp1_rad[ind][ii])
+
+    for ii in node_ids[ind]:
+        for ineighb in x_hops[ii]:
             if ineighb != ii:
                 loc_self = sp1_rad[ii]
                 loc_neigh = sp1_rad[ineighb]
@@ -201,11 +211,10 @@ def multi_mesh2(resolutions):
     for resolution in resolutions[:-1]:
         sp2 = create_sphere(resolution)
         sp2_rad = to_rad(sp2.vertices)
-        one_rings = get_one_ring(sp2)
-
+        x_rings = get_x_hops(sp2, xhops)
         dist, ind1 = tree.query(sp2_rad, k=1)
         for ii in range(len(sp2.vertices)):
-            for ineighb in one_rings[ii]:
+            for ineighb in x_rings[ii]:
                 if ineighb != ii:
                     loc_dst = sp2_rad[ii]
                     loc_neigh = sp2_rad[ineighb]
@@ -214,7 +223,7 @@ def multi_mesh2(resolutions):
                     # edge_attr=(haversine_distances([loc_neigh, loc_dst])[0][1], *direction))
                     G.add_edge(ind1[ineighb][0], ind1[ii][0], weight=haversine_distances([loc_neigh, loc_dst])[0][1])
 
-    return G, sp1_rad
+    return G, sp1_rad[ind]
 
 
 # Plotting
