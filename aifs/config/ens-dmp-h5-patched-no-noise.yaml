@@ -31,6 +31,8 @@ hardware:
 
 model:
   num_channels: 512
+  hidden:
+    num_noise_channels: 0
 
 dataloader:
   batch_size:
