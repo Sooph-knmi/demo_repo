@@ -471,14 +471,24 @@ def get_callbacks(config: DictConfig) -> List:
     """
     checkpoint_settings = dict(
         dirpath=config.hardware.paths.checkpoints,
+        # monitor="val_wmse",
         verbose=False,
+        save_top_k=config.diagnostics.checkpoint.save_top_k,
         # save weights, optimizer states, LR-schedule states, hyperparameters etc.
         # https://pytorch-lightning.readthedocs.io/en/stable/common/checkpointing_basic.html#contents-of-a-checkpoint
         save_weights_only=False,
         auto_insert_metric_name=False,
         # save after every validation epoch, if we've improved
         save_on_train_epoch_end=False,
-        enable_version_counter=False,
+        enable_version_counter=True,
+    )
+
+    ckpt_frequency_save_dict = dict(
+        train_time_interval=timedelta(minutes=config.diagnostics.checkpoint.every_n_minutes)
+        if config.diagnostics.checkpoint.every_n_minutes
+        else None,
+        every_n_epochs=config.diagnostics.checkpoint.every_n_epochs,
+        every_n_train_steps=config.diagnostics.checkpoint.every_n_train_steps,
     )
 
     ckpt_frequency_save_dict = {}
@@ -493,20 +503,20 @@ def get_callbacks(config: DictConfig) -> List:
 
     trainer_callbacks = []
     if not config.diagnostics.profiler:
-        for save_key, (name, save_frequency) in ckpt_frequency_save_dict.items():
+        for save_key, save_frequency in ckpt_frequency_save_dict.items():
             if save_frequency is not None:
                 LOGGER.debug("Checkpoint callback at %s = %s ...", save_key, save_frequency)
                 trainer_callbacks.extend(
                     [
                         ModelCheckpoint(
-                            filename=name,
+                            filename=config.hardware.files.checkpoint,
                             save_last=True,
                             **{save_key: save_frequency},
                             **checkpoint_settings,
                         ),
                         InferenceCheckpoint(
                             config=config,
-                            filename="inference-" + name,
+                            filename="inference-" + config.hardware.files.checkpoint,
                             save_last=False,
                             **{save_key: save_frequency},
                             **checkpoint_settings,
