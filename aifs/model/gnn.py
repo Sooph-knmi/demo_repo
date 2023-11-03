@@ -95,6 +95,7 @@ class GraphMSG(nn.Module):
             edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
             chunks=1,
             activation=self.activation,
+            ptype="fmapper",
         )
 
         # "Noisy" processor H -> H
@@ -121,6 +122,7 @@ class GraphMSG(nn.Module):
             backward_mapper=True,
             chunks=1,
             activation=self.activation,
+            ptype="bmapper",
         )
 
     def _register_latlon(self, name: str) -> None:
