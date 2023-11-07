@@ -475,8 +475,10 @@ def plot_spread_skill_bins(
         ax_ = ax[i] if nplots > 1 else ax
         for j in range(rollout):
             (line,) = ax_.plot(bins_spread[j, i, :], bins_rmse[j, i, :], "-", label=str((j + 1) * time_step) + " hr")
-            ax_.plot(bins_spread[j, i, :], bins_spread[j, i, :], "--", color="black", label="__nolabel__")
-            ax_.set_aspect("equal")
+            ax_.plot(bins_rmse[j, i, :], bins_rmse[j, i, :], "--", color="black", label="__nolabel__")
+        bins_max = max(np.max(bins_rmse[:, i, :]), np.max(bins_spread[:, i, :]))
+        ax_.set_xlim([0, bins_max])
+        ax_.set_ylim([0, bins_max])
         ax_.legend()
         ax_.set_title(f"{pname} spread-skill binned")
         ax_.set_xlabel("Spread")
