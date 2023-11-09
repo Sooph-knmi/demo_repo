@@ -2,7 +2,7 @@ import torch
 from torch_geometric.data import HeteroData
 
 from aifs.data.era_normalizers import InputNormalizer
-from aifs.model.gnn import GraphMSG
+from aifs.model.gnn import GraphTransformer
 from aifs.utils.config import DotConfig
 
 
@@ -20,7 +20,7 @@ class AIFSModelGNN(torch.nn.Module):
     def _build_model(self):
         """Build the model and input normaliser."""
         self.normalizer = InputNormalizer(self.metadata)
-        self.model = GraphMSG(self.config, graph_data=self.graph_data)
+        self.model = GraphTransformer(self.config, graph_data=self.graph_data)
         self.forward = self.model.forward
 
     def predict_step(self, x: torch.Tensor) -> torch.Tensor:

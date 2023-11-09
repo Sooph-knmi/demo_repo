@@ -7,19 +7,16 @@ import torch
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
-from torch_geometric.utils import contains_isolated_nodes
-from torch_geometric.utils import dropout_edge
-from torch_geometric.utils import mask_select
 
-from aifs.model.layers import MessagePassingMapper
-from aifs.model.layers import NoisyMessagePassingProcessor
+from aifs.model.layers import GNNMapper
+from aifs.model.layers import GNNProcessor
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
 
 
-class GraphMSG(nn.Module):
+class GraphTransformer(nn.Module):
     """Message passing graph neural network."""
 
     def __init__(
@@ -53,7 +50,7 @@ class GraphMSG(nn.Module):
         # Create Graph edges
         self._create_edges()
 
-        # Define Sizes of different tensors
+        # Define sizes of different tensors
         self._era_size = self._graph_data[("era", "to", "era")].ecoords_rad.shape[0]
         self._h_size = self._graph_data[("h", "to", "h")].hcoords_rad.shape[0]
 
@@ -78,32 +75,27 @@ class GraphMSG(nn.Module):
         encoder_out_channels = config.model.num_channels
         mlp_extra_layers = config.model.mlp.extra_layers
 
-        # Dropout options
+        # Dropout options (just on MLPs, for now)
         mlp_dropout = config.model.mlp.dropout
-        self.dropout_h2e = config.model.edge_dropout.h2e
-        self.dropout_h2h = config.model.edge_dropout.h2h
 
         # Encoder from ERA -> H
-        self.forward_mapper = MessagePassingMapper(
+        self.forward_mapper = GNNMapper(
             in_channels_src=self.multi_step * (self.in_channels + self.aux_in_channels)
             + self.era_latlons.shape[1]
             + self.era_trainable_size,
             in_channels_dst=self.h_latlons.shape[1] + self.h_trainable_size,
             hidden_dim=encoder_out_channels,
-            hidden_layers=config.model.encoder.num_layers,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
-            chunks=1,
             activation=self.activation,
-            ptype="fmapper",
         )
 
         # "Noisy" processor H -> H
-        self.h_processor = NoisyMessagePassingProcessor(
-            hidden_dim=encoder_out_channels,
-            noise_dim=self.noise_channels,
+        self.h_processor = GNNProcessor(
+            hidden_dim=encoder_out_channels + self.noise_channels,
             hidden_layers=config.model.hidden.num_layers,
             edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
+            output_dim=encoder_out_channels,
             chunks=2,
             mlp_extra_layers=mlp_extra_layers,
             mlp_dropout=mlp_dropout,
@@ -111,18 +103,15 @@ class GraphMSG(nn.Module):
         )
 
         # Decoder H -> ERA5
-        self.backward_mapper = MessagePassingMapper(
+        self.backward_mapper = GNNMapper(
             in_channels_src=encoder_out_channels,
             in_channels_dst=encoder_out_channels,
             out_channels_dst=self.in_channels,
             hidden_dim=config.model.num_channels,
-            hidden_layers=config.model.decoder.num_layers,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
             backward_mapper=True,
-            chunks=1,
             activation=self.activation,
-            ptype="bmapper",
         )
 
     def _register_latlon(self, name: str) -> None:
@@ -280,48 +269,6 @@ class GraphMSG(nn.Module):
             use_reentrant=use_reentrant,
         )
 
-    def dropout_edge_force_undirected(
-        self, edge_index: torch.Tensor, p: float = 0.5, training: bool = True
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Randomly drops edges from the adjacency matrix
-        :obj:`edge_index` with probability :obj:`p` using samples from
-        a Bernoulli distribution.
-
-        If an edge is dropped in one direction then it will be automatically dropped in
-        the other direction ie. will either drop or keep both edges
-
-        Parameters
-        ----------
-        edge_index : Tensor
-            Edge index to start
-        p : int
-            Dropout rate
-        training" (bool, optional)
-            If set to False then this operation does not occur during training
-
-        Returns
-        -------
-        edge_index : Tensor
-            New edge index with dropped-out edges
-        edge_mask : Tensor
-            Masked Tensor with edges to be dropped
-
-        """
-
-        # dropout edges using torch geometric functionality
-        _, edge_mask = dropout_edge(edge_index, p=p, training=training)
-        row, col = edge_index
-
-        #  in one direction so that only have unidirectional edges
-        edge_mask[row > col] = False
-
-        # remo
-        edge_index = edge_index[:, edge_mask]
-
-        edge_index_concat = torch.cat([edge_index, edge_index.flip(0)], dim=1)
-
-        return edge_index_concat, edge_mask
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward operator.
 
@@ -332,40 +279,6 @@ class GraphMSG(nn.Module):
         """
         bs, e = x.shape[0], x.shape[1]
         bse = bs * e  # merge the batch and ensemble dimensions
-
-        if self.dropout_h2e > 0:
-            isolated_nodes_h2e = True
-
-            total_num_h2e_nodes = self.h2e_edge_index.max() + 1
-
-            while isolated_nodes_h2e:
-                edge_index_h2e_edge, edge_h2e_mask = dropout_edge(self.h2e_edge_index, p=self.dropout_h2e)
-                isolated_nodes_h2e = contains_isolated_nodes(edge_index_h2e_edge, num_nodes=total_num_h2e_nodes)
-
-        else:
-            edge_index_h2e_edge, edge_h2e_mask = dropout_edge(self.h2e_edge_index, p=0)
-
-        if self.dropout_h2h > 0:
-            isolated_nodes_h2h = True
-
-            total_num_h2h_nodes = self._h_size
-
-            while isolated_nodes_h2h:
-                edge_index_h2h_edge, edge_h2h_mask = self.dropout_edge_force_undirected(self.h2h_edge_index, p=self.dropout_h2h)
-                isolated_nodes_h2h = contains_isolated_nodes(edge_index_h2h_edge, num_nodes=total_num_h2h_nodes)
-
-            edge_attr = self.h2h_edge_attr[edge_h2h_mask, :]
-
-            h2h_attr = torch.cat([edge_attr, edge_attr], dim=0)
-
-            if self.h2h_trainable is not None:
-                h2h_train = self.h2h_trainable[edge_h2h_mask, :]
-                h2h_trainable = torch.cat([h2h_train, h2h_train], dim=0)
-
-        else:
-            edge_index_h2h_edge = self.h2h_edge_index
-            h2h_attr = self.h2h_edge_attr
-            h2h_trainable = self.h2h_trainable
 
         # add ERA positional info (lat/lon)
         x_era_latent = torch.cat(
@@ -378,10 +291,8 @@ class GraphMSG(nn.Module):
 
         x_h_latent = self._fuse_trainable_tensors(self.h_latlons, bse, self.h_trainable)
         edge_e_to_h_latent = self._fuse_trainable_tensors(self.e2h_edge_attr, bse, self.e2h_trainable)
-        edge_h_to_h_latent = self._fuse_trainable_tensors(h2h_attr, bse, h2h_trainable)
-        edge_h_to_e_latent = self._fuse_trainable_tensors(
-            mask_select(self.h2e_edge_attr, 0, edge_h2e_mask), bse, mask_select(self.h2e_trainable, 0, edge_h2e_mask)
-        )
+        edge_h_to_h_latent = self._fuse_trainable_tensors(self.h2h_edge_attr, bse, self.h2h_trainable)
+        edge_h_to_e_latent = self._fuse_trainable_tensors(self.h2e_edge_attr, bse, self.h2e_trainable)
 
         x_era_latent, x_latent = self._create_processor(
             self.forward_mapper,
@@ -397,9 +308,9 @@ class GraphMSG(nn.Module):
 
         x_latent_proc = self.h_processor(
             # concat noise tensor to the latent features
-            x_noisy=torch.cat([x_latent, z], dim=-1),
+            x=torch.cat([x_latent, z], dim=-1),
             edge_index=torch.cat(
-                [edge_index_h2h_edge + i * self._h2h_edge_inc for i in range(bse)],
+                [self.h2h_edge_index + i * self._h2h_edge_inc for i in range(bse)],
                 dim=1,
             ),
             edge_attr=edge_h_to_h_latent,
@@ -411,7 +322,7 @@ class GraphMSG(nn.Module):
         _, x_out = self._create_processor(
             self.backward_mapper,
             (x_latent_proc, x_era_latent),
-            edge_index_h2e_edge,
+            self.h2e_edge_index,
             self._h2e_edge_inc,
             edge_h_to_e_latent,
             bse,
@@ -426,23 +337,79 @@ class GraphMSG(nn.Module):
 
 
 if __name__ == "__main__":
+    # you'll need to run this test on a worker node
+    from pathlib import Path
+    from hydra import compose, initialize
+    from torch_geometric import seed_everything
 
-    def dropout_edge_force_undirected(
-        edge_index: torch.Tensor, p: float = 0.5, training: bool = True
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        _, edge_mask = dropout_edge(edge_index, p=p, training=training)
-        row, col = edge_index
+    # from torch.profiler import profile, record_function, ProfilerActivity
 
-        edge_mask[row > col] = False
+    from timeit import default_timer as timer
 
-        edge_index = edge_index[:, edge_mask]
+    initialize(config_path="../config", job_name="test_msg")
+    cfg_ = compose(
+        config_name="ens-transformer-h4",
+        overrides=[
+            # "model.trainable_parameters.era=8",
+            # "model.trainable_parameters.hidden=8",
+            # "model.trainable_parameters.era2hidden=8",
+            # "model.trainable_parameters.hidden2era=8",
+            # "model.trainable_parameters.hidden2hidden=8",
+            # "model.num_channels=128",
+            # "dataloader.batch_size.training=1",
+            # "dataloader.batch_size.validation=1",
+            # "data.num_features=98",
+            # "data.num_aux_features=13",
+            # "training.multistep_input=2",
+            # 'hardware.paths.graph="/home/mlx/data/graphs/"',
+            # 'hardware.files.graph="graph_mappings_normed_edge_attrs_2023062700_o96_h_0_1_2_3_4.pt"',
+        ],
+    )
 
-        edge_index_concat = torch.cat([edge_index, edge_index.flip(0)], dim=1)
+    seed_everything(1234)
 
-        return edge_index_concat, edge_mask
+    def count_parameters(model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    edge_tensor = torch.tensor([[0, 1, 1, 2, 2, 3], [1, 0, 2, 1, 3, 2]])
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    LOGGER.debug("Running on device: %s ...", device)
 
-    edge_index_mc, edge_mask_mc = dropout_edge_force_undirected(edge_tensor, p=0.2)
+    graph_data = torch.load(Path(cfg_.hardware.paths.graph, cfg_.hardware.files.graph))
+    tgnn_ = GraphTransformer(cfg_, graph_data=graph_data).to(device)
 
-    edge_index_torch, edge_mask_torch = dropout_edge(edge_tensor, p=0.2, force_undirected=True)
+    _ERA_SIZE = tgnn_._era_size
+    x_input = torch.randn(
+        cfg_.dataloader.batch_size.training,
+        cfg_.training.ensemble_size,
+        cfg_.training.multistep_input,
+        _ERA_SIZE,
+        cfg_.data.num_features,
+    ).to(device)
+
+    LOGGER.debug("Input shape: %s", x_input.shape)
+    start = timer()
+
+    # with profile(activities=[ProfilerActivity.CUDA], record_shapes=True, profile_memory=True, with_stack=True) as prof:
+
+    y_pred = tgnn_(x_input)
+    LOGGER.debug("Output shape: %s", y_pred.shape)
+    LOGGER.debug("Model parameter count: %d M", count_parameters(tgnn_) / 1.0e6)
+
+    loss = y_pred.sum()
+    LOGGER.debug("Running backward on a dummy loss ...")
+    loss.backward()
+
+    end = timer()
+    LOGGER.debug("Ran backward. All good!")
+
+    # LOGGER.debug(prof.key_averages().table(sort_by="cuda_time_total", row_limit=50))
+
+    LOGGER.debug("Runtime %.1f s", (end - start))
+
+    for pname, pval in tgnn_.named_parameters():
+        if pval.grad is None:
+            print(pname)
+
+    if torch.cuda.is_available():
+        LOGGER.debug("max memory allocated:  %5.1f MB", torch.cuda.max_memory_allocated(torch.device(0)) / (1000.0 * 1024))
+        LOGGER.debug("max memory reserved:   %5.1f MB", torch.cuda.max_memory_reserved(torch.device(0)) / (1000.0 * 1024))

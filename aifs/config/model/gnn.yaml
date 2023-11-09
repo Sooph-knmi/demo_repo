@@ -14,7 +14,7 @@ decoder:
 
 hidden:
   num_layers: 16
-  num_noise_channels: 1
+  num_noise_channels: 8
 
 # choose rate of dropout of edges
 edge_dropout:
