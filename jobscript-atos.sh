@@ -2,13 +2,13 @@
 
 #SBATCH --account=ecaifs
 #SBATCH --qos=ng
-#SBATCH --nodes=3
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
-#SBATCH --time=48:00:00
-#SBATCH --output=ens-kcrps-h5-atos-roll28.out.%j
+#SBATCH --time=01:00:00
+#SBATCH --output=ens-kcrps-h5-transformer-test.out.%j
 
 # debugging flags (optional)
 # export NCCL_DEBUG=INFO
@@ -24,15 +24,15 @@ export HYDRA_FULL_ERROR=1
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="ens-kcrps-h5-atos-roll28"
-export WANDB_NOTES="KCRPS ensemble (reweighted loss, rollout 2-8)"
+export WANDB_NAME="ens-kcrps-h5-transformer-test"
+export WANDB_NOTES="KCRPS ensemble w/ graph transformer"
 
 # generic settings
-CONDA_ENV=aifs-ens-dev
-GITDIR=/home/syma/GNN/aifs-temp/aifs-mono
+CONDA_ENV=aifs-torch21-dev
+GITDIR=/home/syma/AIFS/aifs-ens-transformer/aifs-mono
 WORKDIR=$GITDIR
 
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-srun aifs-ens-train hardware=atos_slurm --config-name=ens-dmp-h5-roll28
+srun aifs-ens-train hardware=atos_slurm --config-name=ens-transformer-h5
