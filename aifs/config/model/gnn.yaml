@@ -1,19 +1,23 @@
 # specific GNN encoder settings
 activation: SiLU
-num_channels: 512
+num_channels: 1024
 
 mlp:
   extra_layers: 0
 
-encoder:
-  num_chunks: 1
-
-decoder:
-  num_chunks: 1
-
 processor:
   num_layers: 16
   chunks: 2
+  heads: 16
+  mlp_hidden_ratio: 4
+
+encoder:
+  heads: 16
+  mlp_hidden_ratio: 4
+
+decoder:
+  heads: 16
+  mlp_hidden_ratio: 4
 
 trainable_parameters:
   era: 8

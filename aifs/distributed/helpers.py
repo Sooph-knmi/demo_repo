@@ -41,7 +41,7 @@ def shard_tensor(
     Tensor
     """
 
-    return _ShardParallelSection.apply(input_, dim, shapes, mgroup)
+    return _ShardParallelSection.apply(input_, dim, shapes, gather_in_backward, mgroup)
 
 
 def gather_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -> Tensor:
@@ -271,7 +271,7 @@ class _ShardParallelSection(torch.autograd.Function):
     """Split the input and keep only the relevant chunck to the rank."""
 
     @staticmethod
-    def forward(ctx, input_, dim_, shapes_, mgroup_, gather_in_backward_=True):
+    def forward(ctx, input_, dim_, shapes_, gather_in_backward_, mgroup_):
         ctx.dim = dim_
         ctx.comm_group = mgroup_
         ctx.shapes = shapes_
@@ -289,9 +289,10 @@ class _ShardParallelSection(torch.autograd.Function):
                 None,
                 None,
                 None,
+                None,
             )
         else:
-            return grad_output, None, None, None
+            return grad_output, None, None, None, None
 
 
 class _GatherParallelSection(torch.autograd.Function):

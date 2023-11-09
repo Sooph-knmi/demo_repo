@@ -88,9 +88,10 @@ class GraphMSG(nn.Module):
             in_channels_dst=self.h_latlons.shape[1] + self.h_trainable_size,
             hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
+            heads=config.model.encoder.heads,
+            mlp_hidden_ratio=config.model.encoder.mlp_hidden_ratio,
             edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
             activation=self.activation,
-            num_chunks=config.model.encoder.num_chunks,
         )
 
         # Processor H -> H
@@ -100,6 +101,8 @@ class GraphMSG(nn.Module):
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
             chunks=config.model.processor.chunks,
+            heads=config.model.processor.heads,
+            mlp_hidden_ratio=config.model.processor.mlp_hidden_ratio,
             activation=self.activation,
         )
 
@@ -110,10 +113,11 @@ class GraphMSG(nn.Module):
             out_channels_dst=self.in_channels,
             hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
+            heads=config.model.decoder.heads,
+            mlp_hidden_ratio=config.model.decoder.mlp_hidden_ratio,
             edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
             backward_mapper=True,
             activation=self.activation,
-            num_chunks=config.model.decoder.num_chunks,
         )
 
     def _register_latlon(self, name: str) -> None:
