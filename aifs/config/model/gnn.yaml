@@ -1,11 +1,12 @@
 # specific GNN encoder settings
-activation: SiLU
+activation: GELU
 num_channels: 1024
 
 mlp:
   extra_layers: 0
 
 processor:
+  type: GNN # GNN or Transformer
   num_layers: 16
   chunks: 2
   heads: 16

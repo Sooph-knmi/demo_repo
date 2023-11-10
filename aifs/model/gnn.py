@@ -17,6 +17,7 @@ from aifs.distributed.helpers import change_channels_in_shape
 from aifs.distributed.helpers import get_shape_shards
 from aifs.model.layers import GNNMapper
 from aifs.model.layers import GNNProcessor
+from aifs.model.layers import TransformerProcessor
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
@@ -51,6 +52,12 @@ class GraphMSG(nn.Module):
         LOGGER.debug("self.in_channels + self.aux_channels == %d", self.in_channels + self.aux_in_channels)
 
         self.activation = config.model.activation
+
+        assert config.model.processor.type in [
+            "GNN",
+            "Transformer",
+        ], "Processor type not supported, supported are only GNN and Transformer"
+        self.processor_type = config.model.processor.type
 
         # Create Graph edges
         self._create_edges()
@@ -95,16 +102,26 @@ class GraphMSG(nn.Module):
         )
 
         # Processor H -> H
-        self.h_processor = GNNProcessor(
-            hidden_dim=self.num_channels,
-            hidden_layers=config.model.processor.num_layers,
-            mlp_extra_layers=mlp_extra_layers,
-            edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
-            chunks=config.model.processor.chunks,
-            heads=config.model.processor.heads,
-            mlp_hidden_ratio=config.model.processor.mlp_hidden_ratio,
-            activation=self.activation,
-        )
+        if self.processor_type == "GNN":
+            self.h_processor = GNNProcessor(
+                hidden_dim=self.num_channels,
+                hidden_layers=config.model.processor.num_layers,
+                mlp_extra_layers=mlp_extra_layers,
+                edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
+                chunks=config.model.processor.chunks,
+                heads=config.model.processor.heads,
+                mlp_hidden_ratio=config.model.processor.mlp_hidden_ratio,
+                activation=self.activation,
+            )
+
+        if self.processor_type == "Transformer":
+            self.h_processor = TransformerProcessor(
+                hidden_dim=self.num_channels,
+                hidden_layers=config.model.processor.num_layers,
+                heads=config.model.processor.heads,
+                mlp_hidden_ratio=config.model.processor.mlp_hidden_ratio,
+                activation=self.activation,
+            )
 
         # Decoder H -> ERA5
         self.backward_mapper = GNNMapper(
@@ -169,7 +186,8 @@ class GraphMSG(nn.Module):
         self.h_trainable = self._create_trainable_tensor(tensor_size=self._h_size, trainable_size=self.h_trainable_size)
         self.e2h_trainable = self._create_trainable_tensor(graph=("era", "h"), trainable_size=self.e2h_trainable_size)
         self.h2e_trainable = self._create_trainable_tensor(graph=("h", "era"), trainable_size=self.h2e_trainable_size)
-        self.h2h_trainable = self._create_trainable_tensor(graph=("h", "h"), trainable_size=self.h2h_trainable_size)
+        if self.processor_type == "GNN":
+            self.h2h_trainable = self._create_trainable_tensor(graph=("h", "h"), trainable_size=self.h2h_trainable_size)
 
     def _create_trainable_tensor(
         self, trainable_size: int, tensor_size: Optional[int] = None, graph: Optional[Tuple[str]] = None
@@ -313,7 +331,8 @@ class GraphMSG(nn.Module):
 
         x_h_latent = self._fuse_trainable_tensors(self.h_latlons, self.h_trainable)
         edge_e_to_h_latent = self._fuse_trainable_tensors(self.e2h_edge_attr, self.e2h_trainable)
-        edge_h_to_h_latent = self._fuse_trainable_tensors(self.h2h_edge_attr, self.h2h_trainable)
+        if self.processor_type == "GNN":
+            edge_h_to_h_latent = self._fuse_trainable_tensors(self.h2h_edge_attr, self.h2h_trainable)
         edge_h_to_e_latent = self._fuse_trainable_tensors(self.h2e_edge_attr, self.h2e_trainable)
 
         # size for mappers and processor:
@@ -339,14 +358,21 @@ class GraphMSG(nn.Module):
             model_comm_group=model_comm_group,
         )
 
-        x_latent_proc = self.h_processor(
-            x_latent,
-            edge_index=self._expand_edges(self.h2h_edge_index, self._h2h_edge_inc),
-            edge_attr=edge_h_to_h_latent,
-            shape_nodes=shape_h_proc,
-            size=size_proc,
-            model_comm_group=model_comm_group,
-        )
+        if self.processor_type == "GNN":
+            x_latent_proc = self.h_processor(
+                x_latent,
+                edge_index=self._expand_edges(self.h2h_edge_index, self._h2h_edge_inc),
+                edge_attr=edge_h_to_h_latent,
+                shape_nodes=shape_h_proc,
+                size=size_proc,
+                model_comm_group=model_comm_group,
+            )
+
+        if self.processor_type == "Transformer":
+            x_latent_proc = self.h_processor(
+                x_latent,
+                batch_size=self.batch_size,
+            )
 
         # add skip connection (H -> H)
         x_latent_proc = x_latent_proc + x_latent

@@ -2,8 +2,10 @@ import math
 from typing import Optional
 from typing import Tuple
 
+import einops
 import torch
 import torch.nn.functional as F
+from local_attention import LocalAttention
 from torch import nn
 from torch import Tensor
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import offload_wrapper
@@ -547,6 +549,134 @@ class TransformerConv(MessagePassing):
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)
 
         return value_j * alpha.view(-1, self.heads, 1)  # + edge_attr to value_j?
+
+
+class TransformerProcessor(nn.Module):
+    """Message Passing Processor Graph Neural Network."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        hidden_layers: int,
+        heads: int = 16,
+        mlp_hidden_ratio: int = 4,
+        activation: str = "GELU",
+    ) -> None:
+        """Initialize TransformerProcessor.
+
+        Parameters
+        ----------
+        hidden_dim : int
+            Hidden dimension
+        hidden_layers : int
+            Number of hidden layers
+        heads: int
+            Number of heads to use, default 16
+        mlp_hidden_ratio: int
+            ratio of mlp hidden dimension to embedding dimension, default 4
+        activation : str, optional
+            Activation function, by default "GELU"
+        """
+        super().__init__()
+
+        self.hidden_layers = hidden_layers
+
+        self.proc = nn.ModuleList(
+            [
+                AttentionBlock(
+                    channels=hidden_dim,
+                    hidden_dim=mlp_hidden_ratio * hidden_dim,
+                    num_heads=heads,
+                    activation=activation,
+                )
+                for _ in range(self.hidden_layers)
+            ]
+        )
+
+    def forward(self, x: Tensor, batch_size: int) -> Tensor:
+        for i in range(self.hidden_layers):
+            x = checkpoint(self.proc[i], x, batch_size, use_reentrant=False)
+
+        return x
+
+
+class AttentionBlock(nn.Module):
+    def __init__(self, channels, hidden_dim, num_heads, activation):
+        """
+        Attention Block ...
+        """
+        super().__init__()
+
+        try:
+            act_func = getattr(nn, activation)
+        except AttributeError as ae:
+            LOGGER.error("Activation function %s not supported", activation)
+            raise RuntimeError from ae
+
+        self.lnorm1 = nn.LayerNorm(channels)
+        self.mhsa = MultiHeadSelfAttention(num_heads=num_heads, embed_dimension=channels, bias=False, is_causal=False, dropout=0.0)
+        self.proj = nn.Linear(channels, channels, bias=True)
+
+        self.mlp = nn.Sequential(
+            nn.Linear(channels, hidden_dim),
+            act_func(),
+            nn.Linear(hidden_dim, channels),
+        )
+        self.lnorm2 = nn.LayerNorm(channels)
+
+    def forward(self, x: Tensor, batch_size: int) -> Tensor:
+        x1 = x
+        x = self.lnorm1(x)
+        x = self.proj(self.mhsa(x, batch_size)) + x1
+        x = self.mlp(self.lnorm2(x)) + x
+
+        return x
+
+
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(self, num_heads: int, embed_dimension: int, bias: bool = False, is_causal: bool = False, dropout: float = 0.0):
+        super().__init__()
+
+        assert embed_dimension % num_heads == 0
+
+        self.lin_qkv = nn.Linear(embed_dimension, 3 * embed_dimension, bias=bias)
+        # self.attn = F.scaled_dot_product_attention
+
+        self.dropout = dropout
+        self.num_heads = num_heads
+        self.embed_dimension = embed_dimension
+        self.head_dim = embed_dimension // num_heads  # q k v
+
+        self.is_causal = is_causal
+
+        self.atten = LocalAttention(
+            dim=self.head_dim,
+            window_size=128,
+            causal=is_causal,
+            autopad=True,
+            scale=None,
+            exact_windowsize=False,
+            use_xpos=False,
+            xpos_scale_base=None,
+            look_forward=1,
+            dropout=self.dropout,
+        )
+
+    def forward(self, x, batch_size):
+        # x = einops.rearrange(x, '(b n) c -> b n c', b=batch_size)
+        # query, key, value = self.lin_qkv(x).chunk(3, -1) # split this up to save memory?
+        # query, key, value = map(lambda t: einops.rearrange(t, 'b n (h c) -> b h n c', h = self.num_heads), (query, key, value))
+
+        query, key, value = self.lin_qkv(x).chunk(3, -1)
+        query, key, value = map(
+            lambda t: einops.rearrange(t, "(b n) (h c) -> b h n c", b=batch_size, h=self.num_heads), (query, key, value)
+        )
+
+        # out = self.atten(query, key, value, attn_mask=None, dropout_p=dropout, is_causal=is_causal)
+        out = self.atten(query, key, value, mask=None, attn_bias=None)
+        out = einops.rearrange(out, "b h n c -> (b n) (h c)")
+
+        return out
 
 
 class CheckpointWrapper(nn.Module):
