@@ -1,7 +1,9 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -30,22 +32,40 @@ class PlotCallback(Callback):
         self.plot_frequency = config.diagnostics.plot.frequency
         init_plot_settings()
 
-    def _output_figure(self, trainer, fig, tag: str = "gnn", exp_log_tag: str = "val_pred_sample") -> None:
+    def _output_figure(self, trainer, fig, epoch: int, tag: str = "gnn", exp_log_tag: str = "val_pred_sample") -> None:
         """Figure output: save to file and/or display in notebook."""
         if self.save_basedir is not None:
             save_path = Path(
                 self.save_basedir,
                 "plots",
-                f"{tag}_epoch{trainer.current_epoch:03d}.png",
+                f"{tag}_epoch{epoch:03d}.png",
             )
 
             save_path.parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(save_path, dpi=100)
+            fig.savefig(save_path, dpi=100, bbox_inches="tight")
             if self.config.diagnostics.log.wandb.enabled:
                 import wandb
 
                 trainer.logger.experiment.log({exp_log_tag: wandb.Image(fig)})
         plt.close(fig)  # cleanup
+
+
+class AsyncPlotCallback(PlotCallback):
+    """Factory for creating a callback that plots data to Weights and Biases."""
+
+    def __init__(self, config):
+        super().__init__(config)
+
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._error: Optional[BaseException] = None
+
+    def teardown(self, trainer, pl_module, stage) -> None:
+        """This method is called to close the threads."""
+        self._executor.shutdown(wait=True)
+
+        # if an error was raised anytime in any of the `executor.submit` calls
+        if self._error:
+            raise self._error
 
 
 class RolloutEval(Callback):
@@ -137,7 +157,7 @@ class RolloutEval(Callback):
             self._eval(pl_module, batch)
 
 
-class GraphTrainableFeaturesPlot(PlotCallback):
+class GraphTrainableFeaturesPlot(AsyncPlotCallback):
     """Visualize the trainable features defined at the ERA and H graph nodes, if any.
 
     TODO: How best to visualize the learned edge embeddings? Offline, perhaps - using code from @Simon's notebook?
@@ -146,24 +166,46 @@ class GraphTrainableFeaturesPlot(PlotCallback):
     def __init__(self, config):
         super().__init__(config)
 
+    def _plot(
+        # self, trainer, latlons:np.ndarray, features:np.ndarray, tag:str, exp_log_tag:str
+        self,
+        trainer,
+        latlons,
+        features,
+        epoch,
+        tag,
+        exp_log_tag,
+    ) -> None:
+        fig = plot_graph_features(latlons, features)
+        self._output_figure(trainer, fig, epoch=epoch, tag=tag, exp_log_tag=exp_log_tag)
+
     def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         if pl_module.global_rank == 0:
             model = pl_module.model.module.model if hasattr(pl_module.model, "module") else pl_module.model.model
             graph = pl_module.graph_data
-
-            ecoords = np.rad2deg(graph[("era", "to", "era")].ecoords_rad.numpy())
-            hcoords = np.rad2deg(graph[("h", "to", "h")].hcoords_rad.numpy())
+            epoch = trainer.current_epoch
 
             if model.era_trainable is not None:
-                fig = plot_graph_features(ecoords, model.era_trainable.cpu())
-                self._output_figure(trainer, fig, tag="era_trainable", exp_log_tag="era_trainable")
+                ecoords = np.rad2deg(graph[("era", "to", "era")].ecoords_rad.numpy())
+
+                self._executor.submit(
+                    self._plot,
+                    trainer,
+                    ecoords,
+                    model.era_trainable.cpu(),
+                    epoch=epoch,
+                    tag="era_trainable",
+                    exp_log_tag="era_trainable",
+                )
 
             if model.h_trainable is not None:
-                fig = plot_graph_features(hcoords, model.h_trainable.cpu())
-                self._output_figure(trainer, fig, tag="h_trainable", exp_log_tag="h_trainable")
+                hcoords = np.rad2deg(graph[("h", "to", "h")].hcoords_rad.numpy())
+                self._executor.submit(
+                    self._plot, trainer, hcoords, model.h_trainable.cpu(), epoch=epoch, tag="h_trainable", exp_log_tag="h_trainable"
+                )
 
 
-class PlotLoss(PlotCallback):
+class PlotLoss(AsyncPlotCallback):
     """Plots the unsqueezed loss over rollouts."""
 
     def __init__(self, config):
@@ -176,7 +218,7 @@ class PlotLoss(PlotCallback):
         pl_module,
         outputs,
         batch,
-        batch_idx,
+        epoch,
     ) -> None:
         for rollout_step in range(pl_module.rollout):
             y_hat = outputs[1][rollout_step]
@@ -184,20 +226,22 @@ class PlotLoss(PlotCallback):
             loss = pl_module.loss(y_hat, y_true, squash=False).cpu().numpy()
 
             fig = plot_loss(loss)
-            fig.tight_layout()
             self._output_figure(
                 trainer,
                 fig,
+                epoch=epoch,
                 tag=f"loss_rstep_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
                 exp_log_tag=f"loss_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
             )
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
-            self._plot(trainer, pl_module, outputs, batch, batch_idx)
+            self._executor.submit(self._plot, trainer, pl_module, outputs, batch, epoch=trainer.current_epoch)
+            if self._error:
+                raise self._error
 
 
-class PlotSample(PlotCallback):
+class PlotSample(AsyncPlotCallback):
     """Plots a denormalized sample: input, target and prediction."""
 
     def __init__(self, config):
@@ -212,6 +256,7 @@ class PlotSample(PlotCallback):
         outputs,
         batch,
         batch_idx,
+        epoch,
     ) -> None:
         data = (
             pl_module.model.normalizer.denormalize(
@@ -236,17 +281,20 @@ class PlotSample(PlotCallback):
                 .numpy(),
             )
 
-            fig.tight_layout()
             self._output_figure(
                 trainer,
                 fig,
+                epoch=epoch,
                 tag=f"gnn_pred_val_sample_rstep{rollout_step:02d}_batch{batch_idx:04d}_rank0",
                 exp_log_tag=f"val_pred_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
             )
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
-            self._plot(trainer, pl_module, outputs, batch, batch_idx)
+            self._executor.submit(self._plot, trainer, pl_module, outputs, batch, batch_idx, epoch=trainer.current_epoch)
+
+            if self._error:
+                raise self._error
 
 
 class InferenceCheckpoint(ModelCheckpoint):
