@@ -23,7 +23,6 @@ model:
   num_channels: 128
   edge_dropout:
     h2h: 0.1
-    h2e: 0
 
 dataloader:
   batch_size:

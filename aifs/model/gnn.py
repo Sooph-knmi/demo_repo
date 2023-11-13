@@ -1,3 +1,4 @@
+from typing import List
 from typing import Optional
 from typing import Tuple
 
@@ -5,14 +6,18 @@ import einops
 import numpy as np
 import torch
 from torch import nn
+from torch.distributed.distributed_c10d import ProcessGroup
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
+from torch_geometric.typing import Adj
+from torch_geometric.typing import Size
 from torch_geometric.utils import contains_isolated_nodes
 from torch_geometric.utils import dropout_edge
-from torch_geometric.utils import mask_select
 
-from aifs.model.layers import MessagePassingMapper
-from aifs.model.layers import NoisyMessagePassingProcessor
+from aifs.distributed.helpers import change_channels_in_shape
+from aifs.distributed.helpers import get_shape_shards
+from aifs.model.layers import GNNMapper
+from aifs.model.layers import GNNProcessor
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
@@ -43,10 +48,10 @@ class GraphMSG(nn.Module):
         self.in_channels = config.data.num_features - config.data.num_aux_features
         self.multi_step = config.training.multistep_input
         self.aux_in_channels = config.data.num_aux_features
-        self.noise_channels = config.model.hidden.num_noise_channels
+        self.proc_noise_channels = config.model.hidden.num_noise_channels
 
         LOGGER.debug("in_channels + aux_channels == %d", self.in_channels + self.aux_in_channels)
-        LOGGER.debug("noise_channels = %d", self.noise_channels)
+        LOGGER.debug("processor noise channels = %d", self.proc_noise_channels)
 
         self.activation = config.model.activation
 
@@ -75,52 +80,49 @@ class GraphMSG(nn.Module):
         self._register_latlon("era")
         self._register_latlon("h")
 
-        encoder_out_channels = config.model.num_channels
+        self.num_channels = config.model.num_channels
         mlp_extra_layers = config.model.mlp.extra_layers
 
         # Dropout options
-        mlp_dropout = config.model.mlp.dropout
-        self.dropout_h2e = config.model.edge_dropout.h2e
-        self.dropout_h2h = config.model.edge_dropout.h2h
+        mlp_dropout = config.model.mlp.dropout  # MLPs
+        self.dropout_h2h = config.model.edge_dropout.h2h  # processor edges
 
         # Encoder from ERA -> H
-        self.forward_mapper = MessagePassingMapper(
+        self.forward_mapper = GNNMapper(
             in_channels_src=self.multi_step * (self.in_channels + self.aux_in_channels)
             + self.era_latlons.shape[1]
             + self.era_trainable_size,
             in_channels_dst=self.h_latlons.shape[1] + self.h_trainable_size,
-            hidden_dim=encoder_out_channels,
-            hidden_layers=config.model.encoder.num_layers,
+            hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
-            chunks=1,
             activation=self.activation,
+            num_chunks=config.model.encoder.num_chunks,
         )
 
-        # "Noisy" processor H -> H
-        self.h_processor = NoisyMessagePassingProcessor(
-            hidden_dim=encoder_out_channels,
-            noise_dim=self.noise_channels,
-            hidden_layers=config.model.hidden.num_layers,
-            edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
-            chunks=2,
+        # Processor H -> H
+        self.h_processor = GNNProcessor(
+            hidden_dim=self.num_channels + self.proc_noise_channels,
+            output_dim=self.num_channels,
+            hidden_layers=config.model.processor.num_layers,
             mlp_extra_layers=mlp_extra_layers,
-            mlp_dropout=mlp_dropout,
+            edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
+            chunks=config.model.processor.chunks,
             activation=self.activation,
+            mlp_dropout=mlp_dropout,
         )
 
         # Decoder H -> ERA5
-        self.backward_mapper = MessagePassingMapper(
-            in_channels_src=encoder_out_channels,
-            in_channels_dst=encoder_out_channels,
+        self.backward_mapper = GNNMapper(
+            in_channels_src=self.num_channels,
+            in_channels_dst=self.num_channels,
             out_channels_dst=self.in_channels,
-            hidden_dim=config.model.num_channels,
-            hidden_layers=config.model.decoder.num_layers,
+            hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
             backward_mapper=True,
-            chunks=1,
             activation=self.activation,
+            num_chunks=config.model.decoder.num_chunks,
         )
 
     def _register_latlon(self, name: str) -> None:
@@ -232,17 +234,43 @@ class GraphMSG(nn.Module):
             dim=-1,  # feature dimension
         )
 
-    def _create_processor(
+    def _expand_edges(self, edge_index: Adj, edge_inc: torch.Tensor, batch_size: int) -> Adj:
+        """Expand edge index correct number of times while adding the proper number to
+        the edge index.
+
+        Parameters
+        ----------
+        edge_index : Adj
+            Edge index to start
+        edge_inc : torch.Tensor
+            Edge increment to use
+
+        Returns
+        -------
+        torch.Tensor
+            Edge Index
+        """
+        edge_index = torch.cat(
+            [edge_index + i * edge_inc for i in range(batch_size)],
+            dim=1,
+        )
+
+        return edge_index
+
+    def _run_mapper(
         self,
         mapper: nn.Module,
         data: Tuple[torch.Tensor],
-        edge_index: int,
-        edge_inc: int,
+        edge_index: Adj,
+        edge_inc: torch.Tensor,
         edge_attr: torch.Tensor,
+        shape_nodes: Tuple[List, List],
         batch_size: int,
+        size: Size,
+        model_comm_group: ProcessGroup,
         use_reentrant: bool = False,
     ):
-        """Create processor from checkpoint.
+        """Run mapper with activation checkpoint.
 
         Parameters
         ----------
@@ -256,8 +284,15 @@ class GraphMSG(nn.Module):
             Edge increment to use
         edge_attr : torch.Tensor
             Trainable edge attribute tensor
+        shape_nodes: Tuple[List, List]
+            Shapes of input fileds the task holds when running with multiple GPUs
         batch_size: int
-            Batch size
+            Batch size (includes the ensemble dimension, if any).
+        size: Size
+            Number of source and target nodes of bipartite graph
+        model_comm_group : ProcessGroup
+            model communication group, specifies which GPUs work together
+            in one model instance
         use_reentrant : bool, optional
             Use reentrant, by default False
 
@@ -269,12 +304,11 @@ class GraphMSG(nn.Module):
         return checkpoint(
             mapper,
             data,
-            # expand edge index correct number of times while adding the proper number to the edge index
-            edge_index=torch.cat(
-                [edge_index + i * edge_inc for i in range(batch_size)],
-                dim=1,
-            ),
+            edge_index=self._expand_edges(edge_index, edge_inc, batch_size),
             edge_attr=edge_attr,
+            shape_nodes=shape_nodes,
+            size=size,
+            model_comm_group=model_comm_group,
             use_reentrant=use_reentrant,
         )
 
@@ -320,7 +354,7 @@ class GraphMSG(nn.Module):
 
         return edge_index_concat, edge_mask
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, model_comm_group: Optional[ProcessGroup] = None) -> torch.Tensor:
         """Forward operator.
 
         Args:
@@ -330,18 +364,6 @@ class GraphMSG(nn.Module):
         """
         bs, e = x.shape[0], x.shape[1]
         bse = bs * e  # merge the batch and ensemble dimensions
-
-        if self.dropout_h2e > 0:
-            isolated_nodes_h2e = True
-
-            total_num_h2e_nodes = self.h2e_edge_index.max() + 1
-
-            while isolated_nodes_h2e:
-                edge_index_h2e_edge, edge_h2e_mask = dropout_edge(self.h2e_edge_index, p=self.dropout_h2e)
-                isolated_nodes_h2e = contains_isolated_nodes(edge_index_h2e_edge, num_nodes=total_num_h2e_nodes)
-
-        else:
-            edge_index_h2e_edge, edge_h2e_mask = dropout_edge(self.h2e_edge_index, p=0)
 
         if self.dropout_h2h > 0:
             isolated_nodes_h2h = True
@@ -377,42 +399,56 @@ class GraphMSG(nn.Module):
         x_h_latent = self._fuse_trainable_tensors(self.h_latlons, bse, self.h_trainable)
         edge_e_to_h_latent = self._fuse_trainable_tensors(self.e2h_edge_attr, bse, self.e2h_trainable)
         edge_h_to_h_latent = self._fuse_trainable_tensors(h2h_attr, bse, h2h_trainable)
-        edge_h_to_e_latent = self._fuse_trainable_tensors(
-            mask_select(self.h2e_edge_attr, 0, edge_h2e_mask), bse, mask_select(self.h2e_trainable, 0, edge_h2e_mask)
-        )
+        edge_h_to_e_latent = self._fuse_trainable_tensors(self.h2e_edge_attr, bse, self.h2e_trainable)
 
-        x_era_latent, x_latent = self._create_processor(
+        # size for mappers:
+        size_fwd = (x_era_latent.shape[0], x_h_latent.shape[0])
+        size_bwd = (x_h_latent.shape[0], x_era_latent.shape[0])
+
+        # shapes of node shards:
+        shape_x_fwd = get_shape_shards(x_era_latent, 0, model_comm_group)
+        shape_h_fwd = get_shape_shards(x_h_latent, 0, model_comm_group)
+        shape_h_proc = change_channels_in_shape(shape_h_fwd, self.num_channels)
+        shape_h_bwd = shape_h_proc
+        shape_x_bwd = change_channels_in_shape(shape_x_fwd, self.num_channels)
+
+        x_era_latent, x_latent = self._run_mapper(
             self.forward_mapper,
             (x_era_latent, x_h_latent),
             self.e2h_edge_index,
             self._e2h_edge_inc,
             edge_e_to_h_latent,
-            bse,
+            shape_nodes=(shape_x_fwd, shape_h_fwd),
+            batch_size=bse,
+            size=size_fwd,
+            model_comm_group=model_comm_group,
         )
 
         # generate noise tensor
-        z = torch.randn(*x_latent.shape[:-1], self.noise_channels).type_as(x_latent)
+        z = torch.randn(*x_latent.shape[:-1], self.proc_noise_channels).type_as(x_latent)
 
         x_latent_proc = self.h_processor(
             # concat noise tensor to the latent features
-            x_noisy=torch.cat([x_latent, z], dim=-1),
-            edge_index=torch.cat(
-                [edge_index_h2h_edge + i * self._h2h_edge_inc for i in range(bse)],
-                dim=1,
-            ),
+            x=torch.cat([x_latent, z], dim=-1),
+            edge_index=self._expand_edges(edge_index_h2h_edge, self._h2h_edge_inc, bse),
             edge_attr=edge_h_to_h_latent,
+            shape_nodes=shape_h_proc,
+            model_comm_group=model_comm_group,
         )
 
         # skip connection (H -> H)
         x_latent_proc = x_latent_proc + x_latent
 
-        _, x_out = self._create_processor(
+        _, x_out = self._run_mapper(
             self.backward_mapper,
             (x_latent_proc, x_era_latent),
-            edge_index_h2e_edge,
+            self.h2e_edge_index,
             self._h2e_edge_inc,
             edge_h_to_e_latent,
-            bse,
+            shape_nodes=(shape_h_bwd, shape_x_bwd),
+            batch_size=bse,
+            size=size_bwd,
+            model_comm_group=model_comm_group,
         )
 
         x_out = einops.rearrange(x_out, "(bse n) f -> bse n f", bse=bse)
@@ -424,23 +460,78 @@ class GraphMSG(nn.Module):
 
 
 if __name__ == "__main__":
+    from pathlib import Path
+    from hydra import compose, initialize
+    from torch_geometric import seed_everything
 
-    def dropout_edge_force_undirected(
-        edge_index: torch.Tensor, p: float = 0.5, training: bool = True
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        _, edge_mask = dropout_edge(edge_index, p=p, training=training)
-        row, col = edge_index
+    # from torch.profiler import profile, record_function, ProfilerActivity
 
-        edge_mask[row > col] = False
+    from timeit import default_timer as timer
 
-        edge_index = edge_index[:, edge_mask]
+    initialize(config_path="../config", job_name="test_msg")
+    cfg_ = compose(
+        config_name="ens-kcrps-h4",
+        overrides=[
+            # "model.trainable_parameters.era=8",
+            # "model.trainable_parameters.hidden=8",
+            # "model.trainable_parameters.era2hidden=8",
+            # "model.trainable_parameters.hidden2era=8",
+            # "model.trainable_parameters.hidden2hidden=8",
+            # "model.num_channels=128",
+            # "dataloader.batch_size.training=1",
+            # "dataloader.batch_size.validation=1",
+            # "data.num_features=98",
+            # "data.num_aux_features=13",
+            # "training.multistep_input=2",
+            # 'hardware.paths.graph="/home/mlx/data/graphs/"',
+            # 'hardware.files.graph="graph_mappings_normed_edge_attrs_2023062700_o96_h_0_1_2_3_4.pt"',
+        ],
+    )
 
-        edge_index_concat = torch.cat([edge_index, edge_index.flip(0)], dim=1)
+    seed_everything(1234)
 
-        return edge_index_concat, edge_mask
+    def count_parameters(model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    edge_tensor = torch.tensor([[0, 1, 1, 2, 2, 3], [1, 0, 2, 1, 3, 2]])
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    LOGGER.debug("Running on device: %s ...", device)
 
-    edge_index_mc, edge_mask_mc = dropout_edge_force_undirected(edge_tensor, p=0.2)
+    gdata = torch.load(Path(cfg_.hardware.paths.graph, cfg_.hardware.files.graph))
+    gnn_ = GraphMSG(cfg_, graph_data=gdata).to(device)
 
-    edge_index_torch, edge_mask_torch = dropout_edge(edge_tensor, p=0.2, force_undirected=True)
+    _ERA_SIZE = gnn_._era_size
+    x_input = torch.randn(
+        cfg_.dataloader.batch_size.training,
+        cfg_.training.ensemble_size,
+        cfg_.training.multistep_input,
+        _ERA_SIZE,
+        cfg_.data.num_features,
+    ).to(device)
+
+    LOGGER.debug("Input shape: %s", x_input.shape)
+    start = timer()
+
+    # with profile(activities=[ProfilerActivity.CUDA], record_shapes=True, profile_memory=True, with_stack=True) as prof:
+
+    y_pred = gnn_(x_input)
+    LOGGER.debug("Output shape: %s", y_pred.shape)
+    LOGGER.debug("Model parameter count: %d M", count_parameters(gnn_) / 1.0e6)
+
+    loss = y_pred.sum()
+    LOGGER.debug("Running backward on a dummy loss ...")
+    loss.backward()
+
+    end = timer()
+    LOGGER.debug("Ran backward. All good!")
+
+    # LOGGER.debug(prof.key_averages().table(sort_by="cuda_time_total", row_limit=50))
+
+    LOGGER.debug("Runtime %.1f s", (end - start))
+
+    for pname, pval in gnn_.named_parameters():
+        if pval.grad is None:
+            print(pname)
+
+    if torch.cuda.is_available():
+        LOGGER.debug("max memory allocated:  %5.1f MB", torch.cuda.max_memory_allocated(torch.device(0)) / (1000.0 * 1024))
+        LOGGER.debug("max memory reserved:   %5.1f MB", torch.cuda.max_memory_reserved(torch.device(0)) / (1000.0 * 1024))

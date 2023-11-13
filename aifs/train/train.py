@@ -148,10 +148,14 @@ class AIFSTrainer:
         LOGGER.debug("Total number of auxiliary variables: %d", self.config.data.num_aux_features)
 
         # Log learning rate multiplier when running single-node, multi-GPU and/or multi-node
-        total_gpu_count = self.config.hardware.num_nodes * self.config.hardware.num_gpus_per_node
-        LOGGER.debug("Number of GPUs per group: %d", self.config.hardware.group_size)
-        LOGGER.debug("Total GPU count: %d - NB: the learning rate will be scaled by this factor!", total_gpu_count)
-        LOGGER.debug("Effective learning rate: %.3e", total_gpu_count * self.config.training.lr.rate)
+        total_number_of_model_instances = (
+            self.config.hardware.num_nodes * self.config.hardware.num_gpus_per_node / self.config.hardware.num_gpus_per_model
+        )
+        LOGGER.debug(
+            "Total GPU count / model group size: %d - NB: the learning rate will be scaled by this factor!",
+            total_number_of_model_instances,
+        )
+        LOGGER.debug("Effective learning rate: %.3e", total_number_of_model_instances * self.config.training.lr.rate)
         LOGGER.debug("Rollout window length: %d", self.config.training.rollout.start)
 
     def update_paths(self) -> None:
@@ -161,7 +165,7 @@ class AIFSTrainer:
 
     @cached_property
     def strategy(self) -> Any:
-        return DDPGroupStrategy(self.config.hardware.group_size, static_graph=True)
+        return DDPGroupStrategy(self.config.hardware.num_gpus_per_model, static_graph=True)
 
     def train(self) -> None:
         """Training entry point."""
@@ -191,6 +195,7 @@ class AIFSTrainer:
         )
 
         trainer.fit(self.model, datamodule=self.datamodule, ckpt_path=self.last_checkpoint)
+
         LOGGER.debug("---- DONE. ----")
 
 

@@ -21,7 +21,7 @@ setup(
     version=version,
     long_description=read("README.md"),
     long_description_content_type="text/markdown",
-    license="Apache Lincense Version 2.0",
+    license="Apache License Version 2.0",
     author="European Centre for Medium-Range Weather Forecasts (ECMWF)",
     author_email="ecmwf-authors@ecmwf.int",
     description="ERA5 forecasting with Graph Neural Networks",

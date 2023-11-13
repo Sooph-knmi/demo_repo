@@ -1,7 +1,9 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
+from typing import Optional
 from typing import Tuple
 
 import matplotlib.pyplot as plt
@@ -14,11 +16,9 @@ from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 
 from aifs.diagnostics.plots import init_plot_settings
 from aifs.diagnostics.plots import plot_ensemble_initial_conditions
-from aifs.diagnostics.plots import plot_graph_features
 from aifs.diagnostics.plots import plot_kcrps
 from aifs.diagnostics.plots import plot_loss
 from aifs.diagnostics.plots import plot_predicted_ensemble
-from aifs.diagnostics.plots import plot_predicted_multilevel_flat_sample
 from aifs.diagnostics.plots import plot_rank_histograms
 from aifs.diagnostics.plots import plot_spread_skill
 from aifs.utils.distributed import gather_tensor
@@ -43,16 +43,35 @@ class PlotCallback(Callback):
             save_path = Path(
                 self.save_basedir,
                 "plots",
-                f"{tag}_epoch{trainer.current_epoch:03d}.png",
+                f"{tag}.png",
             )
 
             save_path.parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(save_path, dpi=100)
+            fig.savefig(save_path, dpi=100, bbox_inches="tight")
             if self.config.diagnostics.log.wandb.enabled:
                 import wandb
 
                 trainer.logger.experiment.log({exp_log_tag: wandb.Image(fig)})
         plt.close(fig)  # cleanup
+
+
+class AsyncPlotCallback(PlotCallback):
+    """Factory for creating a callback that plots data to Weights and Biases."""
+
+    def __init__(self, config):
+        super().__init__(config)
+
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._error: Optional[BaseException] = None
+
+    def teardown(self, trainer, pl_module, stage) -> None:
+        """This method is called to close the threads."""
+        del trainer, pl_module, stage  # not used
+        self._executor.shutdown(wait=True)
+
+        # if an error was raised anytime in any of the `executor.submit` calls
+        if self._error is not None:
+            raise self._error
 
 
 class RolloutEval(Callback):
@@ -271,80 +290,54 @@ class KCRPSBarPlot(PlotCallback):
             self._plot(trainer, pl_module, outputs, batch, batch_idx)
 
 
-class GraphTrainableFeaturesPlot(PlotCallback):
-    """Visualize the trainable features defined at the ERA and H graph nodes, if any.
+# class GraphTrainableFeaturesPlot(AsyncPlotCallback):
+#     """Visualize the trainable features defined at the ERA and H graph nodes, if any.
 
-    TODO: How best to visualize the learned edge embeddings? Offline, perhaps - using code from @Simon's notebook?
-    """
+#     TODO: How best to visualize the learned edge embeddings? Offline, perhaps - using code from @Simon's notebook?
+#     """
 
-    def __init__(self, config):
-        super().__init__(config)
+#     def __init__(self, config):
+#         super().__init__(config)
 
-    def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
-        if pl_module.global_rank == 0:
-            model = pl_module.model.module.model if hasattr(pl_module.model, "module") else pl_module.model.model
-            graph = pl_module.graph_data
+#     def _plot(
+#         # self, trainer, latlons:np.ndarray, features:np.ndarray, tag:str, exp_log_tag:str
+#         self,
+#         trainer,
+#         latlons,
+#         features,
+#         epoch,
+#         tag,
+#         exp_log_tag,
+#     ) -> None:
+#         fig = plot_graph_features(latlons, features)
+#         self._output_figure(trainer, fig, tag=tag, exp_log_tag=exp_log_tag)
 
-            ecoords = np.rad2deg(graph[("era", "to", "era")].ecoords_rad.numpy())
-            hcoords = np.rad2deg(graph[("h", "to", "h")].hcoords_rad.numpy())
+#     def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+#         if pl_module.global_rank == 0:
+#             model = pl_module.model.module.model if hasattr(pl_module.model, "module") else pl_module.model.model
+#             graph = pl_module.graph_data
+#             epoch = trainer.current_epoch
 
-            if model.era_trainable is not None:
-                fig = plot_graph_features(ecoords, model.era_trainable.cpu())
-                self._output_figure(trainer, fig, tag="era_trainable", exp_log_tag="era_trainable")
+#             if model.era_trainable is not None:
+#                 ecoords = np.rad2deg(graph[("era", "to", "era")].ecoords_rad.numpy())
 
-            if model.h_trainable is not None:
-                fig = plot_graph_features(hcoords, model.h_trainable.cpu())
-                self._output_figure(trainer, fig, tag="h_trainable", exp_log_tag="h_trainable")
+#                 self._executor.submit(
+#                     self._plot,
+#                     trainer,
+#                     ecoords,
+#                     model.era_trainable.cpu(),
+#                     epoch=epoch,
+#                     tag="era_trainable",
+#                     exp_log_tag="era_trainable",
+#                 )
 
-
-class PlotSample(PlotCallback):
-    """Plots a denormalized sample: input, target and prediction."""
-
-    def __init__(self, config):
-        super().__init__(config)
-        self.sample_idx = self.config.diagnostics.plot.sample_idx
-
-    def _plot(
-        # batch_idx: int, rollout_step: int, x: torch.Tensor, y_true: torch.Tensor, y_pred: torch.Tensor,
-        self,
-        trainer,
-        pl_module,
-        outputs,
-        batch,
-        batch_idx,
-    ) -> None:
-        data = (
-            pl_module.normalizer.denormalize(
-                batch[self.sample_idx, pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1, ...], in_place=False
-            )
-            .cpu()
-            .numpy()
-        )
-
-        for rollout_step in range(pl_module.rollout):
-            fig = plot_predicted_multilevel_flat_sample(
-                self.config.diagnostics.plot.parameters,
-                self.config.diagnostics.plot.per_sample,
-                np.rad2deg(pl_module.era_latlons.numpy()),
-                data[0, ..., : pl_module.fcdim].squeeze(),
-                data[rollout_step + 1, ..., : pl_module.fcdim].squeeze(),
-                pl_module.normalizer.denormalize(outputs[1][rollout_step][self.sample_idx, ..., : pl_module.fcdim], in_place=False)
-                .squeeze()
-                .cpu()
-                .numpy(),
-            )
-
-            fig.tight_layout()
-            self._output_figure(
-                trainer,
-                fig,
-                tag=f"gnn_pred_val_sample_rstep{rollout_step:02d}_batch{batch_idx:05d}_rank0",
-                exp_log_tag=f"val_pred_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
-            )
-
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
-            self._plot(trainer, pl_module, outputs, batch, batch_idx)
+#             if model.h_trainable is not None:
+#                 hcoords = np.rad2deg(graph[("h", "to", "h")].hcoords_rad.numpy())
+#                 self._executor.submit(
+#                     self._plot, trainer, hcoords,
+#                     model.h_trainable.cpu(), epoch=epoch,
+#                     tag="h_trainable", exp_log_tag="h_trainable"
+#                 )
 
 
 class PlotEnsembleInitialConditions(PlotCallback):
@@ -430,7 +423,6 @@ class PredictedEnsemblePlot(PlotCallback):
                 .numpy(),
             )
 
-            fig.tight_layout()
             self._output_figure(
                 trainer,
                 fig,
@@ -551,7 +543,6 @@ def get_callbacks(config: DictConfig) -> List:
         trainer_callbacks.extend(
             [
                 RankHistogramPlot(config),
-                GraphTrainableFeaturesPlot(config),
                 PredictedEnsemblePlot(config),
                 KCRPSMapPlot(config),
                 SpreadSkillPlot(config),
@@ -579,8 +570,8 @@ def get_callbacks(config: DictConfig) -> List:
             )
         )
 
-    if config.diagnostics.plot.learned_features:
-        LOGGER.debug("Setting up a callback to plot the trainable graph node features ...")
-        trainer_callbacks.append(GraphTrainableFeaturesPlot(config))
+    # if config.diagnostics.plot.learned_features:
+    #     LOGGER.debug("Setting up a callback to plot the trainable graph node features ...")
+    #     trainer_callbacks.append(GraphTrainableFeaturesPlot(config))
 
     return trainer_callbacks
