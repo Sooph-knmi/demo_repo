@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from pytorch_lightning.callbacks import TQDMProgressBar
 from pytorch_lightning.profilers import Profiler
 from pytorch_lightning.profilers import SimpleProfiler
+from pytorch_lightning.utilities import rank_zero_only
 from pytorch_lightning.utilities.types import STEP_OUTPUT
 
 import aifs
@@ -127,9 +128,12 @@ class BenchmarkProfiler(Profiler):
         self.time_profiler = SimpleProfiler(
             dirpath=self.dirpath,
         )
-        self.memfile_name = "aifs-benchmark-mem-profiler.bin"
+
+        self.random_int = np.random.randint(100, size=1)[0]
+        self.memfile_name = f"aifs-benchmark-mem-profiler_{self.random_int}.bin"
         self.memfile_path = os.path.join(self.dirpath, self.memfile_name)
         self.memory_profiler = memray.Tracker(self.memfile_path)
+        print(self.memory_profiler, self.memfile_path)
 
     def start(self, action_name: str) -> None:
         self.time_profiler.start(action_name)
@@ -158,7 +162,7 @@ class BenchmarkProfiler(Profiler):
         time_df.columns = ["name", "total_time", "n_calls", "avg_time"]
         pattern = r"\[(.*?)\]|(.*)"
         time_df["category"] = time_df["name"].str.extract(pattern, expand=False)[0].fillna(time_df["name"])
-        time_df = time_df.round(5)
+        time_df = time_df.round(precision)
         return time_df
 
     def _generate_memray_table(self):
@@ -236,10 +240,10 @@ class BenchmarkProfiler(Profiler):
 
 
 class ProfilerProgressBar(TQDMProgressBar):
-    def __init__(self):
+    def __init__(self, config):
         super().__init__()
-        self.training_rates = []
         self.validation_rates = []
+        self.training_rates = []
 
     def _extract_rate(self, pbar) -> float:
         return (pbar.format_dict["n"] - pbar.format_dict["initial"]) / pbar.format_dict["elapsed"]
@@ -249,7 +253,9 @@ class ProfilerProgressBar(TQDMProgressBar):
     ) -> None:
         batch_idx + 1
         super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
-        self.training_rates.append(self._extract_rate(self.train_progress_bar))
+        if self.train_progress_bar.format_dict["n"] != 0:  # and pl_module.global_rank==0:
+            self.training_rates.append(self._extract_rate(self.train_progress_bar))
+            print("RANK", pl_module.global_rank, self.training_rates)
 
     def on_validation_batch_end(
         self,
@@ -261,8 +267,11 @@ class ProfilerProgressBar(TQDMProgressBar):
         dataloader_idx: int = 0,
     ) -> None:
         super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
-        self.validation_rates.append(self._extract_rate(self.val_progress_bar))
+        if self.val_progress_bar.format_dict["n"] != 0:
+            self.validation_rates.append(self._extract_rate(self.val_progress_bar))
+            print("RANK", pl_module.global_rank, self.validation_rates)
 
+    @rank_zero_only
     def summarize_metrics(self, config):
         speed_metrics = {}
 
@@ -273,10 +282,12 @@ class ProfilerProgressBar(TQDMProgressBar):
         batch_size_tr = config.dataloader.batch_size.training
         batch_size_val = config.dataloader.batch_size.validation
 
+        print("tr rates", self.training_rates)
         training_rates_array = np.array(self.training_rates).reshape(n_epochs, n_batches_tr)
         speed_metrics["training_avg_speed"] = training_rates_array.mean()
         speed_metrics["training_avg_speed_per_sample"] = training_rates_array.mean() / batch_size_tr
 
+        print("val rates", self.validation_rates)
         validation_rates_array = np.array(self.validation_rates).reshape(n_epochs, n_batches_val)
         speed_metrics["validation_avg_speed"] = validation_rates_array.mean()
         speed_metrics["validation_avg_speed_per_sample"] = validation_rates_array.mean() / batch_size_val

@@ -8,6 +8,7 @@ import pandas as pd
 import pytorch_lightning as pl
 from omegaconf import DictConfig
 from pytorch_lightning.loggers.wandb import WandbLogger
+from pytorch_lightning.utilities import rank_zero_only
 from rich.console import Console
 
 import wandb
@@ -89,6 +90,7 @@ class AIFSProfiler(AIFSTrainer):
     def wandb_profile(self):
         """Get system metrics from W&B."""
         if not self.config.diagnostics.log.wandb.offline:
+            print("RUN DICT", self.wandb_logger._wandb_init)
             self.run_dict = self.wandb_logger._wandb_init
             run_path = f"{self.run_dict['entity']}/{self.run_dict['project']}/{self.run_dict['id']}"
             wandb_memory_metrics_dict = summarize_wandb_system_metrics(run_path)
@@ -105,6 +107,7 @@ class AIFSProfiler(AIFSTrainer):
         """Time Profiler."""
         return self.profiler.get_time_profiler_df()
 
+    @rank_zero_only
     def report(self) -> str:
         """Print report to console."""
         self._close_logger()
@@ -116,6 +119,7 @@ class AIFSProfiler(AIFSTrainer):
         )
         self.write_benchmark_profiler_report()
 
+    @rank_zero_only
     def to_wandb(self) -> None:
         """Log report into W&B."""
         logger = WandbLogger(
@@ -137,7 +141,7 @@ class AIFSProfiler(AIFSTrainer):
     @cached_property
     def callbacks(self) -> List[pl.callbacks.Callback]:
         callbacks = super().callbacks
-        callbacks.append(ProfilerProgressBar())
+        callbacks.append(ProfilerProgressBar(self.config))
         return callbacks
 
     @cached_property
@@ -154,6 +158,7 @@ def main(config: DictConfig):
     if config.diagnostics.log.wandb.offline:
         config.diagnostics.log.wandb.offline = False
 
+    print("running AIFS profiler")
     trainer_aifs = AIFSProfiler(config)
     with trainer_aifs.profiler.memory_profiler:
         trainer_aifs.train()
@@ -163,5 +168,5 @@ def main(config: DictConfig):
     trainer_aifs.to_wandb()
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
