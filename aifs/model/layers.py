@@ -24,6 +24,7 @@ from aifs.distributed.helpers import gather_tensor
 from aifs.distributed.helpers import partition_edges
 from aifs.distributed.helpers import shard_tensor
 from aifs.distributed.helpers import sync_tensor
+from aifs.distributed.helpers import shard_all2all
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
@@ -174,7 +175,7 @@ class GNNProcessor(nn.Module):
             self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
 
     def forward(
-        self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, size: Size, model_comm_group: ProcessGroup
+        self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: list, size: Size, model_comm_group: ProcessGroup
     ) -> Tensor:
         edge_index, edge_attr, shapes_edge_idx, shapes_edge_attr = partition_edges(size, edge_index, edge_attr, model_comm_group)
         edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_comm_group)
@@ -305,7 +306,7 @@ class GNNMapper(nn.Module):
         self.backward_mapper = backward_mapper
         self.out_channels_dst = out_channels_dst
 
-        update_src_nodes = False if backward_mapper else True
+        update_src_nodes = False #if backward_mapper else True
         self.proc = GNNBlock(
             hidden_dim,
             mlp_hidden_ratio * hidden_dim,
@@ -323,6 +324,7 @@ class GNNMapper(nn.Module):
 
         if backward_mapper:  # h -> era
             self.node_era_extractor = nn.Linear(hidden_dim, out_channels_dst)
+            self.emb_nodes_dst = nn.Linear(in_channels_dst, hidden_dim) # move after block here because same in both
         else:  # era -> h
             self.emb_nodes_src = nn.Linear(in_channels_src, hidden_dim)
             self.emb_nodes_dst = nn.Linear(in_channels_dst, hidden_dim)
@@ -344,6 +346,10 @@ class GNNMapper(nn.Module):
             x_dst = self.emb_nodes_dst(x_dst)
             shapes_src = change_channels_in_shape(shapes_src, self.hidden_dim)
             shapes_dst = change_channels_in_shape(shapes_dst, self.hidden_dim)
+        else:
+            x_dst = shard_tensor(x_dst, 0, shapes_dst, model_comm_group)
+            x_dst = self.emb_nodes_dst(x_dst)
+            shapes_dst = change_channels_in_shape(shapes_dst, self.hidden_dim)
 
         (x_src, x_dst), edge_attr = self.proc(
             (x_src, x_dst), edge_index, edge_attr, (shapes_src, shapes_dst), model_comm_group, size=size
@@ -353,7 +359,8 @@ class GNNMapper(nn.Module):
             x_dst = self.node_era_extractor(x_dst)
             x_dst = gather_tensor(x_dst, 0, change_channels_in_shape(shapes_dst, self.out_channels_dst), model_comm_group)
 
-        return x_src, x_dst
+        # return x_src, x_dst
+        return x_dst
 
 
 class GNNBlock(nn.Module):
@@ -451,6 +458,7 @@ class GNNBlock(nn.Module):
         if isinstance(x_skip, Tensor):
             x = self.layer_norm1(x)
 
+            # combine in 1 or 2 lin layer and also sync combined
             query = self.lin_query(x)
             key = self.lin_key(x)
             value = self.lin_value(x)
@@ -462,6 +470,7 @@ class GNNBlock(nn.Module):
         else:
             x = (self.layer_norm1(x[0]), self.layer_norm2(x[1]))
 
+            # combine in 1 or 2 lin layer and also sync combined
             query = self.lin_query(x[1])
             key = self.lin_key(x[0])
             value = self.lin_value(x[0])
@@ -487,9 +496,9 @@ class GNNBlock(nn.Module):
             nodes_new_dst = self.node_dst_mlp(out) + out
 
             if self.update_src_nodes:
-                nodes_new_src = self.node_src_mlp(x[0]) + x_skip[0]
+                nodes_new_src = self.node_src_mlp(x_skip[0]) + x_skip[0]
             else:
-                nodes_new_src = x[0]
+                nodes_new_src = x_skip[0]
 
             nodes_new = (nodes_new_src, nodes_new_dst)
 
@@ -556,8 +565,81 @@ class TransformerProcessor(nn.Module):
 
     def __init__(
         self,
+        in_channels: int,
+        out_channels: int,
         hidden_dim: int,
         hidden_layers: int,
+        window_size: int,
+        heads: int = 16,
+        mlp_hidden_ratio: int = 4,
+        activation: str = "GELU",
+        chunks: int = 2,
+    ) -> None:
+        """Initialize TransformerProcessor.
+
+        Parameters
+        ----------
+        hidden_dim : int
+            Hidden dimension
+        hidden_layers : int
+            Number of hidden layers
+        heads: int
+            Number of heads to use, default 16
+        mlp_hidden_ratio: int
+            ratio of mlp hidden dimension to embedding dimension, default 4
+        activation : str, optional
+            Activation function, by default "GELU"
+        """
+        super().__init__()
+
+        self.hidden_layers = chunks
+        chunk_size = int(hidden_layers / chunks)
+        assert (
+            hidden_layers % chunks == 0
+        ), f"Number of processor layers ({hidden_layers}) has to be divisible by the number of processor chunks ({chunks})."
+
+        self.in_channels = in_channels
+        self.hidden_dim = hidden_dim
+        self.out_channels = out_channels
+
+        self.proc = nn.ModuleList(
+            [
+                TransformerProcessorChunk(
+                    in_channels=in_channels if i == 0 else hidden_dim,
+                    out_channels=out_channels if i == (self.hidden_layers - 1) else hidden_dim,
+                    hidden_dim=hidden_dim,
+                    mlp_hidden_ratio=mlp_hidden_ratio,
+                    heads=heads,
+                    hidden_layers=chunk_size,
+                    window_size=window_size,
+                    activation=activation,
+                )
+                for i, _ in enumerate(range(self.hidden_layers))
+            ]
+        )
+
+    def forward(self, x: Tensor, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
+
+        assert (
+            model_comm_group.size() == 1 or batch_size == 1
+            ), f"Either one GPU per model instance, or batch_size has to be 1"
+
+        for i in range(self.hidden_layers):
+            x = checkpoint(self.proc[i], x, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
+
+        return x
+    
+
+class TransformerProcessorChunk(nn.Module):
+    """Message Passing Processor Graph Neural Network."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        hidden_dim: int,
+        hidden_layers: int,
+        window_size: int,
         heads: int = 16,
         mlp_hidden_ratio: int = 4,
         activation: str = "GELU",
@@ -579,29 +661,51 @@ class TransformerProcessor(nn.Module):
         """
         super().__init__()
 
+        self.in_channels = in_channels
+        self.hidden_dim = hidden_dim
+        self.out_channels = out_channels
+
         self.hidden_layers = hidden_layers
 
         self.proc = nn.ModuleList(
             [
-                AttentionBlock(
+                TransformerLayer(
                     channels=hidden_dim,
-                    hidden_dim=mlp_hidden_ratio * hidden_dim,
+                    hidden_dim=(mlp_hidden_ratio * hidden_dim),
                     num_heads=heads,
                     activation=activation,
+                    window_size=window_size,
                 )
                 for _ in range(self.hidden_layers)
             ]
         )
 
-    def forward(self, x: Tensor, batch_size: int) -> Tensor:
+        if self.in_channels != self.hidden_dim:
+            self.lin_in = nn.Linear(in_channels, hidden_dim)
+            self.layernorm_in = AutocastLayerNorm(in_channels)
+
+        if self.out_channels != self.hidden_dim:
+            self.lin_out = nn.Linear(hidden_dim, out_channels)
+            self.layernorm_out = AutocastLayerNorm(hidden_dim)
+
+    def forward(self, x: Tensor, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
+
+        if self.in_channels != self.hidden_dim:
+            x = self.layernorm_in(x)
+            x = self.lin_in(x)
+
         for i in range(self.hidden_layers):
-            x = checkpoint(self.proc[i], x, batch_size, use_reentrant=False)
+            x = checkpoint(self.proc[i], x, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
+
+        if self.out_channels != self.hidden_dim:
+            x = self.layernorm_out(x)
+            x = self.lin_out(x)
 
         return x
 
 
-class AttentionBlock(nn.Module):
-    def __init__(self, channels, hidden_dim, num_heads, activation):
+class TransformerLayer(nn.Module):
+    def __init__(self, channels, hidden_dim, num_heads, activation, window_size: int):
         """
         Attention Block ...
         """
@@ -614,7 +718,7 @@ class AttentionBlock(nn.Module):
             raise RuntimeError from ae
 
         self.lnorm1 = nn.LayerNorm(channels)
-        self.mhsa = MultiHeadSelfAttention(num_heads=num_heads, embed_dimension=channels, bias=False, is_causal=False, dropout=0.0)
+        self.mhsa = MultiHeadSelfAttention(num_heads=num_heads, embed_dimension=channels, window_size=window_size, bias=False, is_causal=False, dropout=0.0)
         self.proj = nn.Linear(channels, channels, bias=True)
 
         self.mlp = nn.Sequential(
@@ -624,17 +728,17 @@ class AttentionBlock(nn.Module):
         )
         self.lnorm2 = nn.LayerNorm(channels)
 
-    def forward(self, x: Tensor, batch_size: int) -> Tensor:
+    def forward(self, x: Tensor, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
         x1 = x
         x = self.lnorm1(x)
-        x = self.proj(self.mhsa(x, batch_size)) + x1
+        x = self.proj(self.mhsa(x, batch_size, model_comm_group=model_comm_group)) + x1
         x = self.mlp(self.lnorm2(x)) + x
 
         return x
 
 
 class MultiHeadSelfAttention(nn.Module):
-    def __init__(self, num_heads: int, embed_dimension: int, bias: bool = False, is_causal: bool = False, dropout: float = 0.0):
+    def __init__(self, num_heads: int, embed_dimension: int, bias: bool = False, is_causal: bool = False, window_size: int = None, dropout: float = 0.0):
         super().__init__()
 
         assert embed_dimension % num_heads == 0
@@ -651,7 +755,7 @@ class MultiHeadSelfAttention(nn.Module):
 
         self.atten = LocalAttention(
             dim=self.head_dim,
-            window_size=128,
+            window_size=window_size,
             causal=is_causal,
             autopad=True,
             scale=None,
@@ -662,22 +766,29 @@ class MultiHeadSelfAttention(nn.Module):
             dropout=self.dropout,
         )
 
-    def forward(self, x, batch_size):
-        # x = einops.rearrange(x, '(b n) c -> b n c', b=batch_size)
-        # query, key, value = self.lin_qkv(x).chunk(3, -1) # split this up to save memory?
-        # query, key, value = map(lambda t: einops.rearrange(t, 'b n (h c) -> b h n c', h = self.num_heads), (query, key, value))
-
+    def forward(self, x, batch_size, model_comm_group: ProcessGroup):
         query, key, value = self.lin_qkv(x).chunk(3, -1)
         query, key, value = map(
             lambda t: einops.rearrange(t, "(b n) (h c) -> b h n c", b=batch_size, h=self.num_heads), (query, key, value)
         )
 
-        # out = self.atten(query, key, value, attn_mask=None, dropout_p=dropout, is_causal=is_causal)
+        query = shard_all2all(query, dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
+        key = shard_all2all(key, dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
+        value = shard_all2all(value, dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
+
+        # out = self.atten(query, key, value, attn_mask=None, dropout_p=self.dropout, is_causal=self.is_causal)
         out = self.atten(query, key, value, mask=None, attn_bias=None)
+
+        out = shard_all2all(out, dim_split=2, dim_concatenate=1, mgroup=model_comm_group)
+
         out = einops.rearrange(out, "b h n c -> (b n) (h c)")
 
         return out
 
+        # x = einops.rearrange(x, '(b n) c -> b n c', b=batch_size)
+        # query, key, value = self.lin_qkv(x).chunk(3, -1) # split this up to save memory?
+        # query, key, value = map(lambda t: einops.rearrange(t, 'b n (h c) -> b h n c', h = self.num_heads), (query, key, value))
+        # 5121, 1024
 
 class CheckpointWrapper(nn.Module):
     """Wrapper for checkpointing a module."""

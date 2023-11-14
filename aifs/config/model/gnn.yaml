@@ -8,9 +8,11 @@ mlp:
 processor:
   type: GNN # GNN or Transformer
   num_layers: 16
+  num_channels: 1024
   chunks: 2
   heads: 16
   mlp_hidden_ratio: 4
+  window_size: 512
 
 encoder:
   heads: 16

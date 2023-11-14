@@ -191,6 +191,8 @@ class AIFSTrainer:
 
         trainer.fit(self.model, datamodule=self.datamodule, ckpt_path=self.last_checkpoint)
 
+        LOGGER.debug(f"memory summary: {torch.cuda.memory_summary()}")
+
         LOGGER.debug("---- DONE. ----")
 
 

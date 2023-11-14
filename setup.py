@@ -27,7 +27,7 @@ setup(
     description="ERA5 forecasting with Graph Neural Networks",
     url="https://github.com/ecmwf-lab/aifs-mono",
     install_requires=[
-        "torch>=2.0.1,<2.1",
+        "torch>=2.0",
         "torch_geometric>=2.3.1",
         "einops>=0.6.1",
     ],

@@ -17,6 +17,30 @@ from torch_geometric.utils import k_hop_subgraph
 from torch_geometric.utils import mask_to_index
 
 
+def shard_all2all(input_: Tensor, dim_split: int, dim_concatenate: int, mgroup: ProcessGroup) -> Tensor:
+    """Sync tensor.
+
+    Splits e.g. query, key or value tensor via all to all communication along head dimension for parallel self-attention computation.
+
+    Parameters
+    ----------
+    input_ : Tensor
+        Input
+    dim_split : int
+        dimension along which to distribute
+    dim_concatenate : int
+        dimension along which to concatenate
+    mgroup : ProcessGroup
+        model communication group
+
+    Returns
+    -------
+    Tensor
+    """
+
+    return _AllToAllParallelSection.apply(input_, dim_split, dim_concatenate, mgroup)
+
+
 def shard_tensor(
     input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup, gather_in_backward: Optional[bool] = True
 ) -> Tensor:
@@ -213,6 +237,32 @@ def change_channels_in_shape(shape_list: List, channels: int) -> List:
     return out
 
 
+class _AllToAllParallelSection(torch.autograd.Function):
+    """Sync the input from parallel section."""
+
+    @staticmethod
+    def forward(ctx, input_, dim_split_, dim_concatenate_, mgroup_):
+        ctx.dim_split = dim_split_
+        ctx.dim_concatenate = dim_concatenate_
+        ctx.comm_group = mgroup_
+        if mgroup_:
+            return _alltoall(input_, dim_split_, dim_concatenate_, group=mgroup_)
+        else:
+            return input_
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        if ctx.comm_group:
+            return (
+                _alltoall(grad_output, ctx.dim_concatenate, ctx.dim_split, group=ctx.comm_group),
+                None,
+                None,
+                None,
+            )
+        else:
+            return grad_output, None, None, None
+
+
 class _SyncParallelSection(torch.autograd.Function):
     """Sync the input from parallel section."""
 
@@ -334,6 +384,33 @@ class _ReduceParallelSection(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         return grad_output, None
+
+
+def _alltoall(
+    input_: Tensor, dim_split: int, dim_concatenate: int, group: Optional[ProcessGroup] = None
+) -> Tensor:
+    """Split input along dimension dim_split and join after all_to_all along dimesion dim_concatenate."""
+
+    # get input format
+    input_format = get_memory_format(input_)
+
+    comm_size = dist.get_world_size(group=group)
+    # Bypass the function if we are using only 1 GPU.
+    if comm_size == 1:
+        return input_
+
+    # sanity checks
+    assert dim_split < input_.dim() and dim_concatenate < input_.dim(), f"Error, cannot communicate along {dim_split} and concatenate along {dim_concatenate} for tensor with {input_.dim()} dimensions."
+
+    input_list = [x.contiguous() for x in torch.tensor_split(input_, comm_size, dim=dim_split)] # do we need contiguous?
+    output_list = [torch.empty_like(x) for x in input_list]
+
+    dist.all_to_all(output_list, input_list, group=group)
+
+    # Note: torch.cat already creates a contiguous tensor.
+    output = torch.cat(output_list, dim=dim_concatenate).contiguous(memory_format=input_format)
+
+    return output
 
 
 def _split(input_: Tensor, dim_: int, shapes_: Tuple, group: Optional[ProcessGroup] = None) -> Tensor:
