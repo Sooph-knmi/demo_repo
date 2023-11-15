@@ -2,8 +2,8 @@
 
 #SBATCH --qos=ng
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=4
+#SBATCH --ntasks-per-node=1
+#SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=00:15:00
@@ -17,6 +17,7 @@ export HYDRA_FULL_ERROR=1
 # export TORCH_CPP_LOG_LEVEL=INFO
 # export TORCH_DISTRIBUTED_DEBUG=DETAIL
 # export CUDA_LAUNCH_BLOCKING=1
+export TORCH_SHOW_CPP_STACKTRACES=1
 
 # on your cluster you might need these:
 # set the network interface

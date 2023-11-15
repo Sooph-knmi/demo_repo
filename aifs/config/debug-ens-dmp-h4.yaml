@@ -31,12 +31,13 @@ dataloader:
     validation: 10
 
 training:
+  accum_grad_batches: 2
   max_epochs: 2
   rollout:
     start: 1
     epoch_increment: 0
     max: 1
-  ensemble_size: 2
+  ensemble_size: 1
   loss: 'kcrps'
 
 diagnostics:

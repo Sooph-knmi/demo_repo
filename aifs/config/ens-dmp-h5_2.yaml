@@ -39,6 +39,7 @@ dataloader:
     validation: null
 
 training:
+  accum_grad_batches: 2
   fork_run_id: null
   max_epochs: 100
   rollout:
