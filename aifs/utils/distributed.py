@@ -5,6 +5,7 @@
 # https://github.com/NVIDIA/modulus/blob/b18419e9460f6acd3cd3d175f5d6caf6bbc9d2da/modulus/utils/sfno/distributed/helpers.py#L1C6-L1C6
 import torch
 import torch.distributed as dist
+from torch.distributed import ReduceOp
 
 
 def gather_tensor(input_, dim, shapes, mgroup):
@@ -12,9 +13,9 @@ def gather_tensor(input_, dim, shapes, mgroup):
     return _GatherParallelSection.apply(input_, dim, shapes, mgroup)
 
 
-def reduce_tensor(input_, mgroup):
+def reduce_tensor(input_, mgroup, reduce_op=ReduceOp.SUM):
     """Reduce helper."""
-    return _ReduceParallelSection.apply(input_, mgroup)
+    return _ReduceParallelSection.apply(input_, mgroup, reduce_op=reduce_op)
 
 
 def sync_tensor(input_, dim, shapes, mgroup):
@@ -104,9 +105,9 @@ class _ReduceParallelSection(torch.autograd.Function):
     """All-reduce the input from the parallel section."""
 
     @staticmethod
-    def forward(ctx, input_, mgroup_):
+    def forward(ctx, input_, mgroup_, reduce_op: ReduceOp = ReduceOp.SUM):
         if mgroup_:
-            return _reduce(input_, group=mgroup_)
+            return _reduce(input_, group=mgroup_, reduce_op=reduce_op)
         return input_
 
     @staticmethod
@@ -174,7 +175,7 @@ def _gather(input_, dim_, shapes, group=None):
     return output
 
 
-def _reduce(input_, use_fp32=True, group=None):
+def _reduce(input_, use_fp32=True, reduce_op=ReduceOp.SUM, group=None):
     """All-reduce the input tensor across model parallel group."""
 
     comm_size = dist.get_world_size(group=group)
@@ -186,10 +187,10 @@ def _reduce(input_, use_fp32=True, group=None):
     if use_fp32:
         dtype = input_.dtype
         inputf_ = input_.float()
-        dist.all_reduce(inputf_, group=group)
+        dist.all_reduce(inputf_, op=reduce_op, group=group)
         input_ = inputf_.to(dtype)
     else:
-        dist.all_reduce(input_, group=group)
+        dist.all_reduce(input_, op=reduce_op, group=group)
 
     return input_
 

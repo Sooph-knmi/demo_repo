@@ -10,9 +10,11 @@ import einops
 import numpy as np
 import pytorch_lightning as pl
 import torch
+import torch.distributed as dist
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 from timm.scheduler import CosineLRScheduler
+from torch.distributed.distributed_c10d import ProcessGroup
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.utils.checkpoint import checkpoint
 
@@ -103,13 +105,13 @@ class GraphForecaster(pl.LightningModule):
         # Spread-skill metric (eval-mode only - see the RolloutEval callback)
         self.spread_skill = SpreadSkill(rollout=config.diagnostics.eval.rollout, nvar=len(config.diagnostics.plot.parameters))
 
-        # DDP group definitions; TODO: add better documentation!
-        self.mgroupdef: Optional[Tuple] = None
-        self.mgroupdef_single: Optional[Tuple] = None
-
         self.use_zero_optimizer = config.training.zero_optimizer
 
-        self.model_comm_group = None
+        # Communication groups
+        self.model_comm_group: Optional[ProcessGroup] = None
+        self.ens_comm_group: Optional[ProcessGroup] = None
+        self.model_comm_group_size: int = 1
+        self.ens_comm_group_size: int = 1
 
         LOGGER.debug("Rollout window length: %d", self.rollout)
         LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
@@ -122,6 +124,27 @@ class GraphForecaster(pl.LightningModule):
         self.model_comm_group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.num_gpus_per_model
         self.model_comm_num_groups = math.ceil(
             config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.num_gpus_per_model
+        )
+
+        assert config.hardware.num_gpus_per_ensemble % config.hardware.num_gpus_per_model == 0
+
+        self.ens_comm_num_groups = math.ceil(
+            config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.num_gpus_per_ensemble
+        )
+        self.ens_comm_group_id = int(os.environ.get("SLURM_PROCID", "0")) // config.hardware.num_gpus_per_ensemble
+        self.ens_comm_group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.num_gpus_per_ensemble
+
+        LOGGER.debug(
+            "Model comm group ID = %d, rank = %d out of %d groups",
+            self.model_comm_group_id,
+            self.model_comm_group_rank,
+            self.model_comm_num_groups,
+        )
+        LOGGER.debug(
+            "Ensemble comm group ID = %d, rank = %d out of %d groups",
+            self.ens_comm_group_id,
+            self.ens_comm_group_rank,
+            self.ens_comm_num_groups,
         )
 
     def _initialize_loss(self, config: DictConfig) -> None:
@@ -177,9 +200,15 @@ class GraphForecaster(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x, self.model_comm_group)
 
-    def set_model_comm_group(self, model_comm_group) -> None:
+    def set_model_comm_group(self, model_comm_group: ProcessGroup) -> None:
         LOGGER.debug("set_model_comm_group: %s", model_comm_group)
         self.model_comm_group = model_comm_group
+        self.model_comm_group_size = dist.get_world_size(group=model_comm_group)
+
+    def set_ensemble_comm_group(self, ens_comm_group: ProcessGroup) -> None:
+        LOGGER.debug("set_ensemble_comm_group: %s", ens_comm_group)
+        self.ens_comm_group = ens_comm_group
+        self.ens_comm_group_size = dist.get_world_size(group=ens_comm_group)
 
     def _compute_kcrps(self, y_pred: torch.Tensor, y_target: torch.Tensor, squash: bool = True) -> torch.Tensor:
         """Rearranges the prediction and ground truth tensors and then computes the
@@ -203,15 +232,51 @@ class GraphForecaster(pl.LightningModule):
     def gather_and_compute_loss(
         self, y_pred: torch.Tensor, y: torch.Tensor, validation_mode: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
-        y_pred_group = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.mgroupdef[1], mgroup=self.mgroupdef[0])
-        assert (
-            y_pred_group.shape[1] == self.nens_per_group
-        ), f"Group ensemble shape mismatch: got {y_pred_group.shape[1]} -- expected {self.nens_per_group}!"
-        loss_inc = checkpoint(self._compute_loss, y_pred_group, y[..., : self.fcdim], use_reentrant=False)
-        y_pred = split_tensor(y_pred_group, dim=1, shapes=[y_pred.shape] * self.mgroupdef[1], mgroup=self.mgroupdef[0])
+        # step 1/ gather among all GPUs in the same ensemble group
+        LOGGER.debug("before gather y_pred.shape = %s", y_pred.shape)
+        y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)
+        LOGGER.debug("after gather y_pred_ens.shape = %s", y_pred_ens.shape)
+
+        # step 2/ get rid of the duplicates
+        y_pred_ens = y_pred_ens[..., :: self.model_comm_group_size]
+        LOGGER.debug("after stride y_pred_ens.shape == %s", y_pred_ens.shape)
+
+        # step 3/ compute the loss
+        loss_inc = checkpoint(self._compute_loss, y_pred_ens, y[..., : self.fcdim], use_reentrant=False)
+
+        # step 4/ split the tensor and send shards back to the ranks
+        y_pred = split_tensor(
+            y_pred_ens.expand(-1, self.ens_comm_group_size, -1, -1),  # expand it back to the size split() expects
+            dim=1,
+            shapes=[y_pred.shape] * self.ens_comm_group_size,
+            mgroup=self.ens_comm_group,
+        )
+
+        # # step 1/ avg-reduce among all GPUs in the same model group
+        # LOGGER.debug("before reduce y_pred.shape = %s", y_pred.shape)
+        # y_pred = reduce_tensor(y_pred, mgroup=self.model_comm_group, reduce_op=ReduceOp.AVG)
+        # LOGGER.debug("after reduce y_pred.shape = %s", y_pred.shape)
+
+        # # step 2/ gather among all GPUs in the same ensemble group
+        # y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)
+        # LOGGER.debug("after gather y_pred_ens.shape = %s", y_pred_ens.shape)
+
+        # # assert (
+        # #     y_pred_ens.shape[1] == self.nens_per_group
+        # # ), f"Group ensemble shape mismatch: got {y_pred_ens.shape[1]} -- expected {self.nens_per_group}!"
+
+        # # step 3/ compute the loss
+        # loss_inc = checkpoint(self._compute_loss, y_pred_ens, y[..., : self.fcdim], use_reentrant=False)
+
+        # # step 4/ split tensor among my ensemble group
+        # y_pred = split_tensor(y_pred_ens, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)
+        # LOGGER.debug("after split y_pred.shape = %s", y_pred.shape)
+
+        # # step 5/ reduce tensor among devices in each model group
+        # y_pred =
 
         # during validation, we also return the "full" (group-generated) ensemble so we can run diagnostics
-        return y_pred, loss_inc, y_pred_group if validation_mode else None
+        return y_pred, loss_inc, y_pred_ens if validation_mode else None
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         # left-shift along the step dimension

@@ -9,5 +9,5 @@ strategy: auto
 # number of GPUs per node and group, and number of nodes (for DDP)
 num_gpus_per_node: 1
 num_nodes: 1
-group_size: 1
 num_gpus_per_model: 1
+num_gpus_per_ensemble: 1

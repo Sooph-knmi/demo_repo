@@ -553,23 +553,6 @@ def get_callbacks(config: DictConfig) -> List:
         if config.training.eda_initial_perturbations:
             trainer_callbacks.append(PlotEnsembleInitialConditions(config))
 
-    if config.training.swa.enabled:
-        from pytorch_lightning.callbacks.stochastic_weight_avg import StochasticWeightAveraging
-
-        trainer_callbacks.append(
-            StochasticWeightAveraging(
-                swa_lrs=config.training.swa.lr,
-                swa_epoch_start=min(
-                    int(0.75 * config.training.max_epochs),
-                    config.training.max_epochs - 1,
-                ),
-                annealing_epochs=max(int(0.25 * config.training.max_epochs), 1),
-                annealing_strategy="cos",
-                # TODO: do we want the averaging to happen on the CPU, to save memory?
-                device=None,
-            )
-        )
-
     # if config.diagnostics.plot.learned_features:
     #     LOGGER.debug("Setting up a callback to plot the trainable graph node features ...")
     #     trainer_callbacks.append(GraphTrainableFeaturesPlot(config))
