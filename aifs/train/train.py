@@ -170,7 +170,9 @@ class AIFSTrainer:
             callbacks=self.callbacks,
             deterministic=self.config.training.deterministic,
             detect_anomaly=self.config.diagnostics.debug.anomaly_detection,
-            strategy=DDPGroupStrategy(self.config.hardware.num_gpus_per_model, static_graph=True),
+            strategy=DDPGroupStrategy(
+                self.config.hardware.num_gpus_per_model, static_graph=False if self.config.training.accum_grad_batches > 1 else True
+            ),
             devices=self.config.hardware.num_gpus_per_node,
             num_nodes=self.config.hardware.num_nodes,
             precision=self.config.training.precision,
