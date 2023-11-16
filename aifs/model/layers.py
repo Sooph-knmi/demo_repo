@@ -21,10 +21,10 @@ from torch_geometric.utils import softmax
 
 from aifs.distributed.helpers import change_channels_in_shape
 from aifs.distributed.helpers import gather_tensor
-from aifs.distributed.helpers import partition_edges
+from aifs.distributed.helpers import get_shape_shards
+from aifs.distributed.helpers import shard_heads
+from aifs.distributed.helpers import shard_sequence
 from aifs.distributed.helpers import shard_tensor
-from aifs.distributed.helpers import sync_tensor
-from aifs.distributed.helpers import shard_all2all
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
@@ -175,15 +175,28 @@ class GNNProcessor(nn.Module):
             self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
 
     def forward(
-        self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: list, size: Size, model_comm_group: ProcessGroup
+        self,
+        x: Tensor,
+        edge_index: Adj,
+        edge_attr: Tensor,
+        shape_nodes: list,
+        batch_size,
+        size: Size,
+        model_comm_group: ProcessGroup,
     ) -> Tensor:
-        edge_index, edge_attr, shapes_edge_idx, shapes_edge_attr = partition_edges(size, edge_index, edge_attr, model_comm_group)
-        edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_comm_group)
+        shapes_edge_attr = get_shape_shards(edge_attr, 0, model_comm_group)
         edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_comm_group)
 
         for i in range(self.hidden_layers):
             x, edge_attr = checkpoint(
-                self.proc[i], x, edge_index, edge_attr, (shape_nodes, shape_nodes), model_comm_group, use_reentrant=False
+                self.proc[i],
+                x,
+                edge_index,
+                edge_attr,
+                (shape_nodes, shape_nodes, shapes_edge_attr),
+                batch_size,
+                model_comm_group,
+                use_reentrant=False,
             )
 
         return x
@@ -247,11 +260,12 @@ class GNNProcessorChunk(nn.Module):
         edge_index: Adj,
         edge_attr: Tensor,
         shapes: Tuple,
+        batch_size: int,
         model_comm_group: ProcessGroup,
         size: Size = None,
     ):
         for i in range(self.hidden_layers):
-            x, edge_attr = self.proc[i](x, edge_index, edge_attr, shapes, model_comm_group, size=size)
+            x, edge_attr = self.proc[i](x, edge_index, edge_attr, shapes, batch_size, model_comm_group, size=size)
 
         return x, edge_attr
 
@@ -306,7 +320,7 @@ class GNNMapper(nn.Module):
         self.backward_mapper = backward_mapper
         self.out_channels_dst = out_channels_dst
 
-        update_src_nodes = False #if backward_mapper else True
+        update_src_nodes = False  # if backward_mapper else True
         self.proc = GNNBlock(
             hidden_dim,
             mlp_hidden_ratio * hidden_dim,
@@ -324,16 +338,22 @@ class GNNMapper(nn.Module):
 
         if backward_mapper:  # h -> era
             self.node_era_extractor = nn.Linear(hidden_dim, out_channels_dst)
-            self.emb_nodes_dst = nn.Linear(in_channels_dst, hidden_dim) # move after block here because same in both
         else:  # era -> h
             self.emb_nodes_src = nn.Linear(in_channels_src, hidden_dim)
-            self.emb_nodes_dst = nn.Linear(in_channels_dst, hidden_dim)
+
+        self.emb_nodes_dst = nn.Linear(in_channels_dst, hidden_dim)
 
     def forward(
-        self, x: PairTensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, size: Size, model_comm_group: ProcessGroup
+        self,
+        x: PairTensor,
+        edge_index: Adj,
+        edge_attr: Tensor,
+        shape_nodes: Tuple,
+        batch_size: int,
+        size: Size,
+        model_comm_group: ProcessGroup,
     ) -> PairTensor:
-        edge_index, edge_attr, shapes_edge_idx, shapes_edge_attr = partition_edges(size, edge_index, edge_attr, model_comm_group)
-        edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_comm_group)
+        shapes_edge_attr = get_shape_shards(edge_attr, 0, model_comm_group)
         edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_comm_group)
 
         x_src, x_dst = x
@@ -352,14 +372,19 @@ class GNNMapper(nn.Module):
             shapes_dst = change_channels_in_shape(shapes_dst, self.hidden_dim)
 
         (x_src, x_dst), edge_attr = self.proc(
-            (x_src, x_dst), edge_index, edge_attr, (shapes_src, shapes_dst), model_comm_group, size=size
+            (x_src, x_dst),
+            edge_index,
+            edge_attr,
+            (shapes_src, shapes_dst, shapes_edge_attr),
+            batch_size,
+            model_comm_group,
+            size=size,
         )
 
         if self.backward_mapper:
             x_dst = self.node_era_extractor(x_dst)
             x_dst = gather_tensor(x_dst, 0, change_channels_in_shape(shapes_dst, self.out_channels_dst), model_comm_group)
 
-        # return x_src, x_dst
         return x_dst
 
 
@@ -390,12 +415,18 @@ class GNNBlock(nn.Module):
             Number of output channels.
         edge_dim : int,
             Edge dimension
+        heads : int,
+            Number of heads
+        bias : bool, by default True,
+            Add bias or not
         mlp_extra_layers : int, optional
             Extra layers in MLP, by default 0
         activation : str, optional
             Activation function, by default "SiLU"
         update_src_nodes: bool, by default True
             Update src if src and dst nodes are given
+        ptype : str, by default "processor",
+            Type of block, either processor or mapper
         """
         super().__init__(**kwargs)
 
@@ -408,6 +439,7 @@ class GNNBlock(nn.Module):
         self.lin_query = nn.Linear(in_channels, heads * self.out_channels_conv)
         self.lin_value = nn.Linear(in_channels, heads * self.out_channels_conv)
         self.lin_self = nn.Linear(in_channels, heads * self.out_channels_conv, bias=bias)
+        self.lin_edge = nn.Linear(edge_dim, heads * self.out_channels_conv)  # , bias=False)
 
         self.conv = TransformerConv(
             out_channels=self.out_channels_conv,
@@ -448,6 +480,7 @@ class GNNBlock(nn.Module):
         edge_index: Adj,
         edge_attr: Tensor,
         shapes: Tuple,
+        batch_size: int,
         model_comm_group: ProcessGroup,
         size: Size = None,
     ):
@@ -464,9 +497,6 @@ class GNNBlock(nn.Module):
             value = self.lin_value(x)
             x_r = self.lin_self(x)
 
-            query = sync_tensor(query, 0, shapes[1], model_comm_group)
-            key = sync_tensor(key, 0, shapes[1], model_comm_group)
-            value = sync_tensor(value, 0, shapes[1], model_comm_group)
         else:
             x = (self.layer_norm1(x[0]), self.layer_norm2(x[1]))
 
@@ -476,16 +506,27 @@ class GNNBlock(nn.Module):
             value = self.lin_value(x[0])
             x_r = self.lin_self(x[1])
 
-            query = sync_tensor(query, 0, shapes[1], model_comm_group)
-            key = sync_tensor(key, 0, shapes[0], model_comm_group)
-            value = sync_tensor(value, 0, shapes[0], model_comm_group)
+        edge_attr_emb = self.lin_edge(edge_attr)
 
-        query = query.view(-1, H, C)
-        key = key.view(-1, H, C)
-        value = value.view(-1, H, C)
-        out = self.conv(query=query, key=key, value=value, edge_index=edge_index, edge_attr=edge_attr, size=size)
+        query, key, value, edge_attr_emb = map(
+            lambda t: einops.rearrange(t, "(b n) (h c) -> b h n c", h=H, c=C, b=batch_size), (query, key, value, edge_attr_emb)
+        )
 
-        out = shard_tensor(out, 0, shapes[1], model_comm_group, gather_in_backward=False)
+        query = shard_heads(query, shapes=shapes[1], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
+        key = shard_heads(key, shapes=shapes[0], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
+        value = shard_heads(value, shapes=shapes[0], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
+        edge_attr_emb = shard_heads(edge_attr_emb, shapes=shapes[2], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
+
+        query, key, value, edge_attr_emb = map(
+            lambda t: einops.rearrange(t, "b h n c -> (b n) h c"), (query, key, value, edge_attr_emb)
+        )
+
+        out = self.conv(query=query, key=key, value=value, edge_index=edge_index, edge_attr=edge_attr_emb, size=size)
+        out = einops.rearrange(out, "(b n) h c -> b h n c", b=batch_size)
+
+        out = shard_sequence(out, shapes=shapes[1], dim_split=2, dim_concatenate=1, mgroup=model_comm_group)
+        out = einops.rearrange(out, "b h n c -> (b n) (h c)")
+
         out = self.proj(out + x_r)
 
         if isinstance(x_skip, Tensor):
@@ -511,34 +552,28 @@ class TransformerConv(MessagePassing):
     def __init__(
         self,
         out_channels: int,
-        heads: int = 1,
         dropout: float = 0.0,
-        edge_dim: Optional[int] = None,
         **kwargs,
     ):
         kwargs.setdefault("aggr", "add")
         super().__init__(node_dim=0, **kwargs)
 
         self.out_channels = out_channels
-        self.heads = heads
         self.dropout = dropout
-        self.edge_dim = edge_dim
-
-        if edge_dim is not None:
-            self.lin_edge = nn.Linear(edge_dim, heads * out_channels)  # , bias=False)
-        else:
-            self.lin_edge = None
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, edge_index: Adj, edge_attr: OptTensor = None, size: Size = None):
         dim_size = query.shape[0]
-        out = self.propagate(edge_index, query=query, key=key, value=value, edge_attr=edge_attr, size=size, dim_size=dim_size)
+        heads = query.shape[1]
 
-        out = out.view(-1, self.heads * self.out_channels)
+        out = self.propagate(
+            heads=heads, edge_index=edge_index, query=query, key=key, value=value, edge_attr=edge_attr, size=size, dim_size=dim_size
+        )
 
         return out
 
     def message(
         self,
+        heads: int,
         query_i: Tensor,
         key_j: Tensor,
         value_j: Tensor,
@@ -547,9 +582,7 @@ class TransformerConv(MessagePassing):
         ptr: OptTensor,
         size_i: Optional[int],
     ) -> Tensor:
-        if self.lin_edge is not None:
-            assert edge_attr is not None
-            edge_attr = self.lin_edge(edge_attr).view(-1, self.heads, self.out_channels)
+        if edge_attr is not None:
             key_j = key_j + edge_attr
 
         alpha = (query_i * key_j).sum(dim=-1) / math.sqrt(self.out_channels)
@@ -557,7 +590,7 @@ class TransformerConv(MessagePassing):
         alpha = softmax(alpha, index, ptr, size_i)
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)
 
-        return value_j * alpha.view(-1, self.heads, 1)  # + edge_attr to value_j?
+        return value_j * alpha.view(-1, heads, 1)  # + edge_attr to value_j?
 
 
 class TransformerProcessor(nn.Module):
@@ -618,17 +651,16 @@ class TransformerProcessor(nn.Module):
             ]
         )
 
-    def forward(self, x: Tensor, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
+    def forward(self, x: Tensor, shape_nodes: list, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
+        shapes = (shape_nodes, shape_nodes)
 
-        assert (
-            model_comm_group.size() == 1 or batch_size == 1
-            ), f"Either one GPU per model instance, or batch_size has to be 1"
+        assert model_comm_group.size() == 1 or batch_size == 1, "Either one GPU per model instance, or batch_size has to be 1"
 
         for i in range(self.hidden_layers):
-            x = checkpoint(self.proc[i], x, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
+            x = checkpoint(self.proc[i], x, shapes, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
 
         return x
-    
+
 
 class TransformerProcessorChunk(nn.Module):
     """Message Passing Processor Graph Neural Network."""
@@ -688,14 +720,13 @@ class TransformerProcessorChunk(nn.Module):
             self.lin_out = nn.Linear(hidden_dim, out_channels)
             self.layernorm_out = AutocastLayerNorm(hidden_dim)
 
-    def forward(self, x: Tensor, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
-
+    def forward(self, x: Tensor, shapes: list, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
         if self.in_channels != self.hidden_dim:
             x = self.layernorm_in(x)
             x = self.lin_in(x)
 
         for i in range(self.hidden_layers):
-            x = checkpoint(self.proc[i], x, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
+            x = checkpoint(self.proc[i], x, shapes, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
 
         if self.out_channels != self.hidden_dim:
             x = self.layernorm_out(x)
@@ -718,7 +749,9 @@ class TransformerLayer(nn.Module):
             raise RuntimeError from ae
 
         self.lnorm1 = nn.LayerNorm(channels)
-        self.mhsa = MultiHeadSelfAttention(num_heads=num_heads, embed_dimension=channels, window_size=window_size, bias=False, is_causal=False, dropout=0.0)
+        self.mhsa = MultiHeadSelfAttention(
+            num_heads=num_heads, embed_dimension=channels, window_size=window_size, bias=False, is_causal=False, dropout=0.0
+        )
         self.proj = nn.Linear(channels, channels, bias=True)
 
         self.mlp = nn.Sequential(
@@ -728,17 +761,25 @@ class TransformerLayer(nn.Module):
         )
         self.lnorm2 = nn.LayerNorm(channels)
 
-    def forward(self, x: Tensor, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
+    def forward(self, x: Tensor, shapes: list, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
         x1 = x
         x = self.lnorm1(x)
-        x = self.proj(self.mhsa(x, batch_size, model_comm_group=model_comm_group)) + x1
+        x = self.proj(self.mhsa(x, shapes, batch_size, model_comm_group=model_comm_group)) + x1
         x = self.mlp(self.lnorm2(x)) + x
 
         return x
 
 
 class MultiHeadSelfAttention(nn.Module):
-    def __init__(self, num_heads: int, embed_dimension: int, bias: bool = False, is_causal: bool = False, window_size: int = None, dropout: float = 0.0):
+    def __init__(
+        self,
+        num_heads: int,
+        embed_dimension: int,
+        bias: bool = False,
+        is_causal: bool = False,
+        window_size: int = None,
+        dropout: float = 0.0,
+    ):
         super().__init__()
 
         assert embed_dimension % num_heads == 0
@@ -766,29 +807,26 @@ class MultiHeadSelfAttention(nn.Module):
             dropout=self.dropout,
         )
 
-    def forward(self, x, batch_size, model_comm_group: ProcessGroup):
+    def forward(self, x: Tensor, shapes: list, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
         query, key, value = self.lin_qkv(x).chunk(3, -1)
+
         query, key, value = map(
             lambda t: einops.rearrange(t, "(b n) (h c) -> b h n c", b=batch_size, h=self.num_heads), (query, key, value)
         )
 
-        query = shard_all2all(query, dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
-        key = shard_all2all(key, dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
-        value = shard_all2all(value, dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
+        # combine to 1 or two comms?
+        query = shard_heads(query, shapes=shapes[1], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
+        key = shard_heads(key, shapes=shapes[0], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
+        value = shard_heads(value, shapes=shapes[0], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
 
         # out = self.atten(query, key, value, attn_mask=None, dropout_p=self.dropout, is_causal=self.is_causal)
         out = self.atten(query, key, value, mask=None, attn_bias=None)
 
-        out = shard_all2all(out, dim_split=2, dim_concatenate=1, mgroup=model_comm_group)
-
+        out = shard_sequence(out, shapes=shapes[1], dim_split=2, dim_concatenate=1, mgroup=model_comm_group)
         out = einops.rearrange(out, "b h n c -> (b n) (h c)")
 
         return out
 
-        # x = einops.rearrange(x, '(b n) c -> b n c', b=batch_size)
-        # query, key, value = self.lin_qkv(x).chunk(3, -1) # split this up to save memory?
-        # query, key, value = map(lambda t: einops.rearrange(t, 'b n (h c) -> b h n c', h = self.num_heads), (query, key, value))
-        # 5121, 1024
 
 class CheckpointWrapper(nn.Module):
     """Wrapper for checkpointing a module."""
