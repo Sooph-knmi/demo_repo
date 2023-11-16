@@ -166,7 +166,9 @@ def plot_flat_sample(
     scatter_plot(fig, ax[5], lon, lat, truth - input_, cmap="bwr", title=f"{vname} persist err")
 
 
-def scatter_plot(fig, ax, lon: np.array, lat: np.array, data: np.array, cmap: str = "viridis", title: Optional[str] = None) -> None:
+def scatter_plot(
+    fig, ax, pc, lat: np.array, lon: np.array, data: np.array, cmap: str = "viridis", title: Optional[str] = None
+) -> None:
     """Lat-lon scatter plot: can work with arbitrary grids.
 
     Parameters
@@ -175,10 +177,12 @@ def scatter_plot(fig, ax, lon: np.array, lat: np.array, data: np.array, cmap: st
         Figure object handle
     ax : _type_
         Axis object handle
-    lon : np.ndarray
-        longitude coordinates array, shape (lon,)
-    lat : np.ndarray
-        latitude coordinates array, shape (lat,)
+    pc : _type_
+        CRS, eg. ccrs.PlateCarreee
+    lat : _type_
+        Latitudes
+    lon : _type_
+        Longitudes
     data : _type_
         Data to plot
     cmap : str, optional
@@ -186,15 +190,14 @@ def scatter_plot(fig, ax, lon: np.array, lat: np.array, data: np.array, cmap: st
     title : _type_, optional
         Title for plot, by default None
     """
+
     psc = ax.scatter(
-        lon,
-        lat,
+        *pc(lon, lat),
         c=data,
         cmap=cmap,
         s=1,
         alpha=1.0,
         norm=TwoSlopeNorm(vcenter=0.0) if cmap == "bwr" else None,
-        rasterized=True,
     )
     ax.set_xlim((-np.pi, np.pi))
     ax.set_ylim((-np.pi / 2, np.pi / 2))
@@ -206,6 +209,7 @@ def scatter_plot(fig, ax, lon: np.array, lat: np.array, data: np.array, cmap: st
 
     ax.set_aspect("auto", adjustable=None)
     _hide_axes_ticks(ax)
+    plt.tight_layout()
     fig.colorbar(psc, ax=ax)
 
 
@@ -324,6 +328,8 @@ def plot_ensemble(
     lat, lon = latlons[:, 0], latlons[:, 1]
     nens = pred.shape[ens_dim]
     ens_mean, ens_sd = pred.mean(axis=ens_dim), pred.std(axis=ens_dim)
+
+    LOGGER.debug("latlons.shape = %s truth.shape = %s pred.shape = %s", latlons.shape, truth.shape, pred.shape)
 
     # ensemble mean
     scatter_plot(fig, ax[0], pc, lat, lon, truth, title=f"{vname} target")

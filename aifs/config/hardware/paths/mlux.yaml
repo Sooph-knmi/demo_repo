@@ -1,0 +1,14 @@
+training:
+  an: /project/home/p200177/syma/aifs-input/${data.resolution}
+  eda: null
+validation:
+  an: /project/home/p200177/syma/aifs-input/${data.resolution}
+  eda: null
+output: /project/home/p200177/syma/aifs-output/${data.resolution}
+logs:
+  wandb: ${hardware.paths.output}/logs/wandb
+  tensorboard: ${hardware.paths.output}/logs/tensorboard
+checkpoints: ${hardware.paths.output}/checkpoint
+plots: ${hardware.paths.output}/plots
+graph: /project/home/p200177/syma/aifs-graphs
+patches: null

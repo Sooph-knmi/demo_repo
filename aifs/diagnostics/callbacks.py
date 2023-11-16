@@ -1,9 +1,7 @@
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
-from typing import Optional
 from typing import Tuple
 
 import matplotlib.pyplot as plt
@@ -53,25 +51,6 @@ class PlotCallback(Callback):
 
                 trainer.logger.experiment.log({exp_log_tag: wandb.Image(fig)})
         plt.close(fig)  # cleanup
-
-
-class AsyncPlotCallback(PlotCallback):
-    """Factory for creating a callback that plots data to Weights and Biases."""
-
-    def __init__(self, config):
-        super().__init__(config)
-
-        self._executor = ThreadPoolExecutor(max_workers=1)
-        self._error: Optional[BaseException] = None
-
-    def teardown(self, trainer, pl_module, stage) -> None:
-        """This method is called to close the threads."""
-        del trainer, pl_module, stage  # not used
-        self._executor.shutdown(wait=True)
-
-        # if an error was raised anytime in any of the `executor.submit` calls
-        if self._error is not None:
-            raise self._error
 
 
 class RolloutEval(Callback):
@@ -407,8 +386,6 @@ class PredictedEnsemblePlot(PlotCallback):
             .cpu()
             .numpy()
         )
-
-        LOGGER.debug("Fields to plot: %s", [v for _, v in self.config.diagnostics.plot.parameters.items()])
 
         for rollout_step in range(pl_module.rollout):
             fig = plot_predicted_ensemble(

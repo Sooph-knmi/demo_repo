@@ -48,7 +48,7 @@ rollout:
   # maximum rollout to use
   max: 1
 
-ensemble_size: 8
+ensemble_size_per_device: 2
 
 # use the EDA 10-member ensemble to generate perturbations to the ERA5 analysis
 # the (ERA5 analysis + perturbations) will be used as initial conditions for the ensemble during training and validation

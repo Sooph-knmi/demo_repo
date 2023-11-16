@@ -37,20 +37,20 @@ class ERA5DataModule(pl.LightningDataModule):
         self.config = config
 
         self.global_rank = int(os.environ.get("SLURM_PROCID", "0"))  # global rank
-        self.model_comm_group_id = (
-            self.global_rank // self.config.hardware.num_gpus_per_model
+        self.ens_comm_group_id = (
+            self.global_rank // self.config.hardware.num_gpus_per_ensemble
         )  # id of the model communication group the rank is participating in
-        self.model_comm_group_rank = (
-            self.global_rank % self.config.hardware.num_gpus_per_model
+        self.ens_comm_group_rank = (
+            self.global_rank % self.config.hardware.num_gpus_per_ensemble
         )  # rank within one model communication group
-        self.model_comm_num_groups = math.ceil(
-            self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes / self.config.hardware.num_gpus_per_model
+        self.ens_comm_num_groups = math.ceil(
+            self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes / self.config.hardware.num_gpus_per_ensemble
         )  # number of model communication groups
         LOGGER.debug(
-            "Rank %d model communication group number %d, with local model communication group rank %d",
+            "Rank %d ensemble communication group number %d, with local group rank %d",
             self.global_rank,
-            self.model_comm_group_id,
-            self.model_comm_group_rank,
+            self.ens_comm_group_id,
+            self.ens_comm_group_rank,
         )
 
         self.ds_train = self._get_dataset("training", shuffle=True)
@@ -78,9 +78,9 @@ class ERA5DataModule(pl.LightningDataModule):
             lead_time=self.config.training.lead_time,
             rollout=r,
             multistep=self.config.training.multistep_input,
-            model_comm_group_rank=self.model_comm_group_rank,
-            model_comm_group_id=self.model_comm_group_id,
-            model_comm_num_groups=self.model_comm_num_groups,
+            comm_group_rank=self.ens_comm_group_rank,
+            comm_group_id=self.ens_comm_group_id,
+            comm_num_groups=self.ens_comm_num_groups,
             shuffle=shuffle,
         )
 

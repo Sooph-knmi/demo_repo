@@ -31,7 +31,7 @@ from aifs.utils.distributed import gather_tensor
 from aifs.utils.distributed import split_tensor
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__, debug=True)
+LOGGER = get_code_logger(__name__, debug=False)
 
 
 class GraphForecaster(pl.LightningModule):
@@ -78,9 +78,9 @@ class GraphForecaster(pl.LightningModule):
         self.rollout_epoch_increment = config.training.rollout.epoch_increment
         self.rollout_max = config.training.rollout.max
 
-        self.nens_per_device = config.training.ensemble_size
-        self.nens_per_group = self.nens_per_device * config.hardware.group_size
-        LOGGER.debug("Ensemble size: per device = %d, per group = %d", self.nens_per_device, self.nens_per_group)
+        self.nens_per_device = config.training.ensemble_size_per_device
+        self.nens_per_group = self.nens_per_device * config.hardware.num_gpus_per_ensemble
+        LOGGER.debug("Ensemble size: per device = %d, per ens-group = %d", self.nens_per_device, self.nens_per_group)
 
         LOGGER.debug("Rollout window length: %d", self.rollout)
         if self.rollout_epoch_increment > 0:
@@ -233,49 +233,26 @@ class GraphForecaster(pl.LightningModule):
         self, y_pred: torch.Tensor, y: torch.Tensor, validation_mode: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         # step 1/ gather among all GPUs in the same ensemble group
-        LOGGER.debug("before gather y_pred.shape = %s", y_pred.shape)
-        y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)
-        LOGGER.debug("after gather y_pred_ens.shape = %s", y_pred_ens.shape)
+        y_pred_ens_ = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)
+        LOGGER.debug("y_pred tensor shapes before %s and after gather %s", y_pred.shape, y_pred_ens_.shape)
 
-        # step 2/ get rid of the duplicates
-        y_pred_ens = y_pred_ens[..., :: self.model_comm_group_size]
-        LOGGER.debug("after stride y_pred_ens.shape == %s", y_pred_ens.shape)
+        # step 2/ downsample ensemble to get rid of the duplicates (if any)
+        y_pred_ens = y_pred_ens_[:, :: self.model_comm_group_size, ...]
+        LOGGER.debug("after downsample y_pred_ens.shape == %s", y_pred_ens.shape)
 
         # step 3/ compute the loss
         loss_inc = checkpoint(self._compute_loss, y_pred_ens, y[..., : self.fcdim], use_reentrant=False)
 
         # step 4/ split the tensor and send shards back to the ranks
         y_pred = split_tensor(
-            y_pred_ens.expand(-1, self.ens_comm_group_size, -1, -1),  # expand it back to the size split() expects
+            y_pred_ens.expand(y_pred_ens_.shape),  # expand it back to the size split() expects, if needed
             dim=1,
             shapes=[y_pred.shape] * self.ens_comm_group_size,
             mgroup=self.ens_comm_group,
         )
+        LOGGER.debug("after split y_pred.shape == %s", y_pred.shape)
 
-        # # step 1/ avg-reduce among all GPUs in the same model group
-        # LOGGER.debug("before reduce y_pred.shape = %s", y_pred.shape)
-        # y_pred = reduce_tensor(y_pred, mgroup=self.model_comm_group, reduce_op=ReduceOp.AVG)
-        # LOGGER.debug("after reduce y_pred.shape = %s", y_pred.shape)
-
-        # # step 2/ gather among all GPUs in the same ensemble group
-        # y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)
-        # LOGGER.debug("after gather y_pred_ens.shape = %s", y_pred_ens.shape)
-
-        # # assert (
-        # #     y_pred_ens.shape[1] == self.nens_per_group
-        # # ), f"Group ensemble shape mismatch: got {y_pred_ens.shape[1]} -- expected {self.nens_per_group}!"
-
-        # # step 3/ compute the loss
-        # loss_inc = checkpoint(self._compute_loss, y_pred_ens, y[..., : self.fcdim], use_reentrant=False)
-
-        # # step 4/ split tensor among my ensemble group
-        # y_pred = split_tensor(y_pred_ens, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)
-        # LOGGER.debug("after split y_pred.shape = %s", y_pred.shape)
-
-        # # step 5/ reduce tensor among devices in each model group
-        # y_pred =
-
-        # during validation, we also return the "full" (group-generated) ensemble so we can run diagnostics
+        # during validation, we also return the pooled ensemble so we can run diagnostics
         return y_pred, loss_inc, y_pred_ens if validation_mode else None
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
@@ -328,11 +305,22 @@ class GraphForecaster(pl.LightningModule):
     def _step(
         self,
         batch: torch.Tensor,
+        batch_idx: int,
         x_ic: Optional[torch.Tensor] = None,
         validation_mode: bool = False,
     ) -> Tuple:
         """Training / validation step."""
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
+        LOGGER.debug(
+            "Global rank %d with model (cgroup %d, rank %d) and ensemble (cgroup %d, rank %d) got batch index %03d with norm %.6e",
+            self.global_rank,
+            self.model_comm_group_id,
+            self.model_comm_group_rank,
+            self.ens_comm_group_id,
+            self.ens_comm_group_rank,
+            batch_idx,
+            torch.linalg.norm(batch).cpu(),
+        )
         batch = self.model.normalizer(batch)  # normalized in-place
         x = self.model.normalizer(x_ic)  # (bs, nens, multistep, latlon, nvar)
 
@@ -374,9 +362,9 @@ class GraphForecaster(pl.LightningModule):
         return loss, metrics, y_preds, kcrps_preds
 
     def training_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int) -> torch.Tensor:
-        del batch_idx  # not used
+        # del batch_idx  # not used
         x_ens_ic = self._generate_ens_inicond(batch)
-        train_loss, _, _, _ = self._step(batch[0], x_ens_ic)
+        train_loss, _, _, _ = self._step(batch[0], batch_idx, x_ens_ic)
         self.log(
             "train_" + self.loss_type,
             train_loss,
@@ -408,10 +396,10 @@ class GraphForecaster(pl.LightningModule):
         self.rollout = min(self.rollout, self.rollout_max)
 
     def validation_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int) -> None:
-        del batch_idx  # not used
+        # del batch_idx  # not used
         with torch.no_grad():
             x_ens_ic = self._generate_ens_inicond(batch)
-            val_loss, metrics, y_preds, pkcrps = self._step(batch[0], x_ens_ic, validation_mode=True)
+            val_loss, metrics, y_preds, pkcrps = self._step(batch[0], batch_idx, x_ens_ic, validation_mode=True)
         self.log(
             "val_" + self.loss_type,
             val_loss,

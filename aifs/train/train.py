@@ -15,8 +15,8 @@ from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.callbacks import get_callbacks
 from aifs.diagnostics.logging import get_tensorboard_logger
 from aifs.diagnostics.logging import get_wandb_logger
+from aifs.distributed.strategy import DDPGroupStrategy
 from aifs.train.forecaster import GraphForecaster
-from aifs.train.strategy import DDPGroupStrategy
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
@@ -165,7 +165,11 @@ class AIFSTrainer:
 
     @cached_property
     def strategy(self) -> Any:
-        return DDPGroupStrategy(self.config.hardware.num_gpus_per_model, static_graph=True)
+        return DDPGroupStrategy(
+            self.config.hardware.num_gpus_per_model,
+            self.config.hardware.num_gpus_per_ensemble,
+            static_graph=self.config.training.accum_grad_batches,
+        )
 
     def train(self) -> None:
         """Training entry point."""
