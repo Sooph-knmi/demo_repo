@@ -137,10 +137,11 @@ class AIFSGradientChecker:
         trainer.fit(self.model, datamodule=self.datamodule)
 
         # one manual forward-backward
-        dl_train = self.datamodule.ds_train
+        dl_train = self.datamodule.train_dataloader()
 
         for batch_idx, batch in enumerate(dl_train):
             LOGGER.debug("batch_idx: %03d, batch[0].shape = %s", batch_idx, batch[0].shape)
+
             # we're done
             break
 
