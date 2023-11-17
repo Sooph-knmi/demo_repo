@@ -116,6 +116,8 @@ class GNNProcessor(nn.Module):
 
     def __init__(
         self,
+        in_channels: int,
+        out_channels: int,
         hidden_dim: int,
         hidden_layers: int,
         edge_dim: int,
@@ -130,6 +132,10 @@ class GNNProcessor(nn.Module):
 
         Parameters
         ----------
+        in_channels : int
+            Number of input channels
+        out_channels : int
+            Number of output channels
         hidden_dim : int
             Hidden dimension
         hidden_layers : int
@@ -161,7 +167,9 @@ class GNNProcessor(nn.Module):
         for i in range(self.hidden_layers):
             self.proc.append(
                 GNNProcessorChunk(
-                    hidden_dim,
+                    in_channels=in_channels if i == 0 else hidden_dim,
+                    out_channels=out_channels if i == (self.hidden_layers - 1) else hidden_dim,
+                    hidden_dim=hidden_dim,
                     hidden_layers=chunk_size,
                     mlp_extra_layers=mlp_extra_layers,
                     heads=heads,
@@ -208,6 +216,8 @@ class GNNProcessorChunk(nn.Module):
 
     def __init__(
         self,
+        in_channels: int,
+        out_channels: int,
         hidden_dim: int,
         hidden_layers: int,
         mlp_extra_layers: int = 0,
@@ -238,6 +248,17 @@ class GNNProcessorChunk(nn.Module):
         super().__init__()
 
         self.hidden_layers = hidden_layers
+        self.hidden_dim = hidden_dim
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        if self.in_channels != self.hidden_dim:
+            self.lin_in = nn.Linear(in_channels, hidden_dim)
+            self.layernorm_in = AutocastLayerNorm(in_channels)
+
+        if self.out_channels != self.hidden_dim:
+            self.lin_out = nn.Linear(hidden_dim, out_channels)
+            self.layernorm_out = AutocastLayerNorm(hidden_dim)
 
         self.proc = nn.ModuleList(
             [
@@ -264,8 +285,16 @@ class GNNProcessorChunk(nn.Module):
         model_comm_group: ProcessGroup,
         size: Size = None,
     ):
+        if self.in_channels != self.hidden_dim:
+            x = self.layernorm_in(x)
+            x = self.lin_in(x)
+
         for i in range(self.hidden_layers):
             x, edge_attr = self.proc[i](x, edge_index, edge_attr, shapes, batch_size, model_comm_group, size=size)
+
+        if self.out_channels != self.hidden_dim:
+            x = self.layernorm_out(x)
+            x = self.lin_out(x)
 
         return x, edge_attr
 
@@ -612,10 +641,16 @@ class TransformerProcessor(nn.Module):
 
         Parameters
         ----------
+        in_channels : int
+            Number of input channels
+        out_channels : int
+            Number of output channels
         hidden_dim : int
             Hidden dimension
         hidden_layers : int
             Number of hidden layers
+        window_size: int,
+            1/2 size of shifted window for attention computation
         heads: int
             Number of heads to use, default 16
         mlp_hidden_ratio: int
@@ -726,7 +761,7 @@ class TransformerProcessorChunk(nn.Module):
             x = self.lin_in(x)
 
         for i in range(self.hidden_layers):
-            x = checkpoint(self.proc[i], x, shapes, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
+            x = self.proc[i](x, shapes, batch_size, model_comm_group=model_comm_group)
 
         if self.out_channels != self.hidden_dim:
             x = self.layernorm_out(x)

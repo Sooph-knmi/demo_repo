@@ -107,7 +107,9 @@ class GraphMSG(nn.Module):
         # Processor H -> H
         if self.processor_type == "GNN":
             self.h_processor = GNNProcessor(
-                hidden_dim=self.num_channels,
+                in_channels=self.num_channels,
+                out_channels=self.num_channels,
+                hidden_dim=self.proc_channels,
                 hidden_layers=config.model.processor.num_layers,
                 mlp_extra_layers=mlp_extra_layers,
                 edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
@@ -118,7 +120,6 @@ class GraphMSG(nn.Module):
             )
 
         if self.processor_type == "Transformer":
-            print(f"-->>> in channels, {self.num_channels}, hidden dim {self.proc_channels}, out channels, {self.num_channels}")
             self.h_processor = TransformerProcessor(
                 in_channels=self.num_channels,
                 out_channels=self.num_channels,
