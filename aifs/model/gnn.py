@@ -48,7 +48,7 @@ class GraphMSG(nn.Module):
         self.in_channels = config.data.num_features - config.data.num_aux_features
         self.multi_step = config.training.multistep_input
         self.aux_in_channels = config.data.num_aux_features
-        self.proc_noise_channels = config.model.hidden.num_noise_channels
+        self.proc_noise_channels = config.model.processor.num_noise_channels
 
         LOGGER.debug("in_channels + aux_channels == %d", self.in_channels + self.aux_in_channels)
         LOGGER.debug("processor noise channels = %d", self.proc_noise_channels)
