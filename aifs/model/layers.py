@@ -285,12 +285,16 @@ class GNNProcessorChunk(nn.Module):
     ):
         if self.in_channels != self.hidden_dim:
             x = self.proj_in(x)
+            shape_new = change_channels_in_shape(shapes[0], self.hidden_dim)
+            shapes = (shape_new, shape_new)
 
         for i in range(self.hidden_layers):
             x, edge_attr = self.proc[i](x, edge_index, edge_attr, shapes, batch_size, model_comm_group, size=size)
 
         if self.out_channels != self.hidden_dim:
             x = self.proj_out(x)
+            shape_new = change_channels_in_shape(shapes[0], self.out_channels)
+            shapes = (shape_new, shape_new)
 
         return x, edge_attr
 

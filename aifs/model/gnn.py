@@ -359,7 +359,6 @@ class GraphMSG(nn.Module):
         shape_h_fwd = get_shape_shards(x_h_latent, 0, model_comm_group)
         shape_h_proc = change_channels_in_shape(shape_h_fwd, self.num_channels)
         shape_h_bwd = shape_h_proc
-        change_channels_in_shape(shape_x_fwd, self.num_channels)
 
         x_latent = self._run_mapper(
             self.forward_mapper,
