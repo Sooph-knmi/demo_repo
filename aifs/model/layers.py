@@ -253,12 +253,10 @@ class GNNProcessorChunk(nn.Module):
         self.out_channels = out_channels
 
         if self.in_channels != self.hidden_dim:
-            self.lin_in = nn.Linear(in_channels, hidden_dim)
-            self.layernorm_in = AutocastLayerNorm(in_channels)
+            self.proj_in = nn.Sequential(AutocastLayerNorm(in_channels), nn.Linear(in_channels, hidden_dim))
 
         if self.out_channels != self.hidden_dim:
-            self.lin_out = nn.Linear(hidden_dim, out_channels)
-            self.layernorm_out = AutocastLayerNorm(hidden_dim)
+            self.proj_out = nn.Sequential(AutocastLayerNorm(hidden_dim), nn.Linear(hidden_dim, out_channels))
 
         self.proc = nn.ModuleList(
             [
@@ -286,15 +284,13 @@ class GNNProcessorChunk(nn.Module):
         size: Size = None,
     ):
         if self.in_channels != self.hidden_dim:
-            x = self.layernorm_in(x)
-            x = self.lin_in(x)
+            x = self.proj_in(x)
 
         for i in range(self.hidden_layers):
             x, edge_attr = self.proc[i](x, edge_index, edge_attr, shapes, batch_size, model_comm_group, size=size)
 
         if self.out_channels != self.hidden_dim:
-            x = self.layernorm_out(x)
-            x = self.lin_out(x)
+            x = self.proj_out(x)
 
         return x, edge_attr
 
@@ -692,7 +688,8 @@ class TransformerProcessor(nn.Module):
         assert model_comm_group.size() == 1 or batch_size == 1, "Either one GPU per model instance, or batch_size has to be 1"
 
         for i in range(self.hidden_layers):
-            x = checkpoint(self.proc[i], x, shapes, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
+            # x = checkpoint(self.proc[i], x, shapes, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
+            x = self.proc[i](x, shapes, batch_size, model_comm_group=model_comm_group)
 
         return x
 
@@ -748,24 +745,21 @@ class TransformerProcessorChunk(nn.Module):
         )
 
         if self.in_channels != self.hidden_dim:
-            self.lin_in = nn.Linear(in_channels, hidden_dim)
-            self.layernorm_in = AutocastLayerNorm(in_channels)
+            self.proj_in = nn.Sequential(AutocastLayerNorm(in_channels), nn.Linear(in_channels, hidden_dim))
 
         if self.out_channels != self.hidden_dim:
-            self.lin_out = nn.Linear(hidden_dim, out_channels)
-            self.layernorm_out = AutocastLayerNorm(hidden_dim)
+            self.proj_out = nn.Sequential(AutocastLayerNorm(hidden_dim), nn.Linear(hidden_dim, out_channels))
 
     def forward(self, x: Tensor, shapes: list, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
         if self.in_channels != self.hidden_dim:
-            x = self.layernorm_in(x)
-            x = self.lin_in(x)
+            x = checkpoint(self.proj_in, x, use_reentrant=False)
 
         for i in range(self.hidden_layers):
-            x = self.proc[i](x, shapes, batch_size, model_comm_group=model_comm_group)
+            # x = self.proc[i](x, shapes, batch_size, model_comm_group=model_comm_group)
+            x = checkpoint(self.proc[i], x, shapes, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
 
         if self.out_channels != self.hidden_dim:
-            x = self.layernorm_out(x)
-            x = self.lin_out(x)
+            x = checkpoint(self.proj_out, x, use_reentrant=False)
 
         return x
 
