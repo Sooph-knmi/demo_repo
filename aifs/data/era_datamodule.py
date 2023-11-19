@@ -14,7 +14,7 @@ from aifs.data.era_readers import read_era_data
 from aifs.utils.logger import get_code_logger
 
 
-LOGGER = get_code_logger(__name__)
+LOGGER = get_code_logger(__name__, debug=True)
 
 
 class ERA5DataModule(pl.LightningDataModule):
@@ -39,13 +39,13 @@ class ERA5DataModule(pl.LightningDataModule):
         self.global_rank = int(os.environ.get("SLURM_PROCID", "0"))  # global rank
         self.ens_comm_group_id = (
             self.global_rank // self.config.hardware.num_gpus_per_ensemble
-        )  # id of the model communication group the rank is participating in
+        )  # id of the ensemble communication group the rank is participating in
         self.ens_comm_group_rank = (
             self.global_rank % self.config.hardware.num_gpus_per_ensemble
-        )  # rank within one model communication group
+        )  # rank within one ensemble communication group
         self.ens_comm_num_groups = math.ceil(
             self.config.hardware.num_gpus_per_node * self.config.hardware.num_nodes / self.config.hardware.num_gpus_per_ensemble
-        )  # number of model communication groups
+        )  # number of ensemble communication groups
         LOGGER.debug(
             "Rank %d ensemble communication group number %d, with local group rank %d",
             self.global_rank,

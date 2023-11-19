@@ -1,19 +1,18 @@
 from functools import cached_property
-from pathlib import Path
 from typing import Any
 from typing import List
 from typing import Optional
 
 import hydra
+import numpy as np
 import pytorch_lightning as pl
 import torch
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
-from pytorch_lightning.profilers import PyTorchProfiler
+from torch.autograd import gradcheck
+from torch_geometric import seed_everything
 
 from aifs.data.era_datamodule import ERA5DataModule
-from aifs.diagnostics.callbacks import get_callbacks
-from aifs.diagnostics.logging import get_tensorboard_logger
 from aifs.diagnostics.logging import get_wandb_logger
 from aifs.distributed.strategy import DDPGroupStrategy
 from aifs.train.forecaster import GraphForecaster
@@ -22,8 +21,8 @@ from aifs.utils.logger import get_code_logger
 LOGGER = get_code_logger(__name__)
 
 
-class AIFSTrainer:
-    """Utility class for training the model."""
+class AIFSGradientTester:
+    """Utility class for testing model gradients."""
 
     def __init__(self, config: DictConfig):
         # Sets the internal precision of float32 matrix multiplications.
@@ -32,12 +31,7 @@ class AIFSTrainer:
         OmegaConf.resolve(config)
         self.config = config
 
-        # Default to not warm-starting from a checkpoint
-        self.start_from_checkpoint = bool(self.config.training.run_id) or bool(self.config.training.fork_run_id)
         self.config.training.run_id = self.run_id
-
-        # Update paths to contain the run ID
-        self.update_paths()
 
         self.log_information()
 
@@ -77,55 +71,8 @@ class AIFSTrainer:
         return get_wandb_logger(self.config, self.model)
 
     @cached_property
-    def tensorboard_logger(self) -> pl.loggers.TensorBoardLogger:
-        """TensorBoard logger."""
-        return get_tensorboard_logger(self.config)
-
-    @cached_property
     def last_checkpoint(self) -> Optional[str]:
         """Path to the last checkpoint."""
-        if not self.start_from_checkpoint:
-            return None
-
-        checkpoint = Path(
-            self.config.hardware.paths.checkpoints.parent,
-            self.config.training.fork_run_id or self.run_id,
-            self.config.hardware.files.warm_start or "last.ckpt",
-        )
-
-        # Check if the last checkpoint exists
-        if Path(checkpoint).exists():
-            LOGGER.info("Resuming training from last checkpoint: %s", checkpoint)
-            return checkpoint
-        LOGGER.warning("Could not find last checkpoint: %s", checkpoint)
-
-    @cached_property
-    def callbacks(self) -> List[pl.callbacks.Callback]:
-        return get_callbacks(self.config)
-
-    @cached_property
-    def profiler(self) -> Optional[PyTorchProfiler]:
-        """Returns a pytorch profiler object, if profiling is enabled, otherwise
-        None."""
-        if self.config.diagnostics.profiler:
-            assert (
-                self.config.diagnostics.log.tensorboard.enabled
-            ), "Tensorboard logging must be enabled when profiling! Check your job config."
-            return PyTorchProfiler(
-                dirpath=self.config.hardware.paths.logs.tensorboard,
-                filename="aifs-profiler",
-                export_to_chrome=False,
-                # profiler-specific keywords
-                activities=[
-                    # torch.profiler.ProfilerActivity.CPU,  # this is memory-hungry
-                    torch.profiler.ProfilerActivity.CUDA
-                ],
-                schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
-                on_trace_ready=torch.profiler.tensorboard_trace_handler(dir_name=self.config.hardware.paths.logs.tensorboard),
-                profile_memory=True,
-                record_shapes=True,
-                with_stack=True,
-            )
         return None
 
     @cached_property
@@ -133,8 +80,6 @@ class AIFSTrainer:
         loggers = []
         if self.config.diagnostics.log.wandb.enabled:
             loggers.append(self.wandb_logger)
-        if self.config.diagnostics.log.tensorboard.enabled:
-            loggers.append(self.tensorboard_logger)
         return loggers
 
     @cached_property
@@ -158,11 +103,6 @@ class AIFSTrainer:
         LOGGER.debug("Effective learning rate: %.3e", total_number_of_model_instances * self.config.training.lr.rate)
         LOGGER.debug("Rollout window length: %d", self.config.training.rollout.start)
 
-    def update_paths(self) -> None:
-        """Update the paths in the configuration."""
-        self.config.hardware.paths.checkpoints = Path(self.config.hardware.paths.checkpoints, self.run_id)
-        self.config.hardware.paths.plots = Path(self.config.hardware.paths.plots, self.run_id)
-
     @cached_property
     def strategy(self) -> Any:
         return DDPGroupStrategy(
@@ -171,38 +111,88 @@ class AIFSTrainer:
             static_graph=self.config.training.accum_grad_batches > 1,
         )
 
-    def train(self) -> None:
-        """Training entry point."""
+    def _calculate_grad_norms(self) -> torch.Tensor:
+        grad_norms_sum = torch.zeros(1, device=self.model.device, dtype=torch.double)
+        for p in self.model.parameters():
+            grad_norms_sum += torch.linalg.norm(p.grad)
+        return grad_norms_sum
+
+    def test_gradients(self) -> None:
+        """Entry point."""
+        seed_everything(1234)
+        torch.use_deterministic_algorithms(True)
 
         trainer = pl.Trainer(
             accelerator=self.accelerator,
-            callbacks=self.callbacks,
-            deterministic=self.config.training.deterministic,
-            detect_anomaly=self.config.diagnostics.debug.anomaly_detection,
+            callbacks=None,
+            deterministic=True,  # self.config.training.deterministic,
+            detect_anomaly=False,
             strategy=self.strategy,
             devices=self.config.hardware.num_gpus_per_node,
             num_nodes=self.config.hardware.num_nodes,
-            precision=self.config.training.precision,
-            max_epochs=self.config.training.max_epochs,
+            # the grad checker requires double precision
+            precision="64-true",
+            max_epochs=1,
             logger=self.loggers,
-            log_every_n_steps=self.config.diagnostics.log.interval,
-            # run a fixed no of batches per epoch (helpful when debugging)
-            limit_train_batches=self.config.dataloader.limit_batches.training,
-            limit_val_batches=self.config.dataloader.limit_batches.validation,
+            log_every_n_steps=1,
+            # minimal warmup
+            limit_train_batches=3,
+            limit_val_batches=0,
             num_sanity_val_steps=0,
             accumulate_grad_batches=self.config.training.accum_grad_batches,
-            gradient_clip_val=self.config.training.gradient_clip.val,
-            gradient_clip_algorithm=self.config.training.gradient_clip.algorithm,
             # we have our own DDP-compliant sampler logic baked into the dataset
             use_distributed_sampler=False,
-            profiler=self.profiler,
         )
 
-        trainer.fit(self.model, datamodule=self.datamodule, ckpt_path=self.last_checkpoint)
+        # run through 3 training batches, just to make sure we've set up everything correctly
+        trainer.fit(self.model, datamodule=self.datamodule)
 
-        LOGGER.debug("---- DONE. ----")
+        # one manual forward-backward
+        dl_train = self.datamodule.train_dataloader()
+
+        # need to move the model back on to the GPU, it got offloaded at the end of trainer.fit()
+        self.model = self.model.cuda()
+        self.model = self.model.to(dtype=torch.double)
+        self.model.train()
+        torch.set_grad_enabled(True)
+
+        batch = next(iter(dl_train))[0]  # single tensor
+        batch_shape = batch.shape
+
+        # low-dimensional input. it'll get mapped to the right shape by linear_map above
+        fake_input_shape = (5,)
+        linear_map = torch.nn.Linear(
+            np.prod(fake_input_shape), np.prod(batch.shape), bias=False, device=self.model.device, dtype=torch.double
+        )
+
+        def single_forward(fake_batch) -> torch.Tensor:
+            batch_ = linear_map(fake_batch).reshape(batch_shape)
+            x_ = batch_[:, 0 : self.model.multi_step, ...]
+            x_ = torch.stack([x_] * self.model.nens_per_device, dim=1)
+
+            batch_ = self.model.model.normalizer(batch_)
+            x_ = self.model.model.normalizer(x_)
+
+            # single rollout step
+            y_pred = self.model(x_)
+            y = batch_[:, self.model.multi_step, ...]
+            _, loss_, _ = self.model.gather_and_compute_loss(y_pred, y)
+            return loss_
+
+        x_test = torch.randn(
+            fake_input_shape,
+            # must (1) create it directly on the correct device and (2) set the requires_grad flag
+            dtype=torch.double,  # needs double precision
+            device=self.model.device,
+            requires_grad=True,
+        )
+
+        test_result = gradcheck(single_forward, (x_test,), eps=1e-6, atol=1e-4, rtol=1e-2, nondet_tol=0.0)
+        LOGGER.debug(test_result)
+
+        LOGGER.debug("---- GRADTEST DONE. ----")
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(config: DictConfig):
-    AIFSTrainer(config).train()
+    AIFSGradientTester(config).test_gradients()

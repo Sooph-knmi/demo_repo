@@ -57,5 +57,11 @@ setup(
     packages=find_packages(),
     package_data={"": ["continents.json"]},
     include_package_data=True,
-    entry_points={"console_scripts": ["aifs-ens-train=aifs.train.train:main", "aifs-ens-gradcheck=aifs.utils.gradcheck:main"]},
+    entry_points={
+        "console_scripts": [
+            "aifs-ens-train=aifs.train.train:main",
+            "aifs-ens-gradcheck=aifs.utils.gradcheck:main",
+            "aifs-ens-gradtest=aifs.utils.gradtest:main",
+        ]
+    },
 )

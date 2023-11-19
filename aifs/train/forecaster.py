@@ -31,7 +31,7 @@ from aifs.utils.distributed import gather_tensor
 from aifs.utils.distributed import split_tensor
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__, debug=False)
+LOGGER = get_code_logger(__name__, debug=True)
 
 
 class GraphForecaster(pl.LightningModule):
@@ -276,8 +276,10 @@ class GraphForecaster(pl.LightningModule):
         """
 
         if len(batch) == 1:
+            LOGGER.debug("batch[0].device = %s, dtype = %s", batch[0].device, batch[0].dtype)
             # no EDA available, just stack the analysis IC nens_per_device times
             x_ = batch[0][:, 0 : self.multi_step, ...]  # (bs, multistep, latlon, nvar)
+            LOGGER.debug("x_.device = %s, dtype = %s", x_.device, x_.dtype)
             return torch.stack([x_] * self.nens_per_device, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
 
         x, x_eda = batch

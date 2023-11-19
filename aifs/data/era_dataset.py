@@ -13,7 +13,7 @@ from zarr.core import Array
 
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__, debug=False)
+LOGGER = get_code_logger(__name__, debug=True)
 
 
 class ERA5NativeGridDataset(IterableDataset):
@@ -148,7 +148,7 @@ class ERA5NativeGridDataset(IterableDataset):
         low = shard_start + worker_id * self.n_samples_per_worker
         high = min(shard_start + (worker_id + 1) * self.n_samples_per_worker, shard_end)
         LOGGER.debug(
-            "Worker %d (pid %d, global_rank %d, model comm group %d) has low/high range %d / %d",
+            "Worker %d (pid %d, global_rank %d, comm group %d) has low/high range %d / %d",
             worker_id,
             os.getpid(),
             self.global_rank,
@@ -175,7 +175,7 @@ class ERA5NativeGridDataset(IterableDataset):
         self.rng = np.random.default_rng(seed=seed)
 
         LOGGER.debug(
-            "Worker %d (pid %d, global_rank %d, model comm group %d, group_rank %d) using seed %d",
+            "Worker %d (pid %d, global_rank %d, comm group %d, group_rank %d) using seed %d",
             worker_id,
             os.getpid(),
             self.global_rank,
@@ -224,7 +224,7 @@ class ERA5NativeGridDataset(IterableDataset):
             shuffled_chunk_indices = self.chunk_index_range
 
         LOGGER.debug(
-            "Worker pid %d, global_rank %d, model comm group %d, group_rank %d using indices[0:10]: %s",
+            "Worker pid %d, global_rank %d, comm group %d, group_rank %d using indices[0:10]: %s",
             os.getpid(),
             self.global_rank,
             self.comm_group_id,

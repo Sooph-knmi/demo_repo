@@ -8,6 +8,7 @@ import pytorch_lightning as pl
 import torch
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
+from torch_geometric import seed_everything
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.logging import get_wandb_logger
@@ -105,17 +106,25 @@ class AIFSGradientChecker:
         return DDPGroupStrategy(
             self.config.hardware.num_gpus_per_model,
             self.config.hardware.num_gpus_per_ensemble,
-            static_graph=self.config.training.accum_grad_batches,
+            static_graph=self.config.training.accum_grad_batches > 1,
         )
+
+    def _calculate_grad_norms(self) -> torch.Tensor:
+        grad_norms_sum = torch.zeros(1, device=self.model.device, dtype=torch.double)
+        for p in self.model.parameters():
+            grad_norms_sum += torch.linalg.norm(p.grad)
+        return grad_norms_sum
 
     def check_gradients(self) -> None:
         """Entry point."""
+        seed_everything(1234)
+        torch.use_deterministic_algorithms(True)
 
         trainer = pl.Trainer(
             accelerator=self.accelerator,
             callbacks=None,
             deterministic=True,  # self.config.training.deterministic,
-            detect_anomaly=self.config.diagnostics.debug.anomaly_detection,
+            detect_anomaly=False,
             strategy=self.strategy,
             devices=self.config.hardware.num_gpus_per_node,
             num_nodes=self.config.hardware.num_nodes,
@@ -123,9 +132,9 @@ class AIFSGradientChecker:
             precision="64-true",
             max_epochs=1,
             logger=self.loggers,
-            log_every_n_steps=self.config.diagnostics.log.interval,
+            log_every_n_steps=1,
             # minimal warmup
-            limit_train_batches=5,
+            limit_train_batches=3,
             limit_val_batches=0,
             num_sanity_val_steps=0,
             accumulate_grad_batches=self.config.training.accum_grad_batches,
@@ -133,19 +142,53 @@ class AIFSGradientChecker:
             use_distributed_sampler=False,
         )
 
-        # run 5 training batches, just to set up and warm up
+        # run through 3 training batches, just to make sure we've set up everything correctly
         trainer.fit(self.model, datamodule=self.datamodule)
 
         # one manual forward-backward
         dl_train = self.datamodule.train_dataloader()
 
+        # need to move the model back on to the GPU, it got offloaded at the end of trainer.fit()
+        self.model = self.model.cuda()
+        self.model = self.model.to(dtype=torch.double)
+        self.model.train()
+        torch.set_grad_enabled(True)
+
+        # push a single batch through the model
+        # run backward + check the gradient norms
         for batch_idx, batch in enumerate(dl_train):
-            LOGGER.debug("batch_idx: %03d, batch[0].shape = %s", batch_idx, batch[0].shape)
+            # LOGGER.debug("batch_idx: %03d, len(batch) = %d, batch[0].shape = %s", batch_idx, len(batch), batch[0].shape)
+            # LOGGER.debug("model.device = %s", self.model.device)
+
+            # move batch to correct device and convert to double
+            batch = [b.to(device=self.model.device, dtype=torch.double) for b in batch]
+
+            # push batch through the model
+            x_ens_ic = self.model._generate_ens_inicond(batch)
+
+            # LOGGER.debug("x_ens_ic: dtype = %s, device = %s", x_ens_ic.dtype, x_ens_ic.device)
+            LOGGER.debug("Norm of ensemble ICs: %.9e", torch.linalg.norm(x_ens_ic))
+            LOGGER.debug("Norm of batch data: %.9e", torch.linalg.norm(batch[0]))
+
+            train_loss, _, _, _ = self.model._step(batch[0], batch_idx, x_ens_ic)
+            train_loss.backward()
+            LOGGER.debug("Ran backward ...")
+
+            gnorm_sum = self._calculate_grad_norms()
+            LOGGER.debug(
+                "GlobalRank %d: batch_size=%d, gpus_per_model=%d, gpus_per_ensemble=%d, ens_per_device=%d - sum(||grad(p)||)=%.9e",
+                self.model.global_rank,
+                self.config.dataloader.batch_size.training,
+                self.config.hardware.num_gpus_per_model,
+                self.config.hardware.num_gpus_per_ensemble,
+                self.config.training.ensemble_size_per_device,
+                gnorm_sum,
+            )
 
             # we're done
             break
 
-        LOGGER.debug("---- DONE. ----")
+        LOGGER.debug("---- GRADCHECK DONE. ----")
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")

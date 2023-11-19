@@ -75,6 +75,13 @@ class DDPGroupStrategy(DDPStrategy):
 
     def _create_model_comm_groups(self):
         model_comm_group_ranks = np.split(np.arange(self.world_size, dtype=int), int(self.world_size / self.model_comm_group_size))
+        LOGGER.debug(
+            "world_size: %d, ens_comm_group_size: %d, model_comm_group_ranks: %s",
+            self.world_size,
+            self.model_comm_group_size,
+            model_comm_group_ranks,
+        )
+
         model_comm_groups = [
             torch.distributed.new_group(x) for x in model_comm_group_ranks
         ]  # every rank has to create all of these
@@ -93,6 +100,13 @@ class DDPGroupStrategy(DDPStrategy):
 
     def _create_ensemble_comm_groups(self):
         ens_comm_group_ranks = np.split(np.arange(self.world_size, dtype=int), int(self.world_size / self.ens_comm_group_size))
+        LOGGER.debug(
+            "world_size: %d, ens_comm_group_size: %d, ens_comm_group_ranks: %s",
+            self.world_size,
+            self.ens_comm_group_size,
+            ens_comm_group_ranks,
+        )
+
         ens_comm_groups = [torch.distributed.new_group(x) for x in ens_comm_group_ranks]  # every rank has to create all of these
 
         ens_comm_group_id, ens_comm_group_nr, ens_comm_group_rank = self.get_my_comm_group(self.ens_comm_group_size)
