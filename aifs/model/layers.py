@@ -503,6 +503,44 @@ class GNNBlock(nn.Module):
                 start_with_layer_norm=True,
             )
 
+    def shard_qkve_heads(
+        self,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        edges: Tensor,
+        shapes: Tuple,
+        batch_size: int,
+        model_comm_group: ProcessGroup,
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Shards qkv and edges along head dimension."""
+
+        shape_src_nodes, shape_dst_nodes, shape_edges = shapes
+
+        query, key, value, edges = map(
+            lambda t: einops.rearrange(t, "(b n) (h c) -> b h n c", h=self.heads, c=self.out_channels_conv, b=batch_size),
+            (query, key, value, edges),
+        )
+        query = shard_heads(query, shapes=shape_dst_nodes, mgroup=model_comm_group)
+        key = shard_heads(key, shapes=shape_src_nodes, mgroup=model_comm_group)
+        value = shard_heads(value, shapes=shape_src_nodes, mgroup=model_comm_group)
+        edges = shard_heads(edges, shapes=shape_edges, mgroup=model_comm_group)
+
+        query, key, value, edges = map(lambda t: einops.rearrange(t, "b h n c -> (b n) h c"), (query, key, value, edges))
+
+        return query, key, value, edges
+
+    def shard_output_seq(self, out: Tensor, shapes: Tuple, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
+        """Shards Tensor sequence dimension."""
+
+        shape_dst_nodes = shapes[1]
+
+        out = einops.rearrange(out, "(b n) h c -> b h n c", b=batch_size)
+        out = shard_sequence(out, shapes=shape_dst_nodes, mgroup=model_comm_group)
+        out = einops.rearrange(out, "b h n c -> (b n) (h c)")
+
+        return out
+
     def forward(
         self,
         x: OptPairTensor,
@@ -515,47 +553,24 @@ class GNNBlock(nn.Module):
     ):
         x_skip = x
 
-        H, C = self.heads, self.out_channels_conv
-
+        # combine in 1 or 2 lin layer and also sync combined
         if isinstance(x_skip, Tensor):
             x = self.layer_norm1(x)
-
-            # combine in 1 or 2 lin layer and also sync combined
+            x_r = self.lin_self(x)
             query = self.lin_query(x)
             key = self.lin_key(x)
             value = self.lin_value(x)
-            x_r = self.lin_self(x)
-
         else:
             x = (self.layer_norm1(x[0]), self.layer_norm2(x[1]))
-
-            # combine in 1 or 2 lin layer and also sync combined
+            x_r = self.lin_self(x[1])
             query = self.lin_query(x[1])
             key = self.lin_key(x[0])
             value = self.lin_value(x[0])
-            x_r = self.lin_self(x[1])
+        edges = self.lin_edge(edge_attr)
 
-        edge_attr_emb = self.lin_edge(edge_attr)
-
-        query, key, value, edge_attr_emb = map(
-            lambda t: einops.rearrange(t, "(b n) (h c) -> b h n c", h=H, c=C, b=batch_size), (query, key, value, edge_attr_emb)
-        )
-
-        query = shard_heads(query, shapes=shapes[1], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
-        key = shard_heads(key, shapes=shapes[0], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
-        value = shard_heads(value, shapes=shapes[0], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
-        edge_attr_emb = shard_heads(edge_attr_emb, shapes=shapes[2], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
-
-        query, key, value, edge_attr_emb = map(
-            lambda t: einops.rearrange(t, "b h n c -> (b n) h c"), (query, key, value, edge_attr_emb)
-        )
-
-        out = self.conv(query=query, key=key, value=value, edge_index=edge_index, edge_attr=edge_attr_emb, size=size)
-        out = einops.rearrange(out, "(b n) h c -> b h n c", b=batch_size)
-
-        out = shard_sequence(out, shapes=shapes[1], dim_split=2, dim_concatenate=1, mgroup=model_comm_group)
-        out = einops.rearrange(out, "b h n c -> (b n) (h c)")
-
+        query, key, value, edges = self.shard_qkve_heads(query, key, value, edges, shapes, batch_size, model_comm_group)
+        out = self.conv(query=query, key=key, value=value, edge_index=edge_index, edge_attr=edges, size=size)
+        out = self.shard_output_seq(out, shapes, batch_size, model_comm_group)
         out = self.proj(out + x_r)
 
         if isinstance(x_skip, Tensor):
@@ -687,13 +702,11 @@ class TransformerProcessor(nn.Module):
         )
 
     def forward(self, x: Tensor, shape_nodes: list, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
-        shapes = (shape_nodes, shape_nodes)
-
         assert model_comm_group.size() == 1 or batch_size == 1, "Either one GPU per model instance, or batch_size has to be 1"
 
         for i in range(self.hidden_layers):
-            # x = checkpoint(self.proc[i], x, shapes, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
-            x = self.proc[i](x, shapes, batch_size, model_comm_group=model_comm_group)
+            # x = checkpoint(self.proc[i], x, shape_nodes, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
+            x = self.proc[i](x, shape_nodes, batch_size, model_comm_group=model_comm_group)
 
         return x
 
@@ -848,14 +861,14 @@ class MultiHeadSelfAttention(nn.Module):
         )
 
         # combine to 1 or two comms?
-        query = shard_heads(query, shapes=shapes[1], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
-        key = shard_heads(key, shapes=shapes[0], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
-        value = shard_heads(value, shapes=shapes[0], dim_split=1, dim_concatenate=2, mgroup=model_comm_group)
+        query = shard_heads(query, shapes=shapes, mgroup=model_comm_group)
+        key = shard_heads(key, shapes=shapes, mgroup=model_comm_group)
+        value = shard_heads(value, shapes=shapes, mgroup=model_comm_group)
 
         # out = self.atten(query, key, value, attn_mask=None, dropout_p=self.dropout, is_causal=self.is_causal)
         out = self.atten(query, key, value, mask=None, attn_bias=None)
 
-        out = shard_sequence(out, shapes=shapes[1], dim_split=2, dim_concatenate=1, mgroup=model_comm_group)
+        out = shard_sequence(out, shapes=shapes, mgroup=model_comm_group)
         out = einops.rearrange(out, "b h n c -> (b n) (h c)")
 
         return out

@@ -17,11 +17,12 @@ from torch_geometric.utils import k_hop_subgraph
 from torch_geometric.utils import mask_to_index
 
 
-def shard_heads(input_: Tensor, shapes: list, dim_split: int, dim_concatenate: int, mgroup: ProcessGroup) -> Tensor:
+def shard_heads(input_: Tensor, shapes: list, mgroup: ProcessGroup) -> Tensor:
     """Sync tensor.
 
     Gathers e.g query, key or value tensor along sequence dimension via all to all communication
     and shards along head dimension for parallel self-attention computation.
+    Expected format is (batch_size, ... heads, sequence_length, channels)
 
     Parameters
     ----------
@@ -29,10 +30,6 @@ def shard_heads(input_: Tensor, shapes: list, dim_split: int, dim_concatenate: i
         Input
     shapes: list
         shapes of shards
-    dim_split : int
-        dimension along which to distribute
-    dim_concatenate : int
-        dimension along which to concatenate
     mgroup : ProcessGroup
         model communication group
 
@@ -41,14 +38,15 @@ def shard_heads(input_: Tensor, shapes: list, dim_split: int, dim_concatenate: i
     Tensor
     """
 
-    return _SplitHeadsParallelSection.apply(input_, shapes, dim_split, dim_concatenate, mgroup)
+    return _SplitHeadsParallelSection.apply(input_, shapes, mgroup)
 
 
-def shard_sequence(input_: Tensor, shapes: list, dim_split: int, dim_concatenate: int, mgroup: ProcessGroup) -> Tensor:
+def shard_sequence(input_: Tensor, shapes: list, mgroup: ProcessGroup) -> Tensor:
     """Sync tensor.
 
     Gathers e.g query, key or value tensor along head dimension via all to all communication
     and shards along sequence dmension for parallel mlp and layernorm computation.
+    Expected format is (batch_size, ... heads, sequence_length, channels)
 
     Parameters
     ----------
@@ -68,7 +66,7 @@ def shard_sequence(input_: Tensor, shapes: list, dim_split: int, dim_concatenate
     Tensor
     """
 
-    return _SplitSequenceParallelSection.apply(input_, shapes, dim_split, dim_concatenate, mgroup)
+    return _SplitSequenceParallelSection.apply(input_, shapes, mgroup)
 
 
 def shard_tensor(
@@ -271,13 +269,11 @@ class _SplitHeadsParallelSection(torch.autograd.Function):
     """Sync the input from parallel section."""
 
     @staticmethod
-    def forward(ctx, input_, shapes_, dim_split_, dim_concatenate_, mgroup_):
+    def forward(ctx, input_, shapes_, mgroup_):
         ctx.shapes = shapes_
-        ctx.dim_split = dim_split_
-        ctx.dim_concatenate = dim_concatenate_
         ctx.comm_group = mgroup_
         if mgroup_:
-            return _headsalltoall(input_, shapes_, dim_split_, dim_concatenate_, group=mgroup_)
+            return _headsalltoall(input_, shapes_, group=mgroup_)
         else:
             return input_
 
@@ -285,27 +281,23 @@ class _SplitHeadsParallelSection(torch.autograd.Function):
     def backward(ctx, grad_output):
         if ctx.comm_group:
             return (
-                _seqalltoall(grad_output, ctx.shapes, ctx.dim_concatenate, ctx.dim_split, group=ctx.comm_group),
-                None,
-                None,
+                _seqalltoall(grad_output, ctx.shapes, group=ctx.comm_group),
                 None,
                 None,
             )
         else:
-            return grad_output, None, None, None, None
+            return grad_output, None, None
 
 
 class _SplitSequenceParallelSection(torch.autograd.Function):
     """Sync the input from parallel section."""
 
     @staticmethod
-    def forward(ctx, input_, shapes_, dim_split_, dim_concatenate_, mgroup_):
+    def forward(ctx, input_, shapes_, mgroup_):
         ctx.shapes = shapes_
-        ctx.dim_split = dim_split_
-        ctx.dim_concatenate = dim_concatenate_
         ctx.comm_group = mgroup_
         if mgroup_:
-            return _seqalltoall(input_, shapes_, dim_split_, dim_concatenate_, group=mgroup_)
+            return _seqalltoall(input_, shapes_, group=mgroup_)
         else:
             return input_
 
@@ -313,14 +305,12 @@ class _SplitSequenceParallelSection(torch.autograd.Function):
     def backward(ctx, grad_output):
         if ctx.comm_group:
             return (
-                _headsalltoall(grad_output, ctx.shapes, ctx.dim_concatenate, ctx.dim_split, group=ctx.comm_group),
-                None,
-                None,
+                _headsalltoall(grad_output, ctx.shapes, group=ctx.comm_group),
                 None,
                 None,
             )
         else:
-            return grad_output, None, None, None, None
+            return grad_output, None, None
 
 
 class _SyncParallelSection(torch.autograd.Function):
@@ -446,9 +436,7 @@ class _ReduceParallelSection(torch.autograd.Function):
         return grad_output, None
 
 
-def _headsalltoall(
-    input_: Tensor, shapes: list, dim_split: int, dim_concatenate: int, group: Optional[ProcessGroup] = None
-) -> Tensor:
+def _headsalltoall(input_: Tensor, shapes: list, group: Optional[ProcessGroup] = None) -> Tensor:
     """Split input along dimension dim_split and join after all_to_all along dimesion
     dim_concatenate."""
 
@@ -460,22 +448,16 @@ def _headsalltoall(
     # get input format
     input_format = get_memory_format(input_)
 
-    # sanity checks
-    assert (
-        dim_split < input_.dim() and dim_concatenate < input_.dim()
-    ), f"""Error, cannot communicate along {dim_split} and concatenate
-    along {dim_concatenate} for tensor with {input_.dim()} dimensions."""
+    input_list = [x.contiguous() for x in torch.tensor_split(input_, comm_size, dim=-3)]  # do we need contiguous?
 
-    input_list = [x.contiguous() for x in torch.tensor_split(input_, comm_size, dim=dim_split)]  # do we need contiguous?
-
-    batch_size = [x.shape[0] for x in input_list]
-    heads_per_rank = [x.shape[1] for x in input_list]
+    input_shape = [x.shape for x in input_list]  # (b ... h n c)
+    heads_per_rank = [x.shape[-3] for x in input_list]
     channels_per_rank = [x.shape[-1] for x in input_list]
     seq_per_rank = [x[0] for x in shapes]
 
     output_list = [
         torch.empty(
-            (batch_size[rank], heads_per_rank[rank], seq_per_rank[rank], channels_per_rank[rank]),
+            (*input_shape[rank][:-3], heads_per_rank[rank], seq_per_rank[rank], channels_per_rank[rank]),
             dtype=input_.dtype,
             layout=input_.layout,
             device=input_.device,
@@ -487,14 +469,12 @@ def _headsalltoall(
     dist.all_to_all(output_list, input_list, group=group)
 
     # Note: torch.cat already creates a contiguous tensor.
-    output = torch.cat(output_list, dim=dim_concatenate).contiguous(memory_format=input_format)
+    output = torch.cat(output_list, dim=-2).contiguous(memory_format=input_format)
 
     return output
 
 
-def _seqalltoall(
-    input_: Tensor, shapes: list, dim_split: int, dim_concatenate: int, group: Optional[ProcessGroup] = None
-) -> Tensor:
+def _seqalltoall(input_: Tensor, shapes: list, group: Optional[ProcessGroup] = None) -> Tensor:
     """Split input along dimension dim_split and join after all_to_all along dimesion
     dim_concatenate."""
 
@@ -508,20 +488,14 @@ def _seqalltoall(
     # get input format
     input_format = get_memory_format(input_)
 
-    # sanity checks
-    assert (
-        dim_split < input_.dim() and dim_concatenate < input_.dim()
-    ), f"""Error, cannot communicate along {dim_split} and concatenate
-    along {dim_concatenate} for tensor with {input_.dim()} dimensions."""
-
-    input_list = [x.contiguous() for x in torch.tensor_split(input_, comm_size, dim=dim_split)]  # do we need contiguous?
+    input_list = [x.contiguous() for x in torch.tensor_split(input_, comm_size, dim=-2)]  # do we need contiguous?
 
     output_list = [torch.empty_like(input_list[comm_rank]) for _ in range(comm_size)]
 
     dist.all_to_all(output_list, input_list, group=group)
 
     # Note: torch.cat already creates a contiguous tensor.
-    output = torch.cat(output_list, dim=dim_concatenate).contiguous(memory_format=input_format)
+    output = torch.cat(output_list, dim=-3).contiguous(memory_format=input_format)
 
     return output
 
