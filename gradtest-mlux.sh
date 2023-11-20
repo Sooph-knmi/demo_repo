@@ -5,8 +5,8 @@
 #SBATCH --time=00:10:00
 #SBATCH --account=p200177
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=2
-#SBATCH --gpus-per-node=2
+#SBATCH --ntasks-per-node=4
+#SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --output=gradtest.out.%j
@@ -34,7 +34,7 @@ GITDIR=/project/home/p200177/syma/aifs-code/aifs-mono
 WORKDIR=$GITDIR
 
 # on MeluXina, CUDA_VISIBLE_DEVICES needs to be set manually (!!)
-export CUDA_VISIBLE_DEVICES="0,1"  # ,2,3"
+export CUDA_VISIBLE_DEVICES="0,1,2,3"
 echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES}"
 
 cd $WORKDIR

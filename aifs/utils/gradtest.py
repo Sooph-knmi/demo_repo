@@ -3,7 +3,6 @@ from typing import Any
 from typing import List
 from typing import Optional
 
-import einops
 import hydra
 import numpy as np
 import pytorch_lightning as pl
@@ -15,7 +14,6 @@ from torch_geometric import seed_everything
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.logging import get_wandb_logger
-from aifs.distributed.helpers import gather_tensor
 from aifs.distributed.strategy import DDPGroupStrategy
 from aifs.train.forecaster import GraphForecaster
 from aifs.utils.logger import get_code_logger
@@ -161,21 +159,21 @@ class AIFSGradientTester:
         batch = next(iter(dl_train))[0]  # a single tensor is all we need
         batch_shape = batch.shape
 
-        def _compute_kcrps(y_pred: torch.Tensor, y_target: torch.Tensor) -> torch.Tensor:
-            """Rearranges the prediction and ground truth tensors and then computes the
-            KCRPS loss."""
-            y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs v latlon e", e=self.model.nens_per_group)
-            y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
-            bs_ = y_pred.shape[0]
-            kcrps_ = self.model.kcrps._kernel_crps(y_pred, y_target, fair=True)
+        # def _compute_kcrps(y_pred: torch.Tensor, y_target: torch.Tensor) -> torch.Tensor:
+        #     """Rearranges the prediction and ground truth tensors and then computes the
+        #     KCRPS loss."""
+        #     y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs v latlon e", e=self.model.nens_per_group)
+        #     y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
+        #     bs_ = y_pred.shape[0]
+        #     kcrps_ = self.model.kcrps._kernel_crps(y_pred, y_target, fair=True)
 
-            #### THE `scale` TENSOR BREAKS THE GRADIENT TEST!!!!
-            kcrps_ = kcrps_ * self.model.kcrps.scale[:, None]
+        #     #### THE `scale` TENSOR BREAKS THE GRADIENT TEST!!!!
+        #     kcrps_ = kcrps_ * self.model.kcrps.scale[:, None]
 
-            kcrps_ = kcrps_ * self.model.kcrps.weights
-            npoints = torch.sum(self.model.kcrps.weights)
-            LOGGER.debug("kcrps.scale: min / max = %.4e, %.4e", self.model.kcrps.scale.min(), self.model.kcrps.scale.max())
-            return kcrps_.sum() / (npoints * bs_)
+        #     kcrps_ = kcrps_ * self.model.kcrps.weights
+        #     npoints = torch.sum(self.model.kcrps.weights)
+        #     LOGGER.debug("kcrps.scale: min / max = %.4e, %.4e", self.model.kcrps.scale.min(), self.model.kcrps.scale.max())
+        #     return kcrps_.sum() / (npoints * bs_)
 
         # A trick: I use a low-dimensional input, so gradcheck doesn't take ages to run
         # If the gradients check out okay for loss(model(x)), they will be for the
@@ -197,26 +195,29 @@ class AIFSGradientTester:
 
             # single rollout step
             y_pred = self.model(x_)
+            # need to scale the gradient of y_pred here (better to do this in the backward of the comm op?)
+            y_pred.register_hook(lambda grad: grad * self.model.ens_comm_group_size)
+
             y = batch_[:, self.model.multi_step, :, : self.model.fcdim]
 
             # simple L1-like loss
             # loss_ = torch.abs(y_pred - y[:, None, ...]).sum()
 
-            y_pred_ens_ = gather_tensor(
-                y_pred, dim=1, shapes=[y_pred.shape] * self.model.ens_comm_group_size, mgroup=self.model.ens_comm_group
-            )
+            # y_pred_ens_ = gather_tensor(
+            #     y_pred, dim=1, shapes=[y_pred.shape] * self.model.ens_comm_group_size, mgroup=self.model.ens_comm_group
+            # )
 
-            y_pred_ens = y_pred_ens_[:, :: self.model.model_comm_group_size, ...]
+            # y_pred_ens = y_pred_ens_[:, :: self.model.model_comm_group_size, ...]
 
-            # simple L1-like loss
-            loss_ = torch.abs(y_pred_ens - y[:, None, ...]).sum()
+            # # simple L1-like loss
+            # loss_ = torch.abs(y_pred_ens - y[:, None, ...]).sum()
 
             # # calling the "real" model loss here makes the test fail!
             # # the reason is the FREAKIN' loss_scaling tensor
             # # that's why I've hacked it (see above)
             # loss_ = _compute_kcrps(y_pred_ens, y[..., : self.model.fcdim])
 
-            # _, loss_, _ = self.model.gather_and_compute_loss(y_pred, y)
+            _, loss_, _ = self.model.gather_and_compute_loss(y_pred, y)
 
             return loss_
 
