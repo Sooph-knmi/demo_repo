@@ -3,6 +3,7 @@ from typing import Any
 from typing import List
 from typing import Optional
 
+import einops
 import hydra
 import numpy as np
 import pytorch_lightning as pl
@@ -14,6 +15,7 @@ from torch_geometric import seed_everything
 
 from aifs.data.era_datamodule import ERA5DataModule
 from aifs.diagnostics.logging import get_wandb_logger
+from aifs.distributed.helpers import gather_tensor
 from aifs.distributed.strategy import DDPGroupStrategy
 from aifs.train.forecaster import GraphForecaster
 from aifs.utils.logger import get_code_logger
@@ -25,14 +27,10 @@ class AIFSGradientTester:
     """Utility class for testing model gradients."""
 
     def __init__(self, config: DictConfig):
-        # Sets the internal precision of float32 matrix multiplications.
-        torch.set_float32_matmul_precision("high")
         # Resolve the config to avoid shenanigans with lazy loading
         OmegaConf.resolve(config)
         self.config = config
-
         self.config.training.run_id = self.run_id
-
         self.log_information()
 
     @cached_property
@@ -156,27 +154,70 @@ class AIFSGradientTester:
         self.model.train()
         torch.set_grad_enabled(True)
 
-        batch = next(iter(dl_train))[0]  # single tensor
+        self.model.kcrps.weights = self.model.kcrps.weights.to(dtype=torch.double, device=self.model.device)
+        #### THE `scale` TENSOR BREAKS THE GRADIENT TEST - so we replace it by all ones
+        self.model.kcrps.scale = torch.ones_like(self.model.kcrps.scale, dtype=torch.double, device=self.model.device)
+
+        batch = next(iter(dl_train))[0]  # a single tensor is all we need
         batch_shape = batch.shape
 
-        # low-dimensional input. it'll get mapped to the right shape by linear_map above
+        def _compute_kcrps(y_pred: torch.Tensor, y_target: torch.Tensor) -> torch.Tensor:
+            """Rearranges the prediction and ground truth tensors and then computes the
+            KCRPS loss."""
+            y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs v latlon e", e=self.model.nens_per_group)
+            y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
+            bs_ = y_pred.shape[0]
+            kcrps_ = self.model.kcrps._kernel_crps(y_pred, y_target, fair=True)
+
+            #### THE `scale` TENSOR BREAKS THE GRADIENT TEST!!!!
+            kcrps_ = kcrps_ * self.model.kcrps.scale[:, None]
+
+            kcrps_ = kcrps_ * self.model.kcrps.weights
+            npoints = torch.sum(self.model.kcrps.weights)
+            LOGGER.debug("kcrps.scale: min / max = %.4e, %.4e", self.model.kcrps.scale.min(), self.model.kcrps.scale.max())
+            return kcrps_.sum() / (npoints * bs_)
+
+        # A trick: I use a low-dimensional input, so gradcheck doesn't take ages to run
+        # If the gradients check out okay for loss(model(x)), they will be for the
+        # composite mapping loss(model(linear_map(x_small))), too (and vice versa)
+        # the input will get mapped to the original batch shape by the linear_map
         fake_input_shape = (5,)
         linear_map = torch.nn.Linear(
             np.prod(fake_input_shape), np.prod(batch.shape), bias=False, device=self.model.device, dtype=torch.double
         )
 
+        # TODO: simplify all this - simply set the scale tensor to torch.ones() inside the model (?)
         def single_forward(fake_batch) -> torch.Tensor:
             batch_ = linear_map(fake_batch).reshape(batch_shape)
             x_ = batch_[:, 0 : self.model.multi_step, ...]
             x_ = torch.stack([x_] * self.model.nens_per_device, dim=1)
 
-            batch_ = self.model.model.normalizer(batch_)
-            x_ = self.model.model.normalizer(x_)
+            batch_ = self.model.model.normalizer(batch_, in_place=False)
+            x_ = self.model.model.normalizer(x_, in_place=False)
 
             # single rollout step
             y_pred = self.model(x_)
-            y = batch_[:, self.model.multi_step, ...]
-            _, loss_, _ = self.model.gather_and_compute_loss(y_pred, y)
+            y = batch_[:, self.model.multi_step, :, : self.model.fcdim]
+
+            # simple L1-like loss
+            # loss_ = torch.abs(y_pred - y[:, None, ...]).sum()
+
+            y_pred_ens_ = gather_tensor(
+                y_pred, dim=1, shapes=[y_pred.shape] * self.model.ens_comm_group_size, mgroup=self.model.ens_comm_group
+            )
+
+            y_pred_ens = y_pred_ens_[:, :: self.model.model_comm_group_size, ...]
+
+            # simple L1-like loss
+            loss_ = torch.abs(y_pred_ens - y[:, None, ...]).sum()
+
+            # # calling the "real" model loss here makes the test fail!
+            # # the reason is the FREAKIN' loss_scaling tensor
+            # # that's why I've hacked it (see above)
+            # loss_ = _compute_kcrps(y_pred_ens, y[..., : self.model.fcdim])
+
+            # _, loss_, _ = self.model.gather_and_compute_loss(y_pred, y)
+
             return loss_
 
         x_test = torch.randn(

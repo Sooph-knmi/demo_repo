@@ -93,8 +93,8 @@ class InputNormalizer(nn.Module):
         x[..., self._std_norm_idx] = (x[..., self._std_norm_idx] - self._std_norm_mu) / self._std_norm_sd
         return x
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.normalize(x)
+    def forward(self, x: torch.Tensor, in_place: bool = True) -> torch.Tensor:
+        return self.normalize(x, in_place=in_place)
 
     def denormalize(self, x: torch.Tensor, in_place: bool = True) -> torch.Tensor:
         """Denormalizes an input tensor x of shape [..., nvars | nvars_pred]; normalization done in-place."""

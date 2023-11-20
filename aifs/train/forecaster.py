@@ -19,6 +19,8 @@ from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.utils.checkpoint import checkpoint
 
 from aifs.data.scaling import pressure_level
+from aifs.distributed.helpers import gather_tensor
+from aifs.distributed.helpers import shard_tensor
 from aifs.losses.energy import EnergyScore
 from aifs.losses.kcrps import KernelCRPS
 from aifs.losses.patched_energy import PatchedEnergyScore
@@ -27,11 +29,9 @@ from aifs.metrics.ranks import RankHistogram
 from aifs.metrics.spread import SpreadSkill
 from aifs.model.model import AIFSModelGNN
 from aifs.utils.config import DotConfig
-from aifs.utils.distributed import gather_tensor
-from aifs.utils.distributed import split_tensor
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__, debug=True)
+LOGGER = get_code_logger(__name__, debug=False)
 
 
 class GraphForecaster(pl.LightningModule):
@@ -90,8 +90,8 @@ class GraphForecaster(pl.LightningModule):
 
         self.save_hyperparameters()
 
-        self.era_latlons = self.graph_data[("era", "to", "era")].ecoords_rad
-        self.era_weights = self.graph_data[("era", "to", "era")].area_weights
+        self.era_latlons = self.graph_data[("era", "to", "era")].ecoords_rad.to(dtype=self.dtype, device=self.device)
+        self.era_weights = self.graph_data[("era", "to", "era")].area_weights.to(dtype=self.dtype, device=self.device)
 
         # Loss function
         self._initialize_loss(config)
@@ -167,7 +167,7 @@ class GraphForecaster(pl.LightningModule):
             loss_scaling = np.append(loss_scaling, [scl])
 
         assert len(loss_scaling) == self.fcdim
-        loss_scaling = torch.from_numpy(loss_scaling)
+        loss_scaling = torch.from_numpy(loss_scaling).to(dtype=self.dtype, device=self.device)
 
         self.loss_type = config.training.loss
         assert self.loss_type in [
@@ -182,8 +182,8 @@ class GraphForecaster(pl.LightningModule):
             self.energy_score = EnergyScore(area_weights=self.era_weights, loss_scaling=loss_scaling)
         elif self.loss_type == "patched_energy":
             patches_ = torch.from_numpy(
-                np.load(Path(config.hardware.paths.patches, config.hardware.files.patches)).astype(np.float32)
-            )
+                np.load(Path(config.hardware.paths.patches, config.hardware.files.patches))  # .astype(np.float32)
+            ).to(dtype=self.dtype, device=self.device)
             self.energy_score = PatchedEnergyScore(area_weights=self.era_weights, patches=patches_, loss_scaling=loss_scaling)
 
     def _initialize_metrics(self, metadata: Dict, config: DictConfig) -> None:
@@ -244,7 +244,7 @@ class GraphForecaster(pl.LightningModule):
         loss_inc = checkpoint(self._compute_loss, y_pred_ens, y[..., : self.fcdim], use_reentrant=False)
 
         # step 4/ split the tensor and send shards back to the ranks
-        y_pred = split_tensor(
+        y_pred = shard_tensor(
             y_pred_ens.expand(y_pred_ens_.shape),  # expand it back to the size split() expects, if needed
             dim=1,
             shapes=[y_pred.shape] * self.ens_comm_group_size,

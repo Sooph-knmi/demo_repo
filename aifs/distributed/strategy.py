@@ -10,7 +10,7 @@ from pytorch_lightning.trainer.states import TrainerFn
 
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__)
+LOGGER = get_code_logger(__name__, debug=True)
 
 
 class DDPGroupStrategy(DDPStrategy):
@@ -143,4 +143,4 @@ class DDPGroupStrategy(DDPStrategy):
         """
         for name, param in self.model.named_parameters():
             if param.requires_grad is True and "trainable" not in name:
-                param.register_hook(lambda grad: grad * float(self.model_comm_group_size))
+                param.register_hook(lambda grad: grad * float(self.ens_comm_group_size))
