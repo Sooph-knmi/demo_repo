@@ -13,7 +13,7 @@ from zarr.core import Array
 
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__, debug=True)
+LOGGER = get_code_logger(__name__, debug=False)
 
 
 class ERA5NativeGridDataset(IterableDataset):

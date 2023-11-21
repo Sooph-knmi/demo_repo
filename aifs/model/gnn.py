@@ -21,7 +21,7 @@ from aifs.model.layers import GNNProcessor
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__)
+LOGGER = get_code_logger(__name__, debug=True)
 
 
 class GraphMSG(nn.Module):
@@ -209,24 +209,26 @@ class GraphMSG(nn.Module):
             else None
         )
 
-    def _fuse_trainable_tensors(self, edge: torch.Tensor, batch_size: int, trainable: Optional[torch.Tensor]) -> torch.Tensor:
-        """Fuse edge and trainable tensors.
+    def _fuse_trainable_tensors(
+        self, edge_or_node_tensor: torch.Tensor, batch_size: int, trainable: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """Fuse edge / node tensors, trainable tensors and (optionally) noise tensors.
 
         Parameters
         ----------
-        edge : torch.Tensor
-            Edge tensor
+        edge_or_node_tensor : torch.Tensor
+            Edge or node tensor
         batch_size: int
             Batch size
         trainable : Optional[torch.Tensor]
-            Tensor with trainable edges
+            Tensor with trainable node or edge features
 
         Returns
         -------
         torch.Tensor
             Fused tensors for latent space
         """
-        latent = [einops.repeat(edge, "e f -> (repeat e) f", repeat=batch_size)]
+        latent = [einops.repeat(edge_or_node_tensor, "e f -> (repeat e) f", repeat=batch_size)]
         if trainable is not None:
             latent.append(einops.repeat(trainable, "e f -> (repeat e) f", repeat=batch_size))
         return torch.cat(
@@ -401,6 +403,8 @@ class GraphMSG(nn.Module):
         edge_h_to_h_latent = self._fuse_trainable_tensors(h2h_attr, bse, h2h_trainable)
         edge_h_to_e_latent = self._fuse_trainable_tensors(self.h2e_edge_attr, bse, self.h2e_trainable)
 
+        LOGGER.debug("x_h_latent.shape = %s", x_h_latent.shape)
+
         # size for mappers:
         size_fwd = (x_era_latent.shape[0], x_h_latent.shape[0])
         size_bwd = (x_h_latent.shape[0], x_era_latent.shape[0])
@@ -408,9 +412,12 @@ class GraphMSG(nn.Module):
         # shapes of node shards:
         shape_x_fwd = get_shape_shards(x_era_latent, 0, model_comm_group)
         shape_h_fwd = get_shape_shards(x_h_latent, 0, model_comm_group)
-        shape_h_proc = change_channels_in_shape(shape_h_fwd, self.num_channels)
-        shape_h_bwd = shape_h_proc
+        # the processor input and output feature dimension lengths are different (input has an extra self.proc_noise_channels)
+        shape_h_proc = change_channels_in_shape(shape_h_fwd, self.num_channels + self.proc_noise_channels)
+        shape_h_bwd = change_channels_in_shape(shape_h_fwd, self.num_channels)
         shape_x_bwd = change_channels_in_shape(shape_x_fwd, self.num_channels)
+
+        LOGGER.debug("shape_h_fwd = %s, shape_h_proc = %s, shape_h_bwd = %s", shape_h_fwd, shape_h_proc, shape_h_bwd)
 
         x_era_latent, x_latent = self._run_mapper(
             self.forward_mapper,
@@ -424,8 +431,12 @@ class GraphMSG(nn.Module):
             model_comm_group=model_comm_group,
         )
 
+        LOGGER.debug("x_era_latent.shape = %s, x_latent.shape = %s", x_era_latent.shape, x_latent.shape)
+
         # generate noise tensor
         z = torch.randn(*x_latent.shape[:-1], self.proc_noise_channels).type_as(x_latent)
+        z.requires_grad = False
+        LOGGER.debug("z.shape = %s, z.norm: %.9e", z.shape, torch.linalg.norm(z))
 
         x_latent_proc = self.h_processor(
             # concat noise tensor to the latent features

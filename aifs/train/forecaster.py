@@ -31,7 +31,7 @@ from aifs.model.model import AIFSModelGNN
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__, debug=False)
+LOGGER = get_code_logger(__name__, debug=True)
 
 
 class GraphForecaster(pl.LightningModule):
@@ -79,7 +79,9 @@ class GraphForecaster(pl.LightningModule):
         self.rollout_max = config.training.rollout.max
 
         self.nens_per_device = config.training.ensemble_size_per_device
-        self.nens_per_group = self.nens_per_device * config.hardware.num_gpus_per_ensemble
+        self.nens_per_group = config.training.ensemble_size_per_device * int(
+            config.hardware.num_gpus_per_ensemble / config.hardware.num_gpus_per_model
+        )
         LOGGER.debug("Ensemble size: per device = %d, per ens-group = %d", self.nens_per_device, self.nens_per_group)
 
         LOGGER.debug("Rollout window length: %d", self.rollout)
@@ -236,23 +238,23 @@ class GraphForecaster(pl.LightningModule):
         y_pred_ens_ = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)
         LOGGER.debug("y_pred tensor shapes before %s and after gather %s", y_pred.shape, y_pred_ens_.shape)
 
-        # step 2/ downsample ensemble to get rid of the duplicates (if any)
+        # step 2/ prune ensemble to get rid of the duplicates (if any)
         y_pred_ens = y_pred_ens_[:, :: self.model_comm_group_size, ...]
-        LOGGER.debug("after downsample y_pred_ens.shape == %s", y_pred_ens.shape)
+        LOGGER.debug("after pruning y_pred_ens.shape == %s", y_pred_ens.shape)
 
-        # step 3/ compute the loss
+        # step 3/ compute the loss (one member per model group)
         loss_inc = checkpoint(self._compute_loss, y_pred_ens, y[..., : self.fcdim], use_reentrant=False)
 
-        # step 4/ split the tensor and send shards back to the ranks
+        # step 4/ split the tensor and send shards back to all the ranks in the ensemble group
         y_pred = shard_tensor(
-            y_pred_ens.expand(y_pred_ens_.shape),  # expand it back to the size split() expects, if needed
+            y_pred_ens.repeat(1, self.model_comm_group_size, 1, 1),  # expand it back to the size split() expects, if needed
             dim=1,
             shapes=[y_pred.shape] * self.ens_comm_group_size,
             mgroup=self.ens_comm_group,
         )
         LOGGER.debug("after split y_pred.shape == %s", y_pred.shape)
 
-        # during validation, we also return the pooled ensemble so we can run diagnostics
+        # during validation, we also return the pruned ensemble (from steps 2 / 3) so we can run diagnostics
         return y_pred, loss_inc, y_pred_ens if validation_mode else None
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:

@@ -20,7 +20,7 @@ LOGGER = get_code_logger(__name__)
 
 
 class AIFSGradientChecker:
-    """Utility class for checking model gradients."""
+    """Utility class for checking the norms of model gradients."""
 
     def __init__(self, config: DictConfig):
         # Sets the internal precision of float32 matrix multiplications.

@@ -22,7 +22,12 @@ LOGGER = get_code_logger(__name__)
 
 
 class AIFSGradientTester:
-    """Utility class for testing model gradients."""
+    """
+    Utility class for testing model gradients: autodiff vs finite-difference Jacobians.
+    This test should succeed for all common model / comms groups configurations.
+    To be used together with gradtest.yaml.
+    (with torch.autograd.gradcheck)
+    """
 
     def __init__(self, config: DictConfig):
         # Resolve the config to avoid shenanigans with lazy loading
@@ -115,14 +120,14 @@ class AIFSGradientTester:
 
     def test_gradients(self) -> None:
         """Entry point."""
-        seed_everything(1234)
+        seed_everything(1234 + self.model.ens_comm_group_id)  # different seeds for different ensemble groups
         torch.use_deterministic_algorithms(True)
 
         trainer = pl.Trainer(
             accelerator=self.accelerator,
             callbacks=None,
             deterministic=True,  # self.config.training.deterministic,
-            detect_anomaly=False,
+            detect_anomaly=True,
             strategy=self.strategy,
             devices=self.config.hardware.num_gpus_per_node,
             num_nodes=self.config.hardware.num_nodes,
@@ -183,6 +188,7 @@ class AIFSGradientTester:
         linear_map = torch.nn.Linear(
             np.prod(fake_input_shape), np.prod(batch.shape), bias=False, device=self.model.device, dtype=torch.double
         )
+        linear_map = linear_map.train()
 
         # TODO: simplify all this - simply set the scale tensor to torch.ones() inside the model (?)
         def single_forward(fake_batch) -> torch.Tensor:
