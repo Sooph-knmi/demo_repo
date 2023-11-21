@@ -237,13 +237,14 @@ class GNNProcessorChunk(nn.Module):
         model_comm_group: ProcessGroup,
         size: Size = None,
     ):
+        x_out = x * 1.0  # required for pytorch >= 2.1
         if self.emb_edges:
             edge_attr = self.emb_edges(edge_attr)
 
         for i in range(self.hidden_layers):
-            x, edge_attr = self.proc[i](x, edge_index, edge_attr, shapes, model_comm_group, size=size)
+            x_out, edge_attr = self.proc[i](x_out, edge_index, edge_attr, shapes, model_comm_group, size=size)
 
-        return x, edge_attr
+        return x_out, edge_attr
 
 
 class GNNMapper(nn.Module):
