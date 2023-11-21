@@ -20,7 +20,7 @@ from aifs.utils.logger import get_code_logger
 
 
 LOGGER = get_code_logger(__name__)
-console = Console(record=True)
+console = Console(record=True, width=200)
 
 
 class AIFSProfiler(AIFSTrainer):
@@ -38,6 +38,7 @@ class AIFSProfiler(AIFSTrainer):
     def print_title(self):
         console.print("[bold magenta] Benchmark Profiler Summary [/bold magenta]!", ":book:")
 
+    @rank_zero_only
     def print_benchmark_profiler_report(
         self,
         speed_metrics_df: pd.DataFrame,
@@ -46,13 +47,13 @@ class AIFSProfiler(AIFSTrainer):
         wandb_memory_metrics_df: pd.DataFrame,
     ) -> None:
         self.print_title()
-        self.print_report("Time Profiling", time_metrics_df, color="green", emoji="clock")
-        self.print_report("Speed Profiling", speed_metrics_df, color="yellow", emoji="thunder")
-        self.print_report("Memory Profiling", memory_metrics_df, color="purple", emoji="disk")
-        self.print_report("Wandb Memory Profiling", wandb_memory_metrics_df, color="purple", emoji="disk")
+        self.print_report("Time Profiling", time_metrics_df, color="green", emoji="alarm_clock")
+        self.print_report("Speed Profiling", speed_metrics_df, color="yellow", emoji="racing_car")
+        self.print_report("Memory Profiling", memory_metrics_df, color="purple", emoji="floppy_disk")
+        self.print_report("Wandb Memory Profiling", wandb_memory_metrics_df, color="purple", emoji="desktop_computer")
 
+    # @rank_zero_only
     def write_benchmark_profiler_report(self) -> None:
-        # console.save_text("report.txt")
         console.save_html("report.html")
 
     @staticmethod
@@ -63,6 +64,7 @@ class AIFSProfiler(AIFSTrainer):
         return df
 
     @cached_property
+    # @rank_zero_only
     def speed_profile(self):
         """Speed profiler.
 
@@ -84,13 +86,15 @@ class AIFSProfiler(AIFSTrainer):
         speed_metrics_dict["avg_training_dataloader_throughput_per_sample"] = (
             speed_metrics_dict["avg_training_dataloader_throughput"] / self.config.dataloader.batch_size.training
         )
+        # print('dict speed',speed_metrics_dict)
         return self.to_df(speed_metrics_dict)
 
     @cached_property
+    # @rank_zero_only
     def wandb_profile(self):
         """Get system metrics from W&B."""
         if not self.config.diagnostics.log.wandb.offline:
-            print("RUN DICT", self.wandb_logger._wandb_init)
+            # print("RUN DICT", self.wandb_logger._wandb_init)
             self.run_dict = self.wandb_logger._wandb_init
             run_path = f"{self.run_dict['entity']}/{self.run_dict['project']}/{self.run_dict['id']}"
             wandb_memory_metrics_dict = summarize_wandb_system_metrics(run_path)
@@ -98,8 +102,8 @@ class AIFSProfiler(AIFSTrainer):
         return pd.DataFrame()
 
     @cached_property
+    # @rank_zero_only
     def memory_profile(self):
-        """Memory Profiler."""
         return self.profiler.get_memory_profiler_df()
 
     @cached_property
@@ -110,6 +114,9 @@ class AIFSProfiler(AIFSTrainer):
     @rank_zero_only
     def report(self) -> str:
         """Print report to console."""
+
+        print("printing Profiler report")
+
         self._close_logger()
         self.print_benchmark_profiler_report(
             speed_metrics_df=self.speed_profile,
@@ -122,6 +129,9 @@ class AIFSProfiler(AIFSTrainer):
     @rank_zero_only
     def to_wandb(self) -> None:
         """Log report into W&B."""
+
+        print("logging to W&B Profiler report")
+
         logger = WandbLogger(
             project=self.run_dict["project"],
             entity=self.run_dict["entity"],
@@ -162,11 +172,6 @@ def main(config: DictConfig):
     trainer_aifs = AIFSProfiler(config)
     with trainer_aifs.profiler.memory_profiler:
         trainer_aifs.train()
-    print("printing Profiler report")
+
     trainer_aifs.report()
-    print("logging to W&B Profiler report")
     trainer_aifs.to_wandb()
-
-
-# if __name__ == "__main__":
-#     main()

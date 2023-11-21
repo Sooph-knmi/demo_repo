@@ -1,16 +1,17 @@
-import ast
+import csv
 import os
 import re
 from typing import Any
 from typing import Dict
-from typing import List
 from typing import Optional
 
 import memray
 import numpy as np
 import pandas as pd
+import pynvml
 import pytorch_lightning as pl
-from bs4 import BeautifulSoup
+from memray import FileReader
+from memray.reporters.table import TableReporter
 from pytorch_lightning.callbacks import TQDMProgressBar
 from pytorch_lightning.profilers import Profiler
 from pytorch_lightning.profilers import SimpleProfiler
@@ -20,7 +21,6 @@ from pytorch_lightning.utilities.types import STEP_OUTPUT
 import aifs
 import wandb
 from aifs.utils.logger import get_code_logger
-
 
 LOGGER = get_code_logger(__name__)
 
@@ -67,7 +67,7 @@ def get_wandb_metrics(run_id_path: str) -> (pd.DataFrame, dict):
     return system_metrics, metadata_dict
 
 
-def summarize_gpu_metrics(df: pd.DataFrame, col_names: List[str]) -> Dict[str, float]:
+def summarize_gpu_metrics(df: pd.DataFrame) -> Dict[str, float]:
     """
     gpu.{gpu_index}.memory - GPU memory utilization in percent for each GPU
     gpu.{gpu_index}.memoryAllocated - GPU memory allocated as a percentage of the total available memory for each GPU
@@ -75,10 +75,14 @@ def summarize_gpu_metrics(df: pd.DataFrame, col_names: List[str]) -> Dict[str, f
     gpu.{gpu_index}.gpu - GPU utilization in percent for each GPU
     """
     average_metric = {}
+    col_names = df.columns
     for gpu_metric_name, gpu_metric in GPU_METRICS_DICT.items():
         pattern = r"system.gpu.\d.{}$".format(gpu_metric)
         sub_gpu_cols = [string for string in col_names if re.match(pattern, string)]
-        average_metric[gpu_metric_name] = df[sub_gpu_cols].mean(axis=1).median()
+        metrics_per_gpu = df[sub_gpu_cols].mean(axis=0)
+        average_metric[gpu_metric_name] = metrics_per_gpu.median()
+        metrics_per_gpu.index = ["   " + index for index in metrics_per_gpu.index]
+        average_metric.update(dict(metrics_per_gpu))
     return average_metric
 
 
@@ -89,7 +93,6 @@ def summarize_wandb_system_metrics(run_id_path: str) -> Dict[str, float]:
     system.cpu - Percentage of CPU usage by the process, normalized by the number of available CPUs
     system.disk.\\.usageGB - (Represents the total system disk usage in gigabytes (GB))
     system.proc.memory.percent - Indicates the memory usage of the process as a percentage of the total available memory
-    !TODO decide if the system.proc.memory.percent is relevant
 
     More information about W&B system metrics can be found here:
     https://docs.wandb.ai/guides/app/features/system-metrics
@@ -103,7 +106,7 @@ def summarize_wandb_system_metrics(run_id_path: str) -> Dict[str, float]:
     cpu_cols = list(filter(lambda k: "cpu." in k, col_names))
     system_metrics["avg CPU usage (%)"] = (system_metrics_df[cpu_cols].sum(axis=1) / n_cpus).mean()
 
-    system_metrics_gpu = summarize_gpu_metrics(system_metrics_df, col_names)
+    system_metrics_gpu = summarize_gpu_metrics(system_metrics_df)
     system_metrics.update(system_metrics_gpu)
 
     system_metrics["avg Memory usage (%)"] = system_metrics_df["system.memory"].mean()
@@ -120,23 +123,42 @@ class BenchmarkProfiler(Profiler):
 
         self.config = config
         self.dirpath = self.config.hardware.paths.logs.tensorboard
-        self.filename = "aifs-benchmark-profiler"
+        self.benchmark_filename = os.path.join(self.dirpath, "aifs-benchmark-profiler.csv")
 
         self._create_profilers()
+
+    @rank_zero_only
+    def _create_output_file(self):
+        fields = ["category", "n_allocations", "size (MiB)", "function", "group", "pid", "gpus"]
+        with open(self.benchmark_filename, "w") as f:
+            writer = csv.writer(f)
+            writer.writerow(fields)
+
+    def _get_gpu_id(self, pid: int):
+        pynvml.nvmlInit()
+        gpu = []
+        for dev_id in range(pynvml.nvmlDeviceGetCount()):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(dev_id)
+            for proc in pynvml.nvmlDeviceGetComputeRunningProcesses(handle):
+                if proc.pid == pid:
+                    gpu.append(dev_id)
+        return ",".join(map(str, gpu))
 
     def _create_profilers(self) -> None:
         self.time_profiler = SimpleProfiler(
             dirpath=self.dirpath,
         )
+        self.pid = os.getpid()
+        self.memfile_name = f"aifs-benchmark-mem-profiler_{self.pid}.bin"
 
-        self.random_int = np.random.randint(100, size=1)[0]
-        self.memfile_name = f"aifs-benchmark-mem-profiler_{self.random_int}.bin"
         self.memfile_path = os.path.join(self.dirpath, self.memfile_name)
         self.memory_profiler = memray.Tracker(self.memfile_path)
-        print(self.memory_profiler, self.memfile_path)
+        self._create_output_file()
 
     def start(self, action_name: str) -> None:
         self.time_profiler.start(action_name)
+        if action_name == "run_training_epoch":
+            self.gpus = self._get_gpu_id(self.pid)
 
     def stop(self, action_name: str) -> None:
         self.time_profiler.stop(action_name)
@@ -165,25 +187,18 @@ class BenchmarkProfiler(Profiler):
         time_df = time_df.round(precision)
         return time_df
 
-    def _generate_memray_table(self):
-        # !TODO FOR NOW SKIP BANDIT WARNING B605, CHECK BEST WAY TO GO
-        os.system(f"memray table {self.memfile_path}")  # nosec
-
-    def _from_html_to_df(self) -> pd.DataFrame:
-        self.memfile_path_html = os.path.join(self.dirpath, f"memray-table-{self.memfile_name.replace('.bin','.html')}")
-        soup = BeautifulSoup(open(self.memfile_path_html).read(), features="lxml")
-        table = soup.find("script", type="text/javascript")
-        packed_data = ast.literal_eval(re.search("const packed_data = (.+?);\n", table.string).group(1))
-        df = pd.DataFrame(packed_data)
+    def _generate_memray_df(self):
+        memfile_tracking = FileReader(self.memfile_path)
+        memory_allocations = list(memfile_tracking.get_high_watermark_allocation_records())
+        table = TableReporter.from_snapshot(memory_allocations, memory_records=[], native_traces=False)
+        df = pd.DataFrame(table.data)
+        memfile_tracking.close()
         return df
 
     def _aggregate_per_category(self, df: pd.DataFrame) -> pd.DataFrame:
-        # At function level (#! i think that's too much ?)
         pattern = r"^(.*?) at (.*?)\.py"
-        # !TODO - FIX WARNING
-        df[["function", "category"]] = df["stack_trace"].str.extract(pattern)
-        # pattern = r"at (.*?)\.py"
-        # df["category"] = df["stack_trace"].str.extract(pattern, expand=False)
+        new_cols = df.loc[:, "stack_trace"].str.extract(pattern)
+        df = df.assign(function=new_cols[0], category=new_cols[1])
         df = df.drop("stack_trace", axis=1)
         df_agg = df.groupby("category").apply(
             lambda x: pd.Series(
@@ -223,20 +238,39 @@ class BenchmarkProfiler(Profiler):
         top_most_memory_consuming_df["group"] = "general-operations"
 
         merged_memory_df = pd.concat([top_most_memory_consuming_df, aifs_memray])
-        # ! do we want to keep the stack_trace??
         merged_memory_df = merged_memory_df.round(precision)
         return merged_memory_df
 
-    def get_memory_profiler_df(self) -> pd.DataFrame:
-        self._generate_memray_table()
-        memray_df = self._from_html_to_df()
+    def teardown(self, stage: Optional[str]):
+        memray_df = self._generate_memray_df()
         cleaned_memray_df = self._trim_memray_df(memray_df)
-        self._delete_memory_profiler()
-        return cleaned_memray_df
 
-    def _delete_memory_profiler(self) -> None:
+        cleaned_memray_df["pid"] = self.pid
+        cleaned_memray_df["gpus"] = self.gpus
+
+        cleaned_memray_df.to_csv(self.benchmark_filename, mode="a", index=False, header=False)
+
+    @rank_zero_only
+    def get_memory_profiler_df(self):
+        mem_df = pd.read_csv(self.benchmark_filename)
+        return (
+            mem_df.groupby(["category", "group", "function"])
+            .apply(
+                lambda x: pd.Series(
+                    {
+                        "n_allocations": x["n_allocations"].sum(),
+                        "size (MiB)": x["size (MiB)"].mean(),
+                        "pid": len(set(x["pid"])),
+                        "gpus": list(set(x["gpus"])),
+                    }
+                )
+            )
+            .reset_index()
+            .sort_values("size (MiB)", ascending=False)
+        )
+
+    def __del__(self) -> None:
         os.remove(self.memfile_path)
-        os.remove(self.memfile_path_html)
 
 
 class ProfilerProgressBar(TQDMProgressBar):
@@ -253,9 +287,8 @@ class ProfilerProgressBar(TQDMProgressBar):
     ) -> None:
         batch_idx + 1
         super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
-        if self.train_progress_bar.format_dict["n"] != 0:  # and pl_module.global_rank==0:
+        if self.train_progress_bar.format_dict["n"] != 0:
             self.training_rates.append(self._extract_rate(self.train_progress_bar))
-            print("RANK", pl_module.global_rank, self.training_rates)
 
     def on_validation_batch_end(
         self,
@@ -269,7 +302,6 @@ class ProfilerProgressBar(TQDMProgressBar):
         super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
         if self.val_progress_bar.format_dict["n"] != 0:
             self.validation_rates.append(self._extract_rate(self.val_progress_bar))
-            print("RANK", pl_module.global_rank, self.validation_rates)
 
     @rank_zero_only
     def summarize_metrics(self, config):
@@ -282,12 +314,10 @@ class ProfilerProgressBar(TQDMProgressBar):
         batch_size_tr = config.dataloader.batch_size.training
         batch_size_val = config.dataloader.batch_size.validation
 
-        print("tr rates", self.training_rates)
         training_rates_array = np.array(self.training_rates).reshape(n_epochs, n_batches_tr)
         speed_metrics["training_avg_speed"] = training_rates_array.mean()
         speed_metrics["training_avg_speed_per_sample"] = training_rates_array.mean() / batch_size_tr
 
-        print("val rates", self.validation_rates)
         validation_rates_array = np.array(self.validation_rates).reshape(n_epochs, n_batches_val)
         speed_metrics["validation_avg_speed"] = validation_rates_array.mean()
         speed_metrics["validation_avg_speed_per_sample"] = validation_rates_array.mean() / batch_size_val
