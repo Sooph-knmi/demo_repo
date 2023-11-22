@@ -1,7 +1,7 @@
-training: /lus/h2resw01/fws4/lb/project/ai-ml/zarrs/
-validation: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
-test: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
-predict: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
+training: /home/mlx/ai-ml/zarrs/
+validation: /home/mlx/ai-ml/panguweather-${data.resolution}
+test: /home/mlx/ai-ml/panguweather-${data.resolution}
+predict: /home/mlx/ai-ml/panguweather-${data.resolution}
 output: ${oc.env:SCRATCH}/aifs/${data.resolution}
 logs:
   wandb: ${hardware.paths.output}/logs/wandb
