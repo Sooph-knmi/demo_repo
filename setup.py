@@ -62,6 +62,7 @@ setup(
             "aifs-ens-train=aifs.train.train:main",
             "aifs-ens-gradcheck=aifs.utils.gradcheck:main",
             "aifs-ens-gradtest=aifs.utils.gradtest:main",
+            "aifs-ens-steptest=aifs.utils.steptest:main",
         ]
     },
 )
