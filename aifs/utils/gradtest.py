@@ -22,11 +22,11 @@ LOGGER = get_code_logger(__name__)
 
 
 class AIFSGradientTester:
-    """
+    r"""
     Utility class for testing model gradients: autodiff vs finite-difference Jacobians.
-    This test should succeed for all common model / comms groups configurations.
-    To be used together with gradtest.yaml.
-    (with torch.autograd.gradcheck)
+    To be used together with gradtest.yaml. You can try to run small, single-node configurations e.g.:
+    (num_gpus_per_model, num_gpus_per_ensemble) \in { (1, 1), (1, 2), (1, 4), (2, 4), (2, 2), (4, 4) }
+    The gradient test should complete without error in all these cases.
     """
 
     def __init__(self, config: DictConfig):
@@ -164,22 +164,6 @@ class AIFSGradientTester:
         batch = next(iter(dl_train))[0]  # a single tensor is all we need
         batch_shape = batch.shape
 
-        # def _compute_kcrps(y_pred: torch.Tensor, y_target: torch.Tensor) -> torch.Tensor:
-        #     """Rearranges the prediction and ground truth tensors and then computes the
-        #     KCRPS loss."""
-        #     y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs v latlon e", e=self.model.nens_per_group)
-        #     y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
-        #     bs_ = y_pred.shape[0]
-        #     kcrps_ = self.model.kcrps._kernel_crps(y_pred, y_target, fair=True)
-
-        #     #### THE `scale` TENSOR BREAKS THE GRADIENT TEST!!!!
-        #     kcrps_ = kcrps_ * self.model.kcrps.scale[:, None]
-
-        #     kcrps_ = kcrps_ * self.model.kcrps.weights
-        #     npoints = torch.sum(self.model.kcrps.weights)
-        #     LOGGER.debug("kcrps.scale: min / max = %.4e, %.4e", self.model.kcrps.scale.min(), self.model.kcrps.scale.max())
-        #     return kcrps_.sum() / (npoints * bs_)
-
         # A trick: I use a low-dimensional input, so gradcheck doesn't take ages to run
         # If the gradients check out okay for loss(model(x)), they will be for the
         # composite mapping loss(model(linear_map(x_small))), too (and vice versa)
@@ -218,11 +202,6 @@ class AIFSGradientTester:
             # # simple L1-like loss
             # loss_ = torch.abs(y_pred_ens - y[:, None, ...]).sum()
 
-            # # calling the "real" model loss here makes the test fail!
-            # # the reason is the FREAKIN' loss_scaling tensor
-            # # that's why I've hacked it (see above)
-            # loss_ = _compute_kcrps(y_pred_ens, y[..., : self.model.fcdim])
-
             _, loss_, _ = self.model.gather_and_compute_loss(y_pred, y)
 
             return loss_
@@ -235,10 +214,11 @@ class AIFSGradientTester:
             requires_grad=True,
         )
 
+        # the finite-diff vs analytical Jacobian check happens here
         test_result = gradcheck(single_forward, (x_test,), eps=1e-6, atol=1e-4, rtol=1e-2, nondet_tol=0.0)
-        LOGGER.debug(test_result)
+        LOGGER.debug(test_result)  # "True" if the test passed
 
-        LOGGER.debug("---- GRADTEST DONE. ----")
+        LOGGER.debug("---- GRAD TEST DONE. ----")
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")

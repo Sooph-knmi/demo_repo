@@ -15,7 +15,7 @@ hardware:
     # keep the checkpoint name in sync with the loss type
     checkpoint: aifs-ens-kcrps-ckpt-epoch_{epoch:03d}-rollout_{rollout:.0f}-train_kcrps_{train_kcrps_epoch:.3e}
   num_gpus_per_model: 2
-  num_gpus_per_ensemble: 2
+  num_gpus_per_ensemble: 4
 
 model:
   num_channels: 64
