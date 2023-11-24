@@ -186,7 +186,7 @@ class AIFSGradientTester:
             # single rollout step
             y_pred = self.model(x_)
             # need to scale the gradient of y_pred here (better to do this in the backward of the comm op?)
-            y_pred.register_hook(lambda grad: grad * self.model.ens_comm_group_size)
+            y_pred.register_hook(lambda grad: grad * self.model.ens_comm_group_size / self.model.model_comm_group_size)
 
             y = batch_[:, self.model.multi_step, :, : self.model.fcdim]
 

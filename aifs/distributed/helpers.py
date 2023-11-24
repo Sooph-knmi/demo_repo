@@ -173,6 +173,7 @@ class _SyncParallelSection(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         if ctx.comm_group:
+            # no grad scaling needed
             grad_output = _reduce(grad_output, group=ctx.comm_group)
             return (
                 _split(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
@@ -199,8 +200,9 @@ class _ReduceShardParallelSection(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         if ctx.comm_group:
+            grad_scaler = 1.0 / ctx.comm_group.size()
             return (
-                _gather(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
+                grad_scaler * _gather(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
                 None,
                 None,
                 None,
@@ -209,7 +211,7 @@ class _ReduceShardParallelSection(torch.autograd.Function):
 
 
 class _ShardParallelSection(torch.autograd.Function):
-    """Split the input and keep only the relevant chunck to the rank."""
+    """Split the input and keep only the relevant chunk for each rank."""
 
     @staticmethod
     def forward(ctx, input_, dim_, shapes_, mgroup_):
@@ -223,8 +225,10 @@ class _ShardParallelSection(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         if ctx.comm_group:
+            grad_scaler = 1.0 / ctx.comm_group.size()
             return (
-                _gather(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
+                # scale gradients
+                grad_scaler * _gather(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
                 None,
                 None,
                 None,
@@ -248,7 +252,8 @@ class _GatherParallelSection(torch.autograd.Function):
     def backward(ctx, grad_output):
         if ctx.comm_group:
             return (
-                _split(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
+                # scale gradients
+                ctx.comm_group.size() * _split(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
                 None,
                 None,
                 None,
@@ -270,8 +275,9 @@ class _ReduceParallelSection(torch.autograd.Function):
         return grad_output, None
 
 
-def _split(input_: Tensor, dim_: int, shapes_: Tuple, group: Optional[ProcessGroup] = None) -> Tensor:
+def _split(input_: Tensor, dim_: int, shapes_: Tuple, group: ProcessGroup) -> Tensor:
     """Split the tensor along dim and keep the relevant slice."""
+    del shapes_  # not used
 
     # get input format
     input_format = get_memory_format(input_)

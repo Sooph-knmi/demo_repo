@@ -149,6 +149,25 @@ class GraphForecaster(pl.LightningModule):
             self.ens_comm_num_groups,
         )
 
+        self._gather_index_mask: Optional[torch.Tensor] = None  # lazy init
+
+    def _build_index_mask_for_gather(self) -> None:
+        mask = torch.zeros(self.ens_comm_group_size * self.nens_per_device, device=self.device, dtype=torch.int)
+        LOGGER.debug(
+            "nens_per_device: %d, ens_comm_group_size: %d, mask.shape = %s",
+            self.nens_per_device,
+            self.ens_comm_group_size,
+            mask.shape,
+        )
+
+        idx = 0
+        while idx < mask.shape[0]:
+            mask[idx : idx + self.nens_per_device] = 1
+            idx += self.nens_per_device * self.model_comm_group_size
+
+        LOGGER.debug("Gather mask: %s", mask)
+        return mask.to(dtype=torch.bool)
+
     def _initialize_loss(self, config: DictConfig) -> None:
         loss_scaling = np.array([], dtype=np.float32)
 
@@ -238,8 +257,9 @@ class GraphForecaster(pl.LightningModule):
         y_pred_ens_ = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)
         LOGGER.debug("y_pred tensor shapes before %s and after gather %s", y_pred.shape, y_pred_ens_.shape)
 
-        # step 2/ prune ensemble to get rid of the duplicates (if any)
-        y_pred_ens = y_pred_ens_[:, :: self.model_comm_group_size, ...]
+        # step 2/ prune ensemble to get rid of the duplicates (if any) - uses the pre-built index mask
+        assert self._gather_index_mask is not None
+        y_pred_ens = y_pred_ens_[:, self._gather_index_mask, ...]
         LOGGER.debug("after pruning y_pred_ens.shape == %s", y_pred_ens.shape)
 
         # step 3/ compute the loss (one member per model group)
@@ -281,7 +301,6 @@ class GraphForecaster(pl.LightningModule):
             LOGGER.debug("batch[0].device = %s, dtype = %s", batch[0].device, batch[0].dtype)
             # no EDA available, just stack the analysis IC nens_per_device times
             x_ = batch[0][:, 0 : self.multi_step, ...]  # (bs, multistep, latlon, nvar)
-            LOGGER.debug("x_.device = %s, dtype = %s", x_.device, x_.dtype)
             return torch.stack([x_] * self.nens_per_device, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
 
         x, x_eda = batch
@@ -365,8 +384,17 @@ class GraphForecaster(pl.LightningModule):
         loss *= 1.0 / self.rollout
         return loss, metrics, y_preds, kcrps_preds
 
+    def on_train_start(self):
+        if self._gather_index_mask is None:
+            self._gather_index_mask = self._build_index_mask_for_gather()  # only once
+
+    def on_validation_start(self):
+        if self._gather_index_mask is None:
+            self._gather_index_mask = self._build_index_mask_for_gather()  # only once
+
     def training_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int) -> torch.Tensor:
         # del batch_idx  # not used
+
         x_ens_ic = self._generate_ens_inicond(batch)
         train_loss, _, _, _ = self._step(batch[0], batch_idx, x_ens_ic)
         self.log(

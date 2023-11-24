@@ -9,7 +9,7 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --output=steptest.out.%j
+#SBATCH --output=commstest.out.%j
 
 # debugging flags (optional)
 # export NCCL_DEBUG=INFO
@@ -28,8 +28,8 @@ export CUBLAS_WORKSPACE_CONFIG=:4096:8
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-# export WANDB_NAME="steptest-meluxina"
-# export WANDB_NOTES="Optimizer step test on MeluXina"
+# export WANDB_NAME="commstest-meluxina"
+# export WANDB_NOTES="Comms functions grad test on MeluXina"
 
 # generic settings
 VENV=aifs-dev
@@ -48,5 +48,4 @@ module load CUDA/11.7
 module load cuDNN/8.4.1.50-CUDA-11.7.0
 source /project/home/p200177/syma/aifs-env/$VENV/bin/activate
 
-aifs-ens-steptest
-# python3 aifs/utils/steptest.py
+aifs-ens-commstest

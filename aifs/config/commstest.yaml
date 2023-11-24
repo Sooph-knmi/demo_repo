@@ -48,7 +48,7 @@ training:
     start: 1
     epoch_increment: 0
     max: 1
-  ensemble_size_per_device: 2
+  ensemble_size_per_device: 3
   loss: kcrps
   eda_initial_perturbations: False
 

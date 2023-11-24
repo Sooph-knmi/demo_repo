@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import List
 from typing import Tuple
 
 import numpy as np
@@ -8,6 +9,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from hydra import compose
 from hydra import initialize
+from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch_geometric import seed_everything
 
@@ -97,6 +99,27 @@ def get_my_comm_group(global_rank, world_size, num_gpus_per_group) -> Tuple[int,
     return comm_group_id, comm_group_nr, comm_group_rank
 
 
+def get_parameters_as_a_flat_tensor(m: nn.Module) -> torch.Tensor:
+    # save starting parameters
+    p_flat: List[torch.Tensor] = []
+    for p in m.parameters():
+        if p.requires_grad:
+            p_flat.append(p.view(-1).detach().clone())
+    return torch.cat(p_flat)
+
+
+def register_parameter_grad_scaling_hooks(m: nn.Module, grad_scaling_factor: float) -> None:
+    """Register parameter hooks for gradient reduction.
+
+    Here, we rescale parameters that only see a subset of the input on each rank
+    -> these are still divided by the total number of GPUs in DDP as if
+    each rank would see a full set of inputs
+    """
+    for _, param in m.named_parameters():
+        if param.requires_grad:  #  and "trainable" not in name:
+            param.register_hook(lambda grad: grad * grad_scaling_factor)
+
+
 def single_step_test(rank, world_size):
     LOGGER.debug("Runing GNN in DDP mode on rank %d ...", rank)
     setup(rank, world_size)
@@ -132,7 +155,7 @@ def single_step_test(rank, world_size):
     iseed = 1234 + ens_comm_group_id
     seed_everything(iseed)
     LOGGER.debug("Rank %d has random seed %d", rank, iseed)
-    torch.set_printoptions(precision=25)
+    torch.set_printoptions(precision=15)
     torch.use_deterministic_algorithms(True)
 
     graph_data = torch.load(Path(cfg_.hardware.paths.graph, cfg_.hardware.files.graph))
@@ -140,20 +163,14 @@ def single_step_test(rank, world_size):
     gnn = GraphMSG(cfg_, graph_data).to(rank)
     _ERA_SIZE = gnn._era_size
 
-    # hook to rescale parameter gradients
-    for _, param in gnn.named_parameters():
-        if param.requires_grad:
-            param.register_hook(lambda grad: grad * ens_comm_group_size)
-
     # DDP model wrapper
     gnn = DDP(gnn, device_ids=[rank])
 
-    # save starting parameters
-    initial_params = []
-    for p in gnn.parameters():
-        if p.requires_grad:
-            initial_params.append(p.view(-1).detach().clone())
-    initial_params = torch.cat(initial_params)
+    # TODO: is this the correct gradient scaling for all valid
+    # (num-gpus-per-model, num-gpus-per-ensemble) combinations?
+    register_parameter_grad_scaling_hooks(gnn, float(ens_comm_group_size))
+
+    initial_params = get_parameters_as_a_flat_tensor(gnn)
 
     # random input tensor, shaped like what the model expects
     x_input = torch.randn(
@@ -175,11 +192,18 @@ def single_step_test(rank, world_size):
 
     with torch.autocast(device_type="cuda", dtype=working_precision):
         y_pred = gnn(x_input, model_comm_group=model_comm_group)
+        # a dummy loss, for now
         loss = y_pred.sum()
 
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
+
+        updated_params = get_parameters_as_a_flat_tensor(gnn)
+
+        # calculate absolute & relative differences in the parameters (new vs old)
+        LOGGER.debug("model sum(|p_new - p_init|): %.10e", torch.abs(updated_params - initial_params).sum())
+        LOGGER.debug("model sum(abs(p)): %.10e", updated_params.abs().sum())
 
     LOGGER.debug("Rank %d max memory alloc: %.2f MB", rank, torch.cuda.max_memory_allocated(torch.device(rank)) / 1e6)
     LOGGER.debug("Rank %d max memory reserved: %.2f MB", rank, torch.cuda.max_memory_reserved(torch.device(rank)) / 1e6)

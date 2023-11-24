@@ -63,6 +63,7 @@ setup(
             "aifs-ens-gradcheck=aifs.utils.gradcheck:main",
             "aifs-ens-gradtest=aifs.utils.gradtest:main",
             "aifs-ens-steptest=aifs.utils.steptest:main",
+            "aifs-ens-commstest=aifs.utils.commstest:main",
         ]
     },
 )
