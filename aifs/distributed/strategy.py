@@ -140,7 +140,8 @@ class DDPGroupStrategy(DDPStrategy):
         Here, we rescale parameters that only see a subset of the input on each rank
         -> these are still divided by the total number of GPUs in DDP as if each rank would see a full set of inputs
         """
-        # TODO: test if this is the correct thing to do in all cases! [build a test out of Simon's code]
-        for _, param in self.model.named_parameters():
-            if param.requires_grad:  #  and "trainable" not in name:
-                param.register_hook(lambda grad: grad * self.ens_comm_group_size)
+        pass  # do nothing
+        # # TODO: test if this is the correct thing to do in all cases! [build a test out of Simon's code]
+        # for _, param in self.model.named_parameters():
+        #     if param.requires_grad:  #  and "trainable" not in name:
+        #         param.register_hook(lambda grad: grad * self.ens_comm_group_size)

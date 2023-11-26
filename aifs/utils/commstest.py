@@ -22,6 +22,7 @@ from aifs.utils.logger import get_code_logger
 LOGGER = get_code_logger(__name__, debug=True)
 
 _TEST_INPUT_SHAPE = (5,)
+_TEST_DTYPE = torch.float64
 
 
 def setup(rank, world_size):
@@ -116,7 +117,7 @@ def register_parameter_grad_scaling_hooks(m: nn.Module, grad_scaling_factor: flo
             param.register_hook(lambda grad: grad * grad_scaling_factor)
 
 
-def test_gather_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: torch.dtype, rank: int) -> bool:
+def test_gather_op(comm_group: ProcessGroup, input_shape: Tuple, rank: int) -> bool:
     """Gradient test for gather_tensor collective.
 
     Inputs:
@@ -124,8 +125,6 @@ def test_gather_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: tor
             Process communication group.
         input_shape: Tuple
             Shape of input to the communication operation.
-        test_dtype: torch.dtype
-            Tensor data type.
         rank: int
             Global rank of current process.
     Outputs:
@@ -133,14 +132,14 @@ def test_gather_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: tor
     """
     small_input_shape = _TEST_INPUT_SHAPE
     comm_group_size = comm_group.size()
-    x_input = torch.randn(*small_input_shape, dtype=test_dtype, device=rank, requires_grad=True)
+    x_input = torch.randn(*small_input_shape, dtype=_TEST_DTYPE, device=rank, requires_grad=True)
 
     linear_map = torch.nn.Linear(
         np.prod(small_input_shape),
         np.prod(input_shape),
         bias=False,
         device=rank,
-        dtype=test_dtype,
+        dtype=_TEST_DTYPE,
     )
     linear_map = linear_map.train()
 
@@ -157,7 +156,7 @@ def test_gather_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: tor
     return result
 
 
-def test_shard_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: torch.dtype, rank: int) -> bool:
+def test_shard_op(comm_group: ProcessGroup, input_shape: Tuple, rank: int) -> bool:
     """Gradient test for shard_tensor collective.
 
     Inputs:
@@ -165,8 +164,6 @@ def test_shard_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: torc
             Process communication group.
         input_shape: Tuple
             Shape of input to the communication operation.
-        test_dtype: torch.dtype
-            Tensor data type.
         rank: int
             Global rank of current process.
     Outputs:
@@ -174,14 +171,14 @@ def test_shard_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: torc
     """
     small_input_shape = _TEST_INPUT_SHAPE
     comm_group_size = comm_group.size()
-    x_input = torch.randn(*small_input_shape, dtype=test_dtype, device=rank, requires_grad=True)
+    x_input = torch.randn(*small_input_shape, dtype=_TEST_DTYPE, device=rank, requires_grad=True)
 
     linear_map = torch.nn.Linear(
         np.prod(small_input_shape),
         np.prod(input_shape),
         bias=False,
         device=rank,
-        dtype=test_dtype,
+        dtype=_TEST_DTYPE,
     )
     linear_map = linear_map.train()
 
@@ -200,7 +197,7 @@ def test_shard_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: torc
     return result
 
 
-def test_sync_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: torch.dtype, rank: int) -> bool:
+def test_sync_op(comm_group: ProcessGroup, input_shape: Tuple, rank: int) -> bool:
     """Gradient test for sync_tensor collective.
 
     Inputs:
@@ -208,8 +205,6 @@ def test_sync_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: torch
             Process communication group.
         input_shape: Tuple
             Shape of input to the communication operation.
-        test_dtype: torch.dtype
-            Tensor data type.
         rank: int
             Global rank of current process.
     Outputs:
@@ -217,14 +212,14 @@ def test_sync_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: torch
     """
     small_input_shape = _TEST_INPUT_SHAPE
     comm_group_size = comm_group.size()
-    x_input = torch.randn(*small_input_shape, dtype=test_dtype, device=rank, requires_grad=True)
+    x_input = torch.randn(*small_input_shape, dtype=_TEST_DTYPE, device=rank, requires_grad=True)
 
     linear_map = torch.nn.Linear(
         np.prod(small_input_shape),
         np.prod(input_shape),
         bias=False,
         device=rank,
-        dtype=test_dtype,
+        dtype=_TEST_DTYPE,
     )
     linear_map = linear_map.train()
 
@@ -241,7 +236,7 @@ def test_sync_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: torch
     return result
 
 
-def test_reduce_shard_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: torch.dtype, rank: int) -> bool:
+def test_reduce_shard_op(comm_group: ProcessGroup, input_shape: Tuple, rank: int) -> bool:
     """Gradient test for reduce_shard_tensor collective.
 
     Inputs:
@@ -249,8 +244,6 @@ def test_reduce_shard_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtyp
             Process communication group.
         input_shape: Tuple
             Shape of input to the communication operation.
-        test_dtype: torch.dtype
-            Tensor data type.
         rank: int
             Global rank of current process.
     Outputs:
@@ -258,14 +251,14 @@ def test_reduce_shard_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtyp
     """
     small_input_shape = _TEST_INPUT_SHAPE
     comm_group_size = comm_group.size()
-    x_input = torch.randn(*small_input_shape, dtype=test_dtype, device=rank, requires_grad=True)
+    x_input = torch.randn(*small_input_shape, dtype=_TEST_DTYPE, device=rank, requires_grad=True)
 
     linear_map = torch.nn.Linear(
         np.prod(small_input_shape),
         np.prod(input_shape),
         bias=False,
         device=rank,
-        dtype=test_dtype,
+        dtype=_TEST_DTYPE,
     )
     linear_map = linear_map.train()
 
@@ -274,7 +267,8 @@ def test_reduce_shard_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtyp
         LOGGER.debug("x.shape = %s", x_.shape)
         x = x_.repeat(1, comm_group_size, 1, 1)
         LOGGER.debug("x.repeat().shape = %s", x.shape)
-        y = reduce_shard_tensor(x, dim=1, shapes=[x_.shape] * comm_group_size, mgroup=comm_group)
+        # must do the reduction in FP64 (= _TEST_DTYPE) otherwise the gradient test will break
+        y = reduce_shard_tensor(x, dim=1, shapes=[x_.shape] * comm_group_size, mgroup=comm_group, use_fp32=False)
         LOGGER.debug("y.shape = %s", y.shape)
         loss = y.sum()
         return loss
@@ -284,7 +278,7 @@ def test_reduce_shard_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtyp
     return result
 
 
-def test_reduce_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: torch.dtype, rank: int) -> bool:
+def test_reduce_op(comm_group: ProcessGroup, input_shape: Tuple, rank: int) -> bool:
     """Gradient test for reduce_tensor collective.
 
     Inputs:
@@ -292,35 +286,34 @@ def test_reduce_op(comm_group: ProcessGroup, input_shape: Tuple, test_dtype: tor
             Process communication group.
         input_shape: Tuple
             Shape of input to the communication operation.
-        test_dtype: torch.dtype
-            Tensor data type.
         rank: int
             Global rank of current process.
     Outputs:
         True if the test passed OK.
     """
     small_input_shape = _TEST_INPUT_SHAPE
-    x_input = torch.randn(*small_input_shape, dtype=test_dtype, device=rank, requires_grad=True)
+    x_input = torch.randn(*small_input_shape, dtype=_TEST_DTYPE, device=rank, requires_grad=True)
 
     linear_map = torch.nn.Linear(
         np.prod(small_input_shape),
         np.prod(input_shape),
         bias=False,
         device=rank,
-        dtype=test_dtype,
+        dtype=_TEST_DTYPE,
     )
     linear_map = linear_map.train()
 
     def _test_reduce(x_in) -> None:
         x = linear_map(x_in).reshape(input_shape)
         LOGGER.debug("x.shape = %s", x.shape)
-        y = reduce_tensor(x, mgroup=comm_group)
+        # must do the reduction in FP64 (= _TEST_DTYPE) otherwise the gradient test will break
+        y = reduce_tensor(x, mgroup=comm_group, use_fp32=False)
         LOGGER.debug("y.shape = %s", y.shape)
         loss = y.sum()
         return loss
 
     result = gradcheck(_test_reduce, (x_input,), eps=1e-7, atol=1e-5, rtol=1e-4, nondet_tol=0.0)
-    LOGGER.debug("Sync test result: %s", result)  # "True" if the test passed
+    LOGGER.debug("Reduce test result: %s", result)  # "True" if the test passed
     return result
 
 
@@ -345,13 +338,13 @@ def comms_test(rank, world_size):
         ],
     )
 
-    model_comm_group_size = cfg_.hardware.num_gpus_per_model
+    # model_comm_group_size = cfg_.hardware.num_gpus_per_model
     ens_comm_group_size = cfg_.hardware.num_gpus_per_ensemble
 
     # create communication groups
-    model_comm_group, _ = create_model_comm_groups(rank, world_size, model_comm_group_size)
-    model_comm_group_size = dist.get_world_size(group=model_comm_group)
-    LOGGER.debug("Set up a model_comm_group: %s with size %d", model_comm_group, model_comm_group_size)
+    # model_comm_group, _ = create_model_comm_groups(rank, world_size, model_comm_group_size)
+    # model_comm_group_size = dist.get_world_size(group=model_comm_group)
+    # LOGGER.debug("Set up a model_comm_group: %s with size %d", model_comm_group, model_comm_group_size)
 
     ens_comm_group, ens_comm_group_id = create_ensemble_comm_groups(rank, world_size, ens_comm_group_size)
     ens_comm_group_size = dist.get_world_size(group=ens_comm_group)
@@ -364,7 +357,6 @@ def comms_test(rank, world_size):
     torch.use_deterministic_algorithms(True)
 
     _ERA_SIZE = 2048
-    dtype_test = torch.double
 
     # test gather
     input_shape = (
@@ -376,19 +368,19 @@ def comms_test(rank, world_size):
     )
 
     # test gather
-    assert test_gather_op(ens_comm_group, input_shape, dtype_test, rank)
+    assert test_gather_op(ens_comm_group, input_shape, rank)
 
     # test sharding
-    assert test_shard_op(ens_comm_group, input_shape, dtype_test, rank)
+    assert test_shard_op(ens_comm_group, input_shape, rank)
 
     # test sync
-    assert test_sync_op(ens_comm_group, input_shape, dtype_test, rank)
+    assert test_sync_op(ens_comm_group, input_shape, rank)
 
     # test reduce + shard
-    assert test_reduce_shard_op(ens_comm_group, input_shape, dtype_test, rank)
+    assert test_reduce_shard_op(ens_comm_group, input_shape, rank)
 
     # test reduce
-    assert test_reduce_op(ens_comm_group, input_shape, dtype_test, rank)
+    assert test_reduce_op(ens_comm_group, input_shape, rank)
 
     cleanup()
 

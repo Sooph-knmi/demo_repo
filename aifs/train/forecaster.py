@@ -251,7 +251,10 @@ class GraphForecaster(pl.LightningModule):
         return self._compute_energy_score(y_pred, y_target)
 
     def gather_and_compute_loss(
-        self, y_pred: torch.Tensor, y: torch.Tensor, validation_mode: bool = False
+        self,
+        y_pred: torch.Tensor,
+        y: torch.Tensor,
+        validation_mode: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         # step 1/ gather among all GPUs in the same ensemble group
         y_pred_ens_ = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)

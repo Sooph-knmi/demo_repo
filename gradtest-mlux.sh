@@ -19,6 +19,7 @@ export HYDRA_FULL_ERROR=1
 # export TORCH_CPP_LOG_LEVEL=INFO
 # export TORCH_DISTRIBUTED_DEBUG=DETAIL
 # export CUDA_LAUNCH_BLOCKING=1
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
 # on your cluster you might need these:
 # set the network interface
@@ -44,4 +45,6 @@ module load CUDA/11.7
 module load cuDNN/8.4.1.50-CUDA-11.7.0
 source /project/home/p200177/syma/aifs-env/$VENV/bin/activate
 
-srun aifs-ens-gradtest hardware=mlux_slurm --config-name=gradtest
+# srun aifs-ens-gradtest hardware=mlux_slurm --config-name=gradtest
+
+aifs-ens-gradtest

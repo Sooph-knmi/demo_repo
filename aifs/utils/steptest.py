@@ -168,7 +168,8 @@ def single_step_test(rank, world_size):
 
     # TODO: is this the correct gradient scaling for all valid
     # (num-gpus-per-model, num-gpus-per-ensemble) combinations?
-    register_parameter_grad_scaling_hooks(gnn, float(ens_comm_group_size))
+    # scaling is no longer necessary
+    # register_parameter_grad_scaling_hooks(gnn, float(ens_comm_group_size))
 
     initial_params = get_parameters_as_a_flat_tensor(gnn)
 

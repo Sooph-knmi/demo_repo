@@ -31,6 +31,7 @@ class GraphMSG(nn.Module):
         self,
         config: DotConfig,
         graph_data: HeteroData = None,
+        fp32_comm_ops: bool = True,
     ) -> None:
         """Initializes the graph neural network.
 
@@ -40,6 +41,9 @@ class GraphMSG(nn.Module):
             Job configuration
         graph_data : HeteroData, optional
             Graph definition, by default None
+        fp32_comm_ops: Bool, optional
+            Perform some communication operations (e.g. reduce) in FP32, by default True
+            Set this to false when doing e.g. gradient checks (to use torch.double)
         """
         super().__init__()
 
@@ -98,6 +102,7 @@ class GraphMSG(nn.Module):
             edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
             activation=self.activation,
             num_chunks=config.model.encoder.num_chunks,
+            fp32_comm_ops=fp32_comm_ops,
         )
 
         # Processor H -> H
@@ -123,6 +128,7 @@ class GraphMSG(nn.Module):
             backward_mapper=True,
             activation=self.activation,
             num_chunks=config.model.decoder.num_chunks,
+            fp32_comm_ops=fp32_comm_ops,
         )
 
     def _register_latlon(self, name: str) -> None:
@@ -356,11 +362,17 @@ class GraphMSG(nn.Module):
 
         return edge_index_concat, edge_mask
 
-    def forward(self, x: torch.Tensor, model_comm_group: Optional[ProcessGroup] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, model_comm_group: Optional[ProcessGroup] = None, inject_noise: bool = True) -> torch.Tensor:
         """Forward operator.
 
         Args:
-            x: input tensor, shape (bs, e, m, n, f)
+            x: torch.Tensor
+                Input tensor, shape (bs, e, m, n, f)
+            model_comm_group: Optional[ProcessGroup], optional
+                Model communication group
+            inject_noise: bool, optional
+                Inject white noise in the processor, default True.
+                If False then we inject an all-zeros noise tensor (do this e.g. when pre-training with a deterministic loss).
         Returns:
             Output tensor
         """
@@ -434,7 +446,8 @@ class GraphMSG(nn.Module):
         LOGGER.debug("x_era_latent.shape = %s, x_latent.shape = %s", x_era_latent.shape, x_latent.shape)
 
         # generate noise tensor
-        z = torch.randn(*x_latent.shape[:-1], self.proc_noise_channels).type_as(x_latent)
+        noise_shape = (*x_latent.shape[:-1], self.proc_noise_channels)
+        z = torch.randn(noise_shape).type_as(x_latent) if inject_noise else torch.zeros(noise_shape).type_as(x_latent)
         z.requires_grad = False
         LOGGER.debug("z.shape = %s, z.norm: %.9e", z.shape, torch.linalg.norm(z))
 

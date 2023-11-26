@@ -289,6 +289,7 @@ class GNNMapper(nn.Module):
         cpu_offload: bool = False,
         backward_mapper: bool = False,
         out_channels_dst: Optional[int] = None,
+        fp32_comm_ops: bool = True,
     ) -> None:
         """Initialize GNNMapper.
 
@@ -316,6 +317,8 @@ class GNNMapper(nn.Module):
             Map from (true) hidden to era or (false) reverse, by default False
         out_channels_dst : Optional[int], optional
             Output channels of the destination node, by default None
+        fp32_comm_ops: bool, optional
+            Use FP32 arithmetic for some collective communication operations (reduce_shard_tensor), by default True
         """
         super().__init__()
 
@@ -341,6 +344,7 @@ class GNNMapper(nn.Module):
             update_src_nodes=update_src_nodes,
             num_chunks=num_chunks,
             mlp_dropout=mlp_dropout,
+            fp32_comm_ops=fp32_comm_ops,
         )
 
         if cpu_offload:
@@ -419,6 +423,7 @@ class GNNBlock(nn.Module):
         mlp_dropout: float = 0.0,
         update_src_nodes: bool = True,
         num_chunks: int = 1,
+        fp32_comm_ops: bool = True,
         **kwargs,
     ) -> None:
         """Initialize GNNBlock.
@@ -444,6 +449,7 @@ class GNNBlock(nn.Module):
 
         self.update_src_nodes = update_src_nodes
         self.num_chunks = num_chunks
+        self.fp32_comm_ops = fp32_comm_ops
 
         self.node_mlp = gen_mlp(
             2 * in_channels,
@@ -493,7 +499,7 @@ class GNNBlock(nn.Module):
         else:
             out, edges_new = self.conv(x_in, edge_index, edge_attr, size=size)
 
-        out = reduce_shard_tensor(out, 0, shapes[1], model_comm_group)
+        out = reduce_shard_tensor(out, 0, shapes[1], model_comm_group, use_fp32=self.fp32_comm_ops)
 
         if isinstance(x, Tensor):
             nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x

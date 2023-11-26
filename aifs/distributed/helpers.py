@@ -11,6 +11,10 @@ import torch.distributed as dist
 from torch import Tensor
 from torch.distributed.distributed_c10d import ProcessGroup
 
+from aifs.utils.logger import get_code_logger
+
+LOGGER = get_code_logger(__name__)
+
 
 def shard_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -> Tensor:
     """Shard tensor.
@@ -60,7 +64,7 @@ def gather_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup)
     return _GatherParallelSection.apply(input_, dim, shapes, mgroup)
 
 
-def reduce_tensor(input_: Tensor, mgroup: ProcessGroup) -> Tensor:
+def reduce_tensor(input_: Tensor, mgroup: ProcessGroup, use_fp32: bool = True) -> Tensor:
     """Reduce tensor.
 
     Reduces tensor across ranks.
@@ -71,13 +75,15 @@ def reduce_tensor(input_: Tensor, mgroup: ProcessGroup) -> Tensor:
         Input
     mgroup : ProcessGroup
         model communication group
+    use_fp32: bool
+        Do the reduction using FP32.
 
     Returns
     -------
     Tensor
     """
 
-    return _ReduceParallelSection.apply(input_, mgroup)
+    return _ReduceParallelSection.apply(input_, mgroup, use_fp32)
 
 
 def sync_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -> Tensor:
@@ -104,7 +110,7 @@ def sync_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -
     return _SyncParallelSection.apply(input_, dim, shapes, mgroup)
 
 
-def reduce_shard_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -> Tensor:
+def reduce_shard_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup, use_fp32: bool = True) -> Tensor:
     """Reduces and then shards tensor.
 
     Perform an allreduce followed by a split in the forward pass and a gather in the backward pass.
@@ -119,13 +125,15 @@ def reduce_shard_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: Process
         Shapes of sharded Tensors
     mgroup : ProcessGroup
         model communication group
+    use_fp32: bool
+        Perform the reduction in fp32.
 
     Returns
     -------
     Tensor
     """
 
-    return _ReduceShardParallelSection.apply(input_, dim, shapes, mgroup)
+    return _ReduceShardParallelSection.apply(input_, dim, shapes, mgroup, use_fp32)
 
 
 def get_shape_shards(tensor: Tensor, dim: int, mgroup: Optional[ProcessGroup] = None) -> List:
@@ -162,10 +170,11 @@ class _SyncParallelSection(torch.autograd.Function):
     """Sync the input from parallel section."""
 
     @staticmethod
-    def forward(ctx, input_, dim_, shapes_, mgroup_):
+    def forward(ctx, input_, dim_, shapes_, mgroup_, use_fp32_=True):
         ctx.dim = dim_
         ctx.comm_group = mgroup_
         ctx.shapes = shapes_
+        ctx.use_fp32 = use_fp32_
         if mgroup_:
             return _gather(input_, dim_, shapes_, group=mgroup_)
         return input_
@@ -174,7 +183,7 @@ class _SyncParallelSection(torch.autograd.Function):
     def backward(ctx, grad_output):
         if ctx.comm_group:
             # no grad scaling needed
-            grad_output = _reduce(grad_output, group=ctx.comm_group)
+            grad_output = _reduce(grad_output, group=ctx.comm_group, use_fp32=ctx.use_fp32)
             return (
                 _split(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
                 None,
@@ -188,21 +197,22 @@ class _ReduceShardParallelSection(torch.autograd.Function):
     """All-reduce and shard the input from the parallel section."""
 
     @staticmethod
-    def forward(ctx, input_, dim_, shapes_, mgroup_):
+    def forward(ctx, input_, dim_, shapes_, mgroup_, use_fp32_=True):
         ctx.dim = dim_
         ctx.comm_group = mgroup_
         ctx.shapes = shapes_
         if mgroup_:
-            input_ = _reduce(input_, group=mgroup_)
+            input_ = _reduce(input_, group=mgroup_, use_fp32=use_fp32_)
             return _split(input_, dim_, shapes_, group=mgroup_)
         return input_
 
     @staticmethod
     def backward(ctx, grad_output):
         if ctx.comm_group:
-            grad_scaler = 1.0 / ctx.comm_group.size()
+            # no grad scaling needed
             return (
-                grad_scaler * _gather(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
+                _gather(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
+                None,
                 None,
                 None,
                 None,
@@ -251,6 +261,7 @@ class _GatherParallelSection(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         if ctx.comm_group:
+            LOGGER.debug("*** GATHER *** comm_group.size() = %d", ctx.comm_group.size())
             return (
                 # scale gradients
                 ctx.comm_group.size() * _split(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
@@ -265,14 +276,18 @@ class _ReduceParallelSection(torch.autograd.Function):
     """All-reduce the input from the parallel section."""
 
     @staticmethod
-    def forward(ctx, input_, mgroup_):
+    def forward(ctx, input_, mgroup_, use_fp32_=True):
+        ctx.comm_group = mgroup_
         if mgroup_:
-            return _reduce(input_, group=mgroup_)
+            return _reduce(input_, use_fp32=use_fp32_, group=mgroup_)
         return input_
 
     @staticmethod
     def backward(ctx, grad_output):
-        return grad_output, None
+        if ctx.comm_group:
+            # scale gradient
+            return ctx.comm_group.size() * grad_output, None, None
+        return grad_output, None, None
 
 
 def _split(input_: Tensor, dim_: int, shapes_: Tuple, group: ProcessGroup) -> Tensor:
@@ -353,13 +368,15 @@ def _reduce(input_: Tensor, use_fp32: Optional[bool] = True, group: Optional[Pro
         dist.all_reduce(inputf_, group=group)
         input_ = inputf_.to(dtype)
     else:
+        input_format = get_memory_format(input_)
+        input_ = input_.contiguous(memory_format=input_format)
         dist.all_reduce(input_, group=group)
 
     return input_
 
 
 def get_memory_format(tensor: Tensor):
-    """Helper routine to get the memory format."""
+    """Helper routine to get the memory format of a tensor."""
 
     if tensor.is_contiguous(memory_format=torch.channels_last):
         return torch.channels_last
