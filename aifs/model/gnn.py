@@ -464,8 +464,8 @@ def run_parallel(demo_fn, world_size):
 # @hydra.main(version_base=None)
 def test_gnn(rank, world_size):
 
-    import nvidia_dlprof_pytorch_nvtx
-    nvidia_dlprof_pytorch_nvtx.init()
+    # import nvidia_dlprof_pytorch_nvtx
+    # nvidia_dlprof_pytorch_nvtx.init()
 
     print(f"Run GNN DDP on rank {rank}.")
     setup(rank, world_size)
@@ -504,14 +504,14 @@ def test_gnn(rank, world_size):
             # "model.trainable_parameters.era2hidden=1",
             # "model.trainable_parameters.hidden2era=1",
             # "model.trainable_parameters.hidden2hidden=1",
-            # 'model.processor.type="Transformer"',
-            'model.processor.type="GNN"',
+            'model.processor.type="Transformer"',
+            # 'model.processor.type="GNN"',
             "model.processor.num_layers=16",  # 16',
             "model.num_channels=1024",
             "model.processor.num_channels=1024",  # 16',
             "model.processor.heads=16",  # 16',
             "model.processor.chunks=2",  # 16',
-            "model.processor.window_size=512",  # 16',
+            "model.processor.window_size=511",  # 16',
             # "model.processor.window_size=2048",  # 16',
             "model.processor.num_channels=1024",  # 16',
             "data.num_features=98",
@@ -525,10 +525,15 @@ def test_gnn(rank, world_size):
             # 'hardware.files.graph="graph_mappings_normed_edge_attrs_2023062700_o96_h_0_1_2_3_4_5.pt"',
             # 'hardware.files.graph="graph_mappings_normed_edge_attrs1_o32_h_0_1_2.pt"',
             # 'hardware.files.graph="graph_mappings_normed_edge_attrs_ordered_lat_lon_20231106121941_o96_h_0_1_2_3_4.pt"',
-            'hardware.files.graph="graph_mappings_normed_edge_attrs_ordered_lat_lon_20231106115258_o96_h_0_1_2_3_4_5.pt"',
+
+            # 'hardware.files.graph="graph_mappings_normed_edge_attrs_20231121125206_o96_h_o48.pt"',
+            'hardware.files.graph="graph_mappings_normed_edge_attrs_2023062700_o96_h_0_1_2_3_4_5_6.pt"',
+
+
+            # 'hardware.files.graph="graph_mappings_normed_edge_attrs_ordered_lat_lon_20231106115258_o96_h_0_1_2_3_4_5.pt"',
             # 'hardware.files.graph="graph_mappings_normed_edge_attrs_ordered_lat_lon_20231106121544_n320_h_0_1_2_3_4_5_6.pt"',
             #'hardware.files.graph="graph_mappings_normed_edge_attrs_ordered_20230723094641_o96_h_0_1_2_3_4.pt"',
-            # 'hardware.files.graph="graph_mappings_normed_edge_attrs_ordered_20230723094050_o96_h_0_1_2_3_4_5.pt"',
+
             # 'hardware.files.graph="graph_mappings_normed_edge_attrs_ordered2_20231101132919_o96_h_0_1_2_3_4_5.pt"',
             # 'hardware.files.graph="graph_mappings_normed_edge_attrs_ordered_20230723094050_o96_h_0_1_2_3_4_5.pt"',
             # 'hardware.files.graph="graph_mappings_normed_edge_attrs_2023062700_n320_h_0_1_2_3_4_5_6.pt"',
@@ -602,43 +607,43 @@ def test_gnn(rank, world_size):
 
     cast_to = torch.float16
 
-    with torch.autograd.profiler.emit_nvtx():
+    # with torch.autograd.profiler.emit_nvtx():
+    with torch.autocast(device_type="cuda", dtype=cast_to):
+        y_pred = gnn(x_input, model_comm_group=comms_group)
+        loss = (y_pred - y).sum()
+
+    # print(loss)
+    if True:
+        scaler.scale(loss).backward()
+
+        for name, param in gnn.named_parameters():
+            if param.grad is None:
+                print(name)
+
+        print("{rank} --- %s seconds ---" % (time.time() - start_time))
+
+        print(f" =====##### rank {rank} has loss1 {loss:.20f}")
+
+        scaler.step(optimizer)
+        scaler.update()
+
+    if True:
         with torch.autocast(device_type="cuda", dtype=cast_to):
-            y_pred = gnn(x_input, model_comm_group=comms_group)
-            loss = (y_pred - y).sum()
+            y_pred2 = gnn(x_input2, model_comm_group=comms_group)
 
-        # print(loss)
-        if True:
-            scaler.scale(loss).backward()
+        print(f" =====##### rank {rank} has loss2 {y_pred2.sum():.20f}")
 
-            for name, param in gnn.named_parameters():
-                if param.grad is None:
-                    print(name)
+        for name, param in gnn.named_parameters():
+            if param.grad is None:
+                print(name)
 
-            print("{rank} --- %s seconds ---" % (time.time() - start_time))
+        # params = []
+        # for param in gnn.parameters():
+        #     params.append(param.view(-1))
+        # params2 = torch.cat(params)
 
-            print(f" =====##### rank {rank} has loss1 {loss:.20f}")
-
-            scaler.step(optimizer)
-            scaler.update()
-
-        if True:
-            with torch.autocast(device_type="cuda", dtype=cast_to):
-                y_pred2 = gnn(x_input2, model_comm_group=comms_group)
-
-            print(f" =====##### rank {rank} has loss2 {y_pred2.sum():.20f}")
-
-            for name, param in gnn.named_parameters():
-                if param.grad is None:
-                    print(name)
-
-            # params = []
-            # for param in gnn.parameters():
-            #     params.append(param.view(-1))
-            # params2 = torch.cat(params)
-
-            # print(f"model diff: {(((params2 - params1)**2.)**(1./2.)).sum():.20f}")
-            # print(f"model param sum: {params2.abs().sum():.20f}")
+        # print(f"model diff: {(((params2 - params1)**2.)**(1./2.)).sum():.20f}")
+        # print(f"model param sum: {params2.abs().sum():.20f}")
 
     print(f"rank {rank} max memory alloc: {torch.cuda.max_memory_allocated(torch.device(rank))/1.e6}")
     print(f"rank {rank} max memory reserved: {torch.cuda.max_memory_reserved(torch.device(rank))/1.e6}")
@@ -659,15 +664,15 @@ def test_gnn(rank, world_size):
     #     # if name == "module.backward_mapper.emb_edges.2.weight":
     #     if param.grad is not None:
     #         print(name, parameter.grad)
-
+    print("done")
     cleanup()
 
 
 if __name__ == "__main__":
     import os
 
-    import nvidia_dlprof_pytorch_nvtx
-    nvidia_dlprof_pytorch_nvtx.init()
+    # import nvidia_dlprof_pytorch_nvtx
+    # nvidia_dlprof_pytorch_nvtx.init()
 
     # from torch.profiler import profile, record_function, ProfilerActivity
     # from timeit import default_timer as timer
@@ -675,7 +680,7 @@ if __name__ == "__main__":
     seed_everything(1234)
 
     n_gpus = torch.cuda.device_count()
-    world_size = n_gpus
+    world_size = 2 #n_gpus
     print(f"world size {world_size}")
     run_parallel(test_gnn, world_size)
     # run_parallel(test_gnn, 1)

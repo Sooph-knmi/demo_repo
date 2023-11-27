@@ -6,6 +6,9 @@ import einops
 import torch
 import torch.nn.functional as F
 from local_attention import LocalAttention
+import xformers.ops as xops
+import xformers.components.attention as xatten
+from xformers.components.attention.core import scaled_dot_product_attention
 from torch import nn
 from torch import Tensor
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import offload_wrapper
@@ -705,8 +708,8 @@ class TransformerProcessor(nn.Module):
         assert model_comm_group.size() == 1 or batch_size == 1, "Either one GPU per model instance, or batch_size has to be 1"
 
         for i in range(self.hidden_layers):
-            # x = checkpoint(self.proc[i], x, shape_nodes, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
-            x = self.proc[i](x, shape_nodes, batch_size, model_comm_group=model_comm_group)
+            x = checkpoint(self.proc[i], x, shape_nodes, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
+            # x = self.proc[i](x, shape_nodes, batch_size, model_comm_group=model_comm_group)
 
         return x
 
@@ -795,6 +798,7 @@ class TransformerLayer(nn.Module):
             raise RuntimeError from ae
 
         self.lnorm1 = nn.LayerNorm(channels)
+
         self.mhsa = MultiHeadSelfAttention(
             num_heads=num_heads, embed_dimension=channels, window_size=window_size, bias=False, is_causal=False, dropout=0.0
         )
@@ -830,15 +834,18 @@ class MultiHeadSelfAttention(nn.Module):
 
         assert embed_dimension % num_heads == 0
 
-        self.lin_qkv = nn.Linear(embed_dimension, 3 * embed_dimension, bias=bias)
-        # self.attn = F.scaled_dot_product_attention
-
         self.dropout = dropout
         self.num_heads = num_heads
         self.embed_dimension = embed_dimension
         self.head_dim = embed_dimension // num_heads  # q k v
 
         self.is_causal = is_causal
+
+        self.lin_qkv = nn.Linear(embed_dimension, 3 * embed_dimension, bias=bias)
+        # self.atten = F.scaled_dot_product_attention
+        # self.atten = xops.memory_efficient_attention
+        # self.xatten = xatten.ScaledDotProduct() #causal=is_causal, dropout=self.dropout,)
+        # self.xatten = scaled_dot_product_attention
 
         self.atten = LocalAttention(
             dim=self.head_dim,
@@ -859,17 +866,36 @@ class MultiHeadSelfAttention(nn.Module):
         query, key, value = map(
             lambda t: einops.rearrange(t, "(b n) (h c) -> b h n c", b=batch_size, h=self.num_heads), (query, key, value)
         )
+        # query, key, value = map(
+        #     lambda t: einops.rearrange(t, "(b n) (h c) -> b n h c", b=batch_size, h=self.num_heads), (query, key, value)
+        # ) # xops.memory_efficient_attention
 
         # combine to 1 or two comms?
         query = shard_heads(query, shapes=shapes, mgroup=model_comm_group)
         key = shard_heads(key, shapes=shapes, mgroup=model_comm_group)
         value = shard_heads(value, shapes=shapes, mgroup=model_comm_group)
 
-        # out = self.atten(query, key, value, attn_mask=None, dropout_p=self.dropout, is_causal=self.is_causal)
+        # with torch.backends.cuda.sdp_kernel(enable_mem_efficient=True):
+        # with torch.backends.cuda.sdp_kernel(enable_flash=True):
+            # out = self.atten(query, key, value, attn_mask=None, dropout_p=self.dropout, is_causal=self.is_causal)
         out = self.atten(query, key, value, mask=None, attn_bias=None)
+
+
+        # query, key, value = map(
+        #     lambda t: einops.rearrange(t, "b h n c -> b n h c", b=batch_size, h=self.num_heads), (query, key, value)
+        # ) # xops.memory_efficient_attention
+        # out = self.atten(query, key, value) # xops.memory_efficient_attention
+        # out = einops.rearrange(out, "b n h c -> b h n c")
+
+        # query = torch.rand(2, 16, 1024, 64, device=x.device)
+        # key = torch.rand(2, 16, 1024, 64, device=x.device)
+        # value = torch.rand(2, 16, 1024, 64, device=x.device)
+
+        # out = self.xatten(query, key, value, None) # xatten.ScaledDotProduct # B x nh, S, hs
 
         out = shard_sequence(out, shapes=shapes, mgroup=model_comm_group)
         out = einops.rearrange(out, "b h n c -> (b n) (h c)")
+        # out = einops.rearrange(out, "b n h c -> (b n) (h c)") # xops.memory_efficient_attention
 
         return out
 
