@@ -46,6 +46,10 @@ setup(
             "networkx>=3.1",
             "h3>=3.7.6",
         ],
+        "profiling": [
+            "tensorboard>=2.14",
+            "torch-tb-profiler>=0.4",
+        ],
     },
     classifiers=[
         "Development Status :: 4 - Beta",

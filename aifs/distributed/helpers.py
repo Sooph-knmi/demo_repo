@@ -261,7 +261,6 @@ class _GatherParallelSection(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         if ctx.comm_group:
-            LOGGER.debug("*** GATHER *** comm_group.size() = %d", ctx.comm_group.size())
             return (
                 # scale gradients
                 ctx.comm_group.size() * _split(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),

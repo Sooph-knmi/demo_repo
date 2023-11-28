@@ -1,19 +1,23 @@
 import os
+import traceback
 from pathlib import Path
-from typing import List
+from typing import Callable
 from typing import Tuple
 
+import einops
 import numpy as np
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from hydra import compose
 from hydra import initialize
-from torch import nn
 from torch.autograd import gradcheck
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch_geometric import seed_everything
 
+from aifs.distributed.helpers import gather_tensor
+from aifs.distributed.helpers import shard_tensor
+from aifs.losses.kcrps import KernelCRPS
 from aifs.model.gnn import GraphMSG
 from aifs.utils.logger import get_code_logger
 
@@ -104,26 +108,48 @@ def get_my_comm_group(global_rank, world_size, num_gpus_per_group) -> Tuple[int,
     return comm_group_id, comm_group_nr, comm_group_rank
 
 
-def get_parameters_as_a_flat_tensor(m: nn.Module) -> torch.Tensor:
-    # save starting parameters
-    p_flat: List[torch.Tensor] = []
-    for p in m.parameters():
-        if p.requires_grad:
-            p_flat.append(p.view(-1).detach().clone())
-    return torch.cat(p_flat)
+def build_avg_matrix_for_gather(
+    ens_comm_group_size: int, model_comm_group_size: int, nens_per_device: int, rank: int
+) -> torch.Tensor:
+    """Builds a matrix of shape (ens_comm_group_size * nens_per_device, num_model_groups
+    * nens_per_device). This matrix is used to average the contributions of individual
+    ensemble members gathered in the ensemble comm group. It accounts for duplicates and
+    different model sharding communication groups, if applicable.
 
-
-def register_parameter_grad_scaling_hooks(m: nn.Module, grad_scaling_factor: float) -> None:
-    """Register parameter hooks for gradient reduction.
-
-    Here, we rescale parameters that only see a subset of the input on each rank
-    -> these are still divided by the total number of GPUs in DDP as if
-    each rank would see a full set of inputs
+    E.g., suppose
+        - nens_per_device = 3
+        - ens_comm_group_size = 4
+        - model_comm_group_size = 2 (i.e. 2 model comm groups, and a total of 6 unique ensemble members)
+    Then the gather matrix has shape (12, 6) and looks like:
+        - * ( 0.5 * eye(3)  0.5 * eye(3)         0           0        )^T
+        - * (      0              0        0.5 * eye(3)  0.5 * eye(3) )
     """
-    pass
-    # for _, param in m.named_parameters():
-    #     if param.requires_grad:  #  and "trainable" not in name:
-    #         param.register_hook(lambda grad: grad * grad_scaling_factor)
+    num_model_groups = ens_comm_group_size // model_comm_group_size
+    # sub-block used to average all contributions from a model comm group
+    model_gather_mat = (1.0 / model_comm_group_size) * torch.cat(
+        [torch.eye(nens_per_device, dtype=_TEST_DTYPE, device=rank)] * model_comm_group_size, dim=1
+    )
+    ens_gather_mat = torch.block_diag(*([model_gather_mat] * num_model_groups)).T
+    LOGGER.debug("Rank %d -- gather matrix shape = %s", rank, list(ens_gather_mat.shape))
+
+    torch.set_printoptions(precision=2)
+    LOGGER.debug("Rank %d -- gather matrix: \n%s", rank, ens_gather_mat)
+    torch.set_printoptions(precision=8)
+
+    return ens_gather_mat
+
+
+def grad_output_hook(tname: str, rank: int) -> Callable:
+    def _grad_output_hook(grad) -> torch.Tensor:
+        if grad is not None:
+            LOGGER.debug(
+                "Rank %.1d: %s.grad.shape = %s, %s.grad.norm = %.5e", rank, tname, grad.shape, tname, torch.linalg.norm(grad)
+            )
+        else:
+            LOGGER.error("Rank %.1d: %s.grad is None!", rank, tname)
+        return grad
+
+    return _grad_output_hook
 
 
 def grad_test(rank, world_size):
@@ -134,7 +160,7 @@ def grad_test(rank, world_size):
     cfg_ = compose(
         config_name="gradtest",
         overrides=[
-            "data.num_features=16",
+            "data.num_features=18",
             "data.num_aux_features=2",
             "training.multistep_input=2",
             "model.trainable_parameters.era=2",
@@ -162,9 +188,14 @@ def grad_test(rank, world_size):
     seed_everything(iseed)
     LOGGER.debug("Rank %d has random seed %d", rank, iseed)
 
-    torch.set_printoptions(precision=15)
+    torch.set_printoptions(precision=8)
     torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
 
+    gather_mat = build_avg_matrix_for_gather(
+        ens_comm_group_size, model_comm_group_size, cfg_.training.ensemble_size_per_device, rank
+    )
     graph_data = torch.load(Path(cfg_.hardware.paths.graph, cfg_.hardware.files.graph))
 
     # need to use torch.double for some communication operations
@@ -174,11 +205,6 @@ def grad_test(rank, world_size):
 
     # DDP model wrapper
     gnn = DDP(gnn, device_ids=[rank])
-
-    # TODO: is this the correct gradient scaling for all valid
-    # (num-gpus-per-model, num-gpus-per-ensemble) combinations?
-    # scaling is no longer necessary
-    # register_parameter_grad_scaling_hooks(gnn, float(ens_comm_group_size))
 
     small_input_shape = _TEST_INPUT_SHAPE
     true_input_shape = (
@@ -197,23 +223,86 @@ def grad_test(rank, world_size):
         dtype=_TEST_DTYPE,
     )
 
+    kcrps = KernelCRPS(
+        area_weights=torch.ones(_ERA_SIZE, dtype=_TEST_DTYPE),
+        loss_scaling=torch.ones(cfg_.data.num_features - cfg_.data.num_aux_features, dtype=_TEST_DTYPE),
+        fair=True,
+    ).to(device=rank, dtype=_TEST_DTYPE)
+
     # switch both modules to training mode
     linear_map = linear_map.train()
     gnn = gnn.train()
+    kcrps = kcrps.train()
+
+    # some fake "true" state (this needs to be defined outside of the test function)
+    y_target = torch.randn(  # already reshaped to fit the kcrps loss
+        cfg_.dataloader.batch_size.training,
+        cfg_.data.num_features - cfg_.data.num_aux_features,
+        _ERA_SIZE,
+        dtype=_TEST_DTYPE,
+        device=rank,
+        requires_grad=False,
+    )
 
     def _test_gradient(x_: torch.Tensor) -> torch.Tensor:
         x = linear_map(x_).reshape(true_input_shape)
         y_pred = gnn(x, model_comm_group=model_comm_group, inject_noise=False)
-        # a dummy loss, for now
-        loss = y_pred.sum()
+
+        # ver 1 / a simple sum loss
+        # loss = y_pred.sum()
+
+        # ver 2 / the extra comm step + dummy sum loss
+        # y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+        # loss = y_pred_ens.sum()
+
+        # ver 3 / comm + pruning + sum loss
+        # y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+        # y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")
+        # y_pred_ens = y_pred_ens @ gather_mat
+        # loss = y_pred_ens.sum()
+
+        # ver 4 / comm + pruning + kcrps loss
+        # y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+        # y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")
+        # y_pred_ens = y_pred_ens @ gather_mat
+        # loss = kcrps(y_pred_ens, y_target, squash=True)
+
+        # ver 5 / unrolled rollout-2 loop - this can fail for some atol/rtol/eps combinations
+        # but the numerical and analytical gradients should still be pretty close
+        y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+        y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")
+        y_pred_ens = y_pred_ens @ gather_mat
+        loss_step1 = kcrps(y_pred_ens, y_target, squash=True)
+        y_pred_ens = model_comm_group_size * (y_pred_ens @ gather_mat.T)
+        y_pred_ens = einops.rearrange(y_pred_ens, "bs v latlon e -> bs e latlon v")
+        y_pred = shard_tensor(y_pred_ens, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+
+        x2 = x.detach().clone()
+        x2[:, :, -1, :, : cfg_.data.num_features - cfg_.data.num_aux_features] = y_pred
+        y_pred2 = gnn(x2, model_comm_group=model_comm_group, inject_noise=False)
+        y_pred_ens2 = gather_tensor(y_pred2, dim=1, shapes=[y_pred2.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+        y_pred_ens2 = einops.rearrange(y_pred_ens2, "bs e latlon v -> bs v latlon e")
+        y_pred_ens2 = y_pred_ens2 @ gather_mat
+        loss_step2 = kcrps(y_pred_ens2, y_target, squash=True)
+
+        loss = loss_step1 + loss_step2
+
         return loss
 
     dist.barrier()
 
     x_input = torch.randn(*small_input_shape, dtype=_TEST_DTYPE, device=rank, requires_grad=True)
-    result = gradcheck(_test_gradient, (x_input,), eps=1e-6, atol=1e-4, rtol=1e-3, nondet_tol=0.0)
-    LOGGER.debug("Grad test result: %s", result)
 
+    # some tests may fail for these specific eps/atol/rtol
+    # but the numerical and analytical grads should still be close!
+    try:
+        result = gradcheck(_test_gradient, (x_input,), eps=1e-5, atol=1e-4, rtol=1e-3, nondet_tol=0.0)
+    except RuntimeError as e:
+        LOGGER.error("Grad test error: %s", e)
+        traceback.print_exc()
+        result = False
+
+    LOGGER.debug("Grad test result: %s", result)
     LOGGER.debug("Rank %d max memory alloc: %.2f MB", rank, torch.cuda.max_memory_allocated(torch.device(rank)) / 1e6)
     LOGGER.debug("Rank %d max memory reserved: %.2f MB", rank, torch.cuda.max_memory_reserved(torch.device(rank)) / 1e6)
 

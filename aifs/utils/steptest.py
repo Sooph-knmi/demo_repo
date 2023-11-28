@@ -1,8 +1,10 @@
 import os
 from pathlib import Path
+from typing import Callable
 from typing import List
 from typing import Tuple
 
+import einops
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -13,10 +15,13 @@ from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch_geometric import seed_everything
 
+from aifs.distributed.helpers import gather_tensor
+from aifs.losses.kcrps import KernelCRPS
 from aifs.model.gnn import GraphMSG
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__, debug=True)
+PRECISION = torch.float16
 
 
 def setup(rank, world_size):
@@ -108,16 +113,48 @@ def get_parameters_as_a_flat_tensor(m: nn.Module) -> torch.Tensor:
     return torch.cat(p_flat)
 
 
-def register_parameter_grad_scaling_hooks(m: nn.Module, grad_scaling_factor: float) -> None:
-    """Register parameter hooks for gradient reduction.
+def build_avg_matrix_for_gather(
+    ens_comm_group_size: int, model_comm_group_size: int, nens_per_device: int, rank: int
+) -> torch.Tensor:
+    """Builds a matrix of shape (ens_comm_group_size * nens_per_device, num_model_groups
+    * nens_per_device). This matrix is used to average the contributions of individual
+    ensemble members gathered in the ensemble comm group. It accounts for duplicates and
+    different model sharding communication groups, if applicable.
 
-    Here, we rescale parameters that only see a subset of the input on each rank
-    -> these are still divided by the total number of GPUs in DDP as if
-    each rank would see a full set of inputs
+    E.g., suppose
+        - nens_per_device = 3
+        - ens_comm_group_size = 4
+        - model_comm_group_size = 2 (i.e. 2 model comm groups, and a total of 6 unique ensemble members)
+    Then the gather matrix has shape (12, 6) and looks like:
+        - * ( 0.5 * eye(3)  0.5 * eye(3)         0           0        )^T
+        - * (      0              0        0.5 * eye(3)  0.5 * eye(3) )
     """
-    for _, param in m.named_parameters():
-        if param.requires_grad:  #  and "trainable" not in name:
-            param.register_hook(lambda grad: grad * grad_scaling_factor)
+    num_model_groups = ens_comm_group_size // model_comm_group_size
+    # sub-block used to average all contributions from a model comm group
+    model_gather_mat = (1.0 / model_comm_group_size) * torch.cat(
+        [torch.eye(nens_per_device, dtype=PRECISION, device=rank)] * model_comm_group_size, dim=1
+    )
+    ens_gather_mat = torch.block_diag(*([model_gather_mat] * num_model_groups)).T
+    LOGGER.debug("Rank %d -- gather matrix shape = %s", rank, list(ens_gather_mat.shape))
+
+    torch.set_printoptions(precision=2)
+    LOGGER.debug("Rank %d -- gather matrix: \n%s", rank, ens_gather_mat)
+    torch.set_printoptions(precision=8)
+
+    return ens_gather_mat
+
+
+def grad_output_hook(tname: str, rank: int) -> Callable:
+    def _grad_output_hook(grad) -> torch.Tensor:
+        if grad is not None:
+            LOGGER.debug(
+                "Rank %.1d: %s.grad.shape = %s, %s.grad.norm = %.5e", rank, tname, grad.shape, tname, torch.linalg.norm(grad)
+            )
+        else:
+            LOGGER.error("Rank %.1d: %s.grad is None!", rank, tname)
+        return grad
+
+    return _grad_output_hook
 
 
 def single_step_test(rank, world_size):
@@ -136,7 +173,7 @@ def single_step_test(rank, world_size):
             "model.trainable_parameters.era2hidden=2",
             "model.trainable_parameters.hidden2era=2",
             "model.trainable_parameters.hidden2hidden=2",
-            "model.num_channels=8",
+            "model.num_channels=32",
         ],
     )
 
@@ -155,9 +192,14 @@ def single_step_test(rank, world_size):
     iseed = 1234 + ens_comm_group_id
     seed_everything(iseed)
     LOGGER.debug("Rank %d has random seed %d", rank, iseed)
-    torch.set_printoptions(precision=15)
+    torch.set_printoptions(precision=10)
     torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
 
+    gather_mat = build_avg_matrix_for_gather(
+        ens_comm_group_size, model_comm_group_size, cfg_.training.ensemble_size_per_device, rank
+    )
     graph_data = torch.load(Path(cfg_.hardware.paths.graph, cfg_.hardware.files.graph))
 
     gnn = GraphMSG(cfg_, graph_data).to(rank)
@@ -165,6 +207,7 @@ def single_step_test(rank, world_size):
 
     # DDP model wrapper
     gnn = DDP(gnn, device_ids=[rank])
+    gnn = gnn.train()
 
     # TODO: is this the correct gradient scaling for all valid
     # (num-gpus-per-model, num-gpus-per-ensemble) combinations?
@@ -182,23 +225,39 @@ def single_step_test(rank, world_size):
         cfg_.data.num_features,
     ).to(rank)
 
-    # y = torch.randn(
-    #     cfg_.dataloader.batch_size.training, _ERA_SIZE, cfg_.data.num_features - cfg_.data.num_aux_features,
-    # ).to(rank)
+    # loss in FP32
+    kcrps = KernelCRPS(
+        area_weights=torch.ones(_ERA_SIZE, dtype=torch.float32),
+        loss_scaling=torch.ones(cfg_.data.num_features - cfg_.data.num_aux_features, dtype=torch.float32),
+        fair=True,
+    ).to(device=rank, dtype=torch.float32)
+    kcrps = kcrps.train()
+
+    y_target = torch.randn(  # already reshaped to fit the kcrps loss
+        cfg_.dataloader.batch_size.training,
+        cfg_.data.num_features - cfg_.data.num_aux_features,
+        _ERA_SIZE,
+        dtype=torch.float32,
+        device=rank,
+        requires_grad=False,
+    )
 
     scaler = torch.cuda.amp.GradScaler()
     optimizer = torch.optim.SGD(gnn.parameters(), lr=1e-3, momentum=0.9)
     optimizer.zero_grad()
-    working_precision = torch.float16
 
-    with torch.autocast(device_type="cuda", dtype=working_precision):
-        y_pred = gnn(x_input, model_comm_group=model_comm_group)
-        # a dummy loss, for now
-        loss = y_pred.sum()
+    with torch.autocast(device_type="cuda", dtype=PRECISION):
+        y_pred = gnn(x_input, model_comm_group=model_comm_group, inject_noise=False)
+        y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+        y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")
+        y_pred_ens = y_pred_ens @ gather_mat
+        loss = kcrps(y_pred_ens, y_target, squash=True)
 
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
+
+        dist.barrier()
 
         updated_params = get_parameters_as_a_flat_tensor(gnn)
 

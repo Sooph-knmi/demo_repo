@@ -79,8 +79,8 @@ class GraphForecaster(pl.LightningModule):
         self.rollout_max = config.training.rollout.max
 
         self.nens_per_device = config.training.ensemble_size_per_device
-        self.nens_per_group = config.training.ensemble_size_per_device * int(
-            config.hardware.num_gpus_per_ensemble / config.hardware.num_gpus_per_model
+        self.nens_per_group = (
+            config.training.ensemble_size_per_device * config.hardware.num_gpus_per_ensemble // config.hardware.num_gpus_per_model
         )
         LOGGER.debug("Ensemble size: per device = %d, per ens-group = %d", self.nens_per_device, self.nens_per_group)
 
@@ -151,22 +151,34 @@ class GraphForecaster(pl.LightningModule):
 
         self._gather_index_mask: Optional[torch.Tensor] = None  # lazy init
 
-    def _build_index_mask_for_gather(self) -> None:
-        mask = torch.zeros(self.ens_comm_group_size * self.nens_per_device, device=self.device, dtype=torch.int)
-        LOGGER.debug(
-            "nens_per_device: %d, ens_comm_group_size: %d, mask.shape = %s",
-            self.nens_per_device,
-            self.ens_comm_group_size,
-            mask.shape,
+    def _build_gather_matrix(self) -> torch.Tensor:
+        """Builds a matrix of shape (ens_comm_group_size * nens_per_device,
+        num_model_groups * nens_per_device). This matrix is used to average the
+        contributions of individual ensemble members gathered in the ensemble comm
+        group. It accounts for duplicates and different model sharding communication
+        groups, if applicable.
+
+        E.g., suppose
+            - nens_per_device = 3
+            - ens_comm_group_size = 4
+            - model_comm_group_size = 2 (i.e. 2 model comm groups, and a total of 6 unique ensemble members)
+        Then the gather matrix has shape (12, 6) and looks like:
+            - * ( 0.5 * eye(3)  0.5 * eye(3)         0           0        )^T
+            - * (      0              0        0.5 * eye(3)  0.5 * eye(3) )
+        """
+        # sub-block used to average all contributions from a model comm group
+        gather_matrix_block = (1.0 / self.model_comm_group_size) * torch.cat(
+            [torch.eye(self.nens_per_device, dtype=self.dtype, device=self.device)] * self.model_comm_group_size, dim=1
         )
+        gather_matrix = torch.block_diag(*([gather_matrix_block] * self.model_comm_num_groups)).T
 
-        idx = 0
-        while idx < mask.shape[0]:
-            mask[idx : idx + self.nens_per_device] = 1
-            idx += self.nens_per_device * self.model_comm_group_size
+        torch.set_printoptions(precision=2)
+        LOGGER.debug(
+            "Rank %d -- gather matrix shape %s and values: \n%s", self.global_rank, list(gather_matrix.shape), gather_matrix
+        )
+        torch.set_printoptions(precision=4)
 
-        LOGGER.debug("Gather mask: %s", mask)
-        return mask.to(dtype=torch.bool)
+        return gather_matrix
 
     def _initialize_loss(self, config: DictConfig) -> None:
         loss_scaling = np.array([], dtype=np.float32)
@@ -232,16 +244,14 @@ class GraphForecaster(pl.LightningModule):
         self.ens_comm_group_size = dist.get_world_size(group=ens_comm_group)
 
     def _compute_kcrps(self, y_pred: torch.Tensor, y_target: torch.Tensor, squash: bool = True) -> torch.Tensor:
-        """Rearranges the prediction and ground truth tensors and then computes the
-        KCRPS loss."""
-        y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs v latlon e", e=self.nens_per_group)
+        """Rearranges the ground truth tensor and computes the KCRPS loss."""
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
         return self.kcrps(y_pred, y_target, squash=squash)
 
     def _compute_energy_score(self, y_pred: torch.Tensor, y_target: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
         """Rearranges the prediction and ground truth tensors and then computes the
         energy score loss."""
-        y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs e v latlon", e=self.nens_per_group)
+        y_pred = einops.rearrange(y_pred, "bs v latlon e -> bs e v latlon")
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
         return self.energy_score(y_pred, y_target, beta)
 
@@ -257,25 +267,28 @@ class GraphForecaster(pl.LightningModule):
         validation_mode: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         # step 1/ gather among all GPUs in the same ensemble group
-        y_pred_ens_ = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)
-        LOGGER.debug("y_pred tensor shapes before %s and after gather %s", y_pred.shape, y_pred_ens_.shape)
+        y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)
+        LOGGER.debug("y_pred tensor shapes before %s and after gather %s", y_pred.shape, y_pred_ens.shape)
 
-        # step 2/ prune ensemble to get rid of the duplicates (if any) - uses the pre-built index mask
-        assert self._gather_index_mask is not None
-        y_pred_ens = y_pred_ens_[:, self._gather_index_mask, ...]
+        # step 2/ prune ensemble to get rid of the duplicates (if any) - uses the pre-built ensemble averaging matrix
+        assert self._gather_matrix is not None
+        y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")  # ensemble dim must come last
+        y_pred_ens = y_pred_ens @ self._gather_matrix
         LOGGER.debug("after pruning y_pred_ens.shape == %s", y_pred_ens.shape)
 
         # step 3/ compute the loss (one member per model group)
         loss_inc = checkpoint(self._compute_loss, y_pred_ens, y[..., : self.fcdim], use_reentrant=False)
 
-        # step 4/ split the tensor and send shards back to all the ranks in the ensemble group
+        # step 4/ send tensor shards back to all the ranks in the ensemble group
+        y_pred_ens = self.model_comm_group_size * (y_pred_ens @ self._gather_matrix.T)
+        y_pred_ens = einops.rearrange(y_pred_ens, "bs v latlon e -> bs e latlon v")  # reshape it back to what it was
         y_pred = shard_tensor(
-            y_pred_ens.repeat(1, self.model_comm_group_size, 1, 1),  # expand it back to the size split() expects, if needed
+            y_pred_ens,
             dim=1,
             shapes=[y_pred.shape] * self.ens_comm_group_size,
             mgroup=self.ens_comm_group,
         )
-        LOGGER.debug("after split y_pred.shape == %s", y_pred.shape)
+        LOGGER.debug("after sharding y_pred.shape == %s", y_pred.shape)
 
         # during validation, we also return the pruned ensemble (from steps 2 / 3) so we can run diagnostics
         return y_pred, loss_inc, y_pred_ens if validation_mode else None
@@ -388,12 +401,12 @@ class GraphForecaster(pl.LightningModule):
         return loss, metrics, y_preds, kcrps_preds
 
     def on_train_start(self):
-        if self._gather_index_mask is None:
-            self._gather_index_mask = self._build_index_mask_for_gather()  # only once
+        if self._gather_matrix is None:
+            self._gather_matrix = self._build_gather_matrix()  # only once
 
     def on_validation_start(self):
-        if self._gather_index_mask is None:
-            self._gather_index_mask = self._build_index_mask_for_gather()  # only once
+        if self._gather_matrix is None:
+            self._gather_matrix = self._build_gather_matrix()  # only once
 
     def training_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int) -> torch.Tensor:
         # del batch_idx  # not used

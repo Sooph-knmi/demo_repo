@@ -49,4 +49,3 @@ module load cuDNN/8.4.1.50-CUDA-11.7.0
 source /project/home/p200177/syma/aifs-env/$VENV/bin/activate
 
 aifs-ens-steptest
-# python3 aifs/utils/steptest.py

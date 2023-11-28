@@ -21,7 +21,7 @@ from aifs.model.layers import GNNProcessor
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__, debug=True)
+LOGGER = get_code_logger(__name__, debug=False)
 
 
 class GraphMSG(nn.Module):
@@ -42,7 +42,7 @@ class GraphMSG(nn.Module):
         graph_data : HeteroData, optional
             Graph definition, by default None
         fp32_comm_ops: Bool, optional
-            Perform some communication operations (e.g. reduce) in FP32, by default True
+            Perform some communication operations (e.g. reduce_shard) in FP32, by default True
             Set this to false when doing e.g. gradient checks (to use torch.double)
         """
         super().__init__()

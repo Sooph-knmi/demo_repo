@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 import time
 
@@ -27,13 +26,9 @@ def get_code_logger(name: str, debug: bool = True) -> logging.Logger:
     if not logger.hasHandlers():
         # logging level
         level = logging.DEBUG if debug else logging.INFO
-        # custom format field
-        global_rank = int(os.environ.get("SLURM_PROCID", "0"))
-        extra_field = {"global_rank": f"global_rank {global_rank:03d}"}
-
         # logging format
         datefmt = "%Y-%m-%dT%H:%M:%SZ"
-        msgfmt = "[%(asctime)s] [%(filename)s:%(lineno)s - %(funcName).30s] [%(global_rank)s] [%(levelname)s] %(message)s"
+        msgfmt = "[%(asctime)s] [%(filename)s:%(lineno)s - %(funcName).30s] [%(levelname)s] %(message)s"
         # handler object
         handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(level)
@@ -43,5 +38,4 @@ def get_code_logger(name: str, debug: bool = True) -> logging.Logger:
         handler.setFormatter(formatter)
         logger.setLevel(level)
         logger.addHandler(handler)
-        logger = logging.LoggerAdapter(logger, extra_field)
     return logger
