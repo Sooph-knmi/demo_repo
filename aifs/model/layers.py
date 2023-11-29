@@ -843,22 +843,22 @@ class MultiHeadSelfAttention(nn.Module):
 
         self.lin_qkv = nn.Linear(embed_dimension, 3 * embed_dimension, bias=bias)
         # self.atten = F.scaled_dot_product_attention
-        # self.atten = xops.memory_efficient_attention
+        self.atten = xops.memory_efficient_attention
         # self.xatten = xatten.ScaledDotProduct() #causal=is_causal, dropout=self.dropout,)
         # self.xatten = scaled_dot_product_attention
 
-        self.atten = LocalAttention(
-            dim=self.head_dim,
-            window_size=window_size,
-            causal=is_causal,
-            autopad=True,
-            scale=None,
-            exact_windowsize=False,
-            use_xpos=False,
-            xpos_scale_base=None,
-            look_forward=1,
-            dropout=self.dropout,
-        )
+        # self.atten = LocalAttention(
+        #     dim=self.head_dim,
+        #     window_size=window_size,
+        #     causal=is_causal,
+        #     autopad=True,
+        #     scale=None,
+        #     exact_windowsize=False,
+        #     use_xpos=False,
+        #     xpos_scale_base=None,
+        #     look_forward=1,
+        #     dropout=self.dropout,
+        # )
 
     def forward(self, x: Tensor, shapes: list, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
         query, key, value = self.lin_qkv(x).chunk(3, -1)
@@ -878,14 +878,14 @@ class MultiHeadSelfAttention(nn.Module):
         # with torch.backends.cuda.sdp_kernel(enable_mem_efficient=True):
         # with torch.backends.cuda.sdp_kernel(enable_flash=True):
             # out = self.atten(query, key, value, attn_mask=None, dropout_p=self.dropout, is_causal=self.is_causal)
-        out = self.atten(query, key, value, mask=None, attn_bias=None)
+        # out = self.atten(query, key, value, mask=None, attn_bias=None)
 
 
-        # query, key, value = map(
-        #     lambda t: einops.rearrange(t, "b h n c -> b n h c", b=batch_size, h=self.num_heads), (query, key, value)
-        # ) # xops.memory_efficient_attention
-        # out = self.atten(query, key, value) # xops.memory_efficient_attention
-        # out = einops.rearrange(out, "b n h c -> b h n c")
+        query, key, value = map(
+            lambda t: einops.rearrange(t, "b h n c -> b n h c", b=batch_size, h=self.num_heads), (query, key, value)
+        ) # xops.memory_efficient_attention
+        out = self.atten(query, key, value) # xops.memory_efficient_attention
+        out = einops.rearrange(out, "b n h c -> b h n c")
 
         # query = torch.rand(2, 16, 1024, 64, device=x.device)
         # key = torch.rand(2, 16, 1024, 64, device=x.device)
