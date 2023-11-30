@@ -150,7 +150,7 @@ class GraphForecaster(pl.LightningModule):
             self.ens_comm_num_groups,
         )
 
-        self._gather_index_mask: Optional[torch.Tensor] = None  # lazy init
+        self._gather_matrix: Optional[torch.Tensor] = None  # lazy init
 
     def _build_gather_matrix(self) -> torch.Tensor:
         """Builds a matrix of shape (ens_comm_group_size * nens_per_device,
