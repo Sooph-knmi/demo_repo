@@ -5,10 +5,7 @@ from typing import Tuple
 import einops
 import torch
 import torch.nn.functional as F
-from local_attention import LocalAttention
-import xformers.ops as xops
-import xformers.components.attention as xatten
-from xformers.components.attention.core import scaled_dot_product_attention
+from flash_attn import flash_attn_func
 from torch import nn
 from torch import Tensor
 from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import offload_wrapper
@@ -571,6 +568,11 @@ class GNNBlock(nn.Module):
             value = self.lin_value(x[0])
         edges = self.lin_edge(edge_attr)
 
+        if model_comm_group:
+            assert (
+                model_comm_group.size() == 1 or batch_size == 1
+            ), "Only batch size of 1 is supported when model is sharded accross GPUs"
+
         query, key, value, edges = self.shard_qkve_heads(query, key, value, edges, shapes, batch_size, model_comm_group)
         out = self.conv(query=query, key=key, value=value, edge_index=edge_index, edge_attr=edges, size=size)
         out = self.shard_output_seq(out, shapes, batch_size, model_comm_group)
@@ -838,12 +840,13 @@ class MultiHeadSelfAttention(nn.Module):
         self.num_heads = num_heads
         self.embed_dimension = embed_dimension
         self.head_dim = embed_dimension // num_heads  # q k v
-
+        self.window_size = (window_size, window_size)  # flash attention
         self.is_causal = is_causal
 
         self.lin_qkv = nn.Linear(embed_dimension, 3 * embed_dimension, bias=bias)
         # self.atten = F.scaled_dot_product_attention
-        self.atten = xops.memory_efficient_attention
+        # self.atten = xops.memory_efficient_attention
+        self.atten = flash_attn_func
         # self.xatten = xatten.ScaledDotProduct() #causal=is_causal, dropout=self.dropout,)
         # self.xatten = scaled_dot_product_attention
 
@@ -863,6 +866,11 @@ class MultiHeadSelfAttention(nn.Module):
     def forward(self, x: Tensor, shapes: list, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
         query, key, value = self.lin_qkv(x).chunk(3, -1)
 
+        if model_comm_group:
+            assert (
+                model_comm_group.size() == 1 or batch_size == 1
+            ), "Only batch size of 1 is supported when model is sharded accross GPUs"
+
         query, key, value = map(
             lambda t: einops.rearrange(t, "(b n) (h c) -> b h n c", b=batch_size, h=self.num_heads), (query, key, value)
         )
@@ -877,15 +885,17 @@ class MultiHeadSelfAttention(nn.Module):
 
         # with torch.backends.cuda.sdp_kernel(enable_mem_efficient=True):
         # with torch.backends.cuda.sdp_kernel(enable_flash=True):
-            # out = self.atten(query, key, value, attn_mask=None, dropout_p=self.dropout, is_causal=self.is_causal)
+        # out = self.atten(query, key, value, attn_mask=None, dropout_p=self.dropout, is_causal=self.is_causal)
         # out = self.atten(query, key, value, mask=None, attn_bias=None)
 
-
         query, key, value = map(
-            lambda t: einops.rearrange(t, "b h n c -> b n h c", b=batch_size, h=self.num_heads), (query, key, value)
-        ) # xops.memory_efficient_attention
-        out = self.atten(query, key, value) # xops.memory_efficient_attention
+            lambda t: einops.rearrange(t, "b h n c -> b n h c"), (query, key, value)
+        )  # xops.memory_efficient_attention
+        # out = self.atten(query, key, value) # xops.memory_efficient_attention
+        out = self.atten(query, key, value, causal=False, window_size=self.window_size)  # flash attention
         out = einops.rearrange(out, "b n h c -> b h n c")
+
+        # flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False, window_size=(-1, -1))
 
         # query = torch.rand(2, 16, 1024, 64, device=x.device)
         # key = torch.rand(2, 16, 1024, 64, device=x.device)
