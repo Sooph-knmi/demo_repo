@@ -323,7 +323,16 @@ class GraphForecaster(pl.LightningModule):
         # create perturbations
         x_pert = x_eda - x_eda.mean(dim=-1, keepdim=True)
         x_pert = einops.rearrange(x_pert, "bs ms latlon v e -> bs e ms latlon v")
-        start, end = self.mgroupdef[2] * self.nens_per_device, (self.mgroupdef[2] + 1) * self.nens_per_device
+        start, end = self.ens_comm_group_id * self.nens_per_device, (self.ens_comm_group_id + 1) * self.nens_per_device
+        LOGGER.debug(
+            "Rank %d in (ensemble, model) group (%d, %d) got range [%d, %d) from a total of %d (maybe non-unique) ensemble members",
+            self.global_rank,
+            self.ens_comm_group_id,
+            self.model_comm_group_id,
+            start,
+            end,
+            self.nens_per_device * self.ens_comm_group_size,
+        )
 
         # perturb an ICs and clip humidity field where necessary
         x_ic = torch.stack(
@@ -371,14 +380,6 @@ class GraphForecaster(pl.LightningModule):
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             loss_rstep, y_pred_group = self.gather_and_compute_loss(y_pred, y, validation_mode=validation_mode)
             loss += loss_rstep
-            LOGGER.debug(
-                "loss_rstep.dtype = %s, y_pred_group.dtype = %s, y_pred.dtype = %s, y.dtype = %s, x.dtype = %s",
-                loss_rstep.dtype,
-                y_pred_group.dtype if y_pred_group is not None else "N/A",
-                y_pred.dtype,
-                y.dtype,
-                x.dtype,
-            )
 
             x = self.advance_input(x, y, y_pred)
 

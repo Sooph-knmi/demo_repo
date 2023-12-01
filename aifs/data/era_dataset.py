@@ -127,7 +127,7 @@ class ERA5NativeGridDataset(IterableDataset):
         if self.ds_an is None:
             self.ds_an = self._read_era(self.fname_an)
         if self.ds_eda is None and self.eda:
-            self.ds_eda = self._read_era(self.fname_eda).data  # the EDA dataset stores its data under .data
+            self.ds_eda = self._read_era(self.fname_eda)
             LOGGER.debug("ds_an.shape = %s, ds_eda.shape = %s", self.ds_an.shape, self.ds_eda.shape)
             assert (
                 self.ds_an.shape[0] == self.ds_eda.shape[0]

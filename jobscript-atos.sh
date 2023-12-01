@@ -3,11 +3,11 @@
 #SBATCH --account=ecaifs
 #SBATCH --qos=ng
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=2
-#SBATCH --gpus-per-node=2
+#SBATCH --ntasks-per-node=4
+#SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-#SBATCH --time=00:30:00
+#SBATCH --time=00:15:00
 #SBATCH --output=new-ens-test-h4-atos.out.%j
 
 # debugging flags (optional)
