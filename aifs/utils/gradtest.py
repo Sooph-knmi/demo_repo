@@ -124,6 +124,8 @@ def build_avg_matrix_for_gather(
         - * ( 0.5 * eye(3)  0.5 * eye(3)         0           0        )^T
         - * (      0              0        0.5 * eye(3)  0.5 * eye(3) )
     """
+    print(ens_comm_group_size)
+    print(model_comm_group_size)
     num_model_groups = ens_comm_group_size // model_comm_group_size
     # sub-block used to average all contributions from a model comm group
     model_gather_mat = (1.0 / model_comm_group_size) * torch.cat(
