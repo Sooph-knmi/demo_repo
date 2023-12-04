@@ -125,11 +125,12 @@ class GraphForecaster(pl.LightningModule):
 
         self.model_comm_group_id = int(os.environ.get("SLURM_PROCID", "0")) // config.hardware.num_gpus_per_model
         self.model_comm_group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.num_gpus_per_model
-        self.model_comm_num_groups = math.ceil(
-            config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.num_gpus_per_model
-        )
 
-        assert config.hardware.num_gpus_per_ensemble % config.hardware.num_gpus_per_model == 0
+        assert config.hardware.num_gpus_per_ensemble % config.hardware.num_gpus_per_model == 0, (
+            "Invalid ensemble vs. model size GPU group configuration: "
+            + f"{config.hardware.num_gpus_per_ensemble} mod {config.hardware.num_gpus_per_model} != 0"
+        )
+        self.model_comm_num_groups = config.hardware.num_gpus_per_ensemble // config.hardware.num_gpus_per_model
 
         self.ens_comm_num_groups = math.ceil(
             config.hardware.num_gpus_per_node * config.hardware.num_nodes / config.hardware.num_gpus_per_ensemble
