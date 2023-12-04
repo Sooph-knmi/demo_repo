@@ -60,8 +60,6 @@ eda_initial_perturbations: False
 # Round 3. ~70,000 batches @ ~1.5 seconds per batch (12-step rollout)
 # Each batch is an N-step rollout, with batch_size=1
 
-save_top_k: -1
-
 lead_time: 6
 
 max_epochs: 200
