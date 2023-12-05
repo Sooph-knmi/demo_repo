@@ -120,9 +120,9 @@ class AIFSProfiler(AIFSTrainer):
         self._close_logger()
         self.print_benchmark_profiler_report(
             speed_metrics_df=self.speed_profile,
-            memory_metrics_df=self.memory_profile,
             time_metrics_df=self.time_profile,
             wandb_memory_metrics_df=self.wandb_profile,
+            memory_metrics_df=self.memory_profile,
         )
         self.write_benchmark_profiler_report()
 
@@ -141,10 +141,9 @@ class AIFSProfiler(AIFSTrainer):
         )
 
         logger.experiment.log({"speed_metrics_report": wandb.Table(dataframe=self.speed_profile)})
-        logger.experiment.log({"memory_metrics_report": wandb.Table(dataframe=self.memory_profile)})
         logger.experiment.log({"wandb_memory_metrics_report": wandb.Table(dataframe=self.wandb_profile)})
         logger.experiment.log({"time_metrics_report": wandb.Table(dataframe=self.time_profile)})
-
+        logger.experiment.log({"memory_metrics_report": wandb.Table(dataframe=self.memory_profile)})
         logger.experiment.log({"reports_benchmark_profiler": wandb.Html(open("report.html"))})
         logger.experiment.finish()
 

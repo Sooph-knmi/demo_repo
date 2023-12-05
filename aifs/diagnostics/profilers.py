@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pynvml
 import pytorch_lightning as pl
+from memray import FileFormat
 from memray import FileReader
 from memray.reporters.table import TableReporter
 from pytorch_lightning.callbacks import TQDMProgressBar
@@ -152,7 +153,7 @@ class BenchmarkProfiler(Profiler):
         self.memfile_name = f"aifs-benchmark-mem-profiler_{self.pid}.bin"
 
         self.memfile_path = os.path.join(self.dirpath, self.memfile_name)
-        self.memory_profiler = memray.Tracker(self.memfile_path)
+        self.memory_profiler = memray.Tracker(self.memfile_path, file_format=FileFormat.AGGREGATED_ALLOCATIONS)
         self._create_output_file()
 
     def start(self, action_name: str) -> None:
@@ -188,6 +189,8 @@ class BenchmarkProfiler(Profiler):
         return time_df
 
     def _generate_memray_df(self):
+        print(self.memfile_path)
+        self.memory_profiler.__exit__(None, None, None)
         memfile_tracking = FileReader(self.memfile_path)
         memory_allocations = list(memfile_tracking.get_high_watermark_allocation_records())
         table = TableReporter.from_snapshot(memory_allocations, memory_records=[], native_traces=False)
@@ -270,7 +273,8 @@ class BenchmarkProfiler(Profiler):
         )
 
     def __del__(self) -> None:
-        os.remove(self.memfile_path)
+        pass
+        # os.remove(self.memfile_path)
 
 
 class ProfilerProgressBar(TQDMProgressBar):
