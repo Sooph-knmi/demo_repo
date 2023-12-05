@@ -3,12 +3,12 @@
 #SBATCH --account=ecaifs
 #SBATCH --qos=ng
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=4
+#SBATCH --ntasks-per-node=2
+#SBATCH --gpus-per-node=2
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
+#SBATCH --mem=64G
 #SBATCH --time=48:00:00
-#SBATCH --output=ens-kcrps-h5-atos-roll28.out.%j
+#SBATCH --output=ens-kcrps-h4-2.out.%j
 
 # debugging flags (optional)
 # export NCCL_DEBUG=INFO
@@ -24,8 +24,8 @@ export HYDRA_FULL_ERROR=1
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="dropout"
-export WANDB_NOTES="dropout test ensemble"
+export WANDB_NAME="2 gpu"
+export WANDB_NOTES="test 2 gpu"
 
 # generic settings
 CONDA_ENV=aifs_dev
@@ -36,4 +36,4 @@ cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
 wandb online
-srun aifs-ens-train hardware=atos_slurm --config-name=dr_h2h
+srun aifs-ens-train hardware=atos_slurm --config-name=ens-kcrps-h4
