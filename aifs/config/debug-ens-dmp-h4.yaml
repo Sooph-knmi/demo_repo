@@ -45,7 +45,7 @@ diagnostics:
     enabled: True
     rollout: 4
     frequency: 5
-    spread_skill_bin: 101
+    nbins: 101
   plot:
     parameters:
       23: t_850

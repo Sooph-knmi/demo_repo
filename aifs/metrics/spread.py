@@ -15,7 +15,7 @@ class SpreadSkill(Metric):
     higher_is_better: Optional[bool] = None
     full_state_update: bool = True
 
-    def __init__(self, rollout: int, nvar: int, spread_skill_bin: int, area_weights: torch.Tensor) -> None:
+    def __init__(self, rollout: int, nvar: int, nbins: int, area_weights: torch.Tensor) -> None:
         """
         Args:
             rollout: length of rollout window
@@ -26,7 +26,7 @@ class SpreadSkill(Metric):
 
         self.rollout = rollout
         self.nvar = nvar
-        self.spread_skill_bin = spread_skill_bin
+        self.nbins = nbins
 
         self.time_step = 6  # fixed, for now (validation only)
         LOGGER.debug("Setting up a SpreadSkill metric with rollout = %d, nvar = %d, time_step = %d", rollout, nvar, self.time_step)
@@ -38,15 +38,20 @@ class SpreadSkill(Metric):
         # Ensemble spread
         self.add_state("spread", default=torch.zeros(rollout, nvar, dtype=torch.float32), dist_reduce_fx="sum")
         # Bins RMSE
-        self.add_state(
-            "bins_rmse", default=torch.zeros(rollout, nvar, spread_skill_bin - 1, dtype=torch.float32), dist_reduce_fx="sum"
-        )
+        self.add_state("bins_rmse", default=torch.zeros(rollout, nvar, nbins - 1, dtype=torch.float32), dist_reduce_fx="sum")
         # Bins Spread
-        self.add_state(
-            "bins_spread", default=torch.zeros(rollout, nvar, spread_skill_bin - 1, dtype=torch.float32), dist_reduce_fx="sum"
-        )
+        self.add_state("bins_spread", default=torch.zeros(rollout, nvar, nbins - 1, dtype=torch.float32), dist_reduce_fx="sum")
 
     def calculate_spread_skill(self, y_pred_denorm, y_denorm, pidx):
+        """Calculate the spread of the ensemble and the skill of the ensemble mean.
+        Outputs the global average as well as average spread and skills of the ordered
+        bins.
+
+        Args:
+            y_pred_denorm: Denormalised predictions
+            y_denorm: Denormalised truth (i.e. target fields)
+            pidx: index of variable being plotted
+        """
         rmse_spatial = torch.square(y_pred_denorm[..., pidx : pidx + 1].mean(dim=1) - y_denorm[..., pidx : pidx + 1])
         weighted_rmse = rmse_spatial[:, :, 0] * self.area_weights
         weighted_rmse /= torch.sum(self.area_weights.expand_as(weighted_rmse))
@@ -69,10 +74,10 @@ class SpreadSkill(Metric):
             .values
         )
 
-        idx_list = np.linspace(0, len(spread_err), self.spread_skill_bin)
+        idx_list = np.linspace(0, len(spread_err), self.nbins)
 
-        bins_rmse = torch.zeros(self.spread_skill_bin - 1)
-        bins_spread = torch.zeros(self.spread_skill_bin - 1)
+        bins_rmse = torch.zeros(self.nbins - 1)
+        bins_spread = torch.zeros(self.nbins - 1)
 
         for i in range(len(idx_list) - 1):
             bins_spread[i] = torch.sqrt(spread_err[:, 0][int(idx_list[i]) : int(idx_list[i + 1])].sum())
@@ -85,8 +90,8 @@ class SpreadSkill(Metric):
         Args:
             rmse: shape (rollout, nvar)
             spread: shape (rollout, nvar)
-            bins_rmse: shape (rollout, nvar, spread_skill_bin)
-            bins_spread: shape (rollout, nvar, spread_skill_bin)
+            bins_rmse: shape (rollout, nvar, nbins)
+            bins_spread: shape (rollout, nvar, nbins)
         """
         assert rmse.shape == (
             self.rollout,
@@ -100,12 +105,12 @@ class SpreadSkill(Metric):
         assert bins_rmse.shape == (
             self.rollout,
             self.nvar,
-            self.spread_skill_bin - 1,
+            self.nbins - 1,
         ), f"Shape mismatch: expected {self.bins_rmse.shape} and got {bins_rmse.shape}"
         assert bins_spread.shape == (
             self.rollout,
             self.nvar,
-            self.spread_skill_bin - 1,
+            self.nbins - 1,
         ), f"Shape mismatch: expected {self.bins_spread.shape} and got {bins_spread.shape}"
 
         self.rmse += rmse

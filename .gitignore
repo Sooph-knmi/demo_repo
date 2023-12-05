@@ -166,3 +166,10 @@ model_small*
 jobscript-dr*
 jobscript-patched*
 jobscript-eda*
+jobscript-debug*
+
+# config
+aifs/config/dr*
+aifs/config/ens-dmp-h4-*
+aifs/config/ens-dmp-h5-*
+aifs/config/ens-large-*

@@ -76,7 +76,7 @@ class RolloutEval(Callback):
         self.rollout = config.diagnostics.eval.rollout
         self.frequency = config.diagnostics.eval.frequency
         self.loss_type = config.training.loss
-        self.spread_skill_bin = config.diagnostics.eval.spread_skill_bin
+        self.nbins = config.diagnostics.eval.nbins
 
     def _eval(
         self,
@@ -101,7 +101,7 @@ class RolloutEval(Callback):
             spread = torch.zeros_like(rmse)
 
             bins_rmse = torch.zeros(
-                (self.rollout, len(self.eval_plot_parameters), self.spread_skill_bin - 1),
+                (self.rollout, len(self.eval_plot_parameters), self.nbins - 1),
                 dtype=batch.dtype,
                 device=pl_module.device,
             )
