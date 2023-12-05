@@ -27,3 +27,6 @@ trainable_parameters:
   era2hidden: 8
   hidden2era: 8
   hidden2hidden: 8
+
+logging:
+  debug: True
