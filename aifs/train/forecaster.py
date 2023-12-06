@@ -20,7 +20,6 @@ from torch.utils.checkpoint import checkpoint
 
 from aifs.data.scaling import pressure_level
 from aifs.distributed.helpers import gather_tensor
-from aifs.distributed.helpers import shard_tensor
 from aifs.losses.energy import EnergyScore
 from aifs.losses.kcrps import KernelCRPS
 from aifs.losses.patched_energy import PatchedEnergyScore
@@ -30,6 +29,8 @@ from aifs.metrics.spread import SpreadSkill
 from aifs.model.model import AIFSModelGNN
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
+
+# from aifs.distributed.helpers import shard_tensor
 
 LOGGER = get_code_logger(__name__, debug=True)
 
@@ -149,7 +150,7 @@ class GraphForecaster(pl.LightningModule):
             self.ens_comm_num_groups,
         )
 
-        self._gather_index_mask: Optional[torch.Tensor] = None  # lazy init
+        self._gather_matrix: Optional[torch.Tensor] = None  # lazy init
 
     def _build_gather_matrix(self) -> torch.Tensor:
         """Builds a matrix of shape (ens_comm_group_size * nens_per_device,
@@ -244,7 +245,9 @@ class GraphForecaster(pl.LightningModule):
         self.ens_comm_group_size = dist.get_world_size(group=ens_comm_group)
 
     def _compute_kcrps(self, y_pred: torch.Tensor, y_target: torch.Tensor, squash: bool = True) -> torch.Tensor:
-        """Rearranges the ground truth tensor and computes the KCRPS loss."""
+        """Rearranges the prediction and ground truth tensor and computes the KCRPS
+        loss."""
+        y_pred = einops.rearrange(y_pred, "bs e latlon v -> bs v latlon e")
         y_target = einops.rearrange(y_target, "bs latlon v -> bs v latlon")
         return self.kcrps(y_pred, y_target, squash=squash)
 
@@ -274,17 +277,15 @@ class GraphForecaster(pl.LightningModule):
         assert self._gather_matrix is not None
         y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")  # ensemble dim must come last
         y_pred_ens = y_pred_ens @ self._gather_matrix
+        y_pred_ens = einops.rearrange(y_pred_ens, "bs v latlon e -> bs e latlon v")  # reshape back to what it was
         LOGGER.debug("after pruning y_pred_ens.shape == %s", y_pred_ens.shape)
 
         # step 3/ compute the loss (one member per model group)
         loss_inc = checkpoint(self._compute_loss, y_pred_ens, y[..., : self.fcdim], use_reentrant=False)
 
-        # step 4/ send tensor shards back to all the ranks in the ensemble group
-        y_pred_ens = self.model_comm_group_size * (y_pred_ens @ self._gather_matrix.T)
-        y_pred_ens = einops.rearrange(y_pred_ens, "bs v latlon e -> bs e latlon v")  # reshape it back to what it was
-
-        # during validation, we also return the pruned ensemble (from steps 2 / 3) so we can run diagnostics
-        return loss_inc, y_pred_ens if validation_mode else None
+        # during validation, we also return the pruned ensemble (from step 2) so we can run diagnostics
+        # an explicit cast is needed when running in mixed precision (i.e. with y_pred_ens.dtype == torch.(b)float16)
+        return loss_inc, y_pred_ens.to(dtype=y.dtype) if validation_mode else None
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         # left-shift along the step dimension
@@ -370,6 +371,14 @@ class GraphForecaster(pl.LightningModule):
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
             loss_rstep, y_pred_group = self.gather_and_compute_loss(y_pred, y, validation_mode=validation_mode)
             loss += loss_rstep
+            LOGGER.debug(
+                "loss_rstep.dtype = %s, y_pred_group.dtype = %s, y_pred.dtype = %s, y.dtype = %s, x.dtype = %s",
+                loss_rstep.dtype,
+                y_pred_group.dtype if y_pred_group is not None else "N/A",
+                y_pred.dtype,
+                y.dtype,
+                x.dtype,
+            )
 
             x = self.advance_input(x, y, y_pred)
 
@@ -379,6 +388,8 @@ class GraphForecaster(pl.LightningModule):
                 _ = self.ranks(y[..., : self.fcdim], y_pred_group)
                 # pointwise KCRPS
                 pkcrps = self._compute_kcrps(y_pred_group, y[..., : self.fcdim], squash=False)
+
+                LOGGER.debug("pkcrps.dtype = %s, y_pred_group.dtype = %s, y.dtype = %s", pkcrps.dtype, y_pred_group.dtype, y.dtype)
                 # WMSE ensemble mean metrics
                 for mkey, (low, high) in self.metric_ranges.items():
                     y_denorm = self.model.normalizer.denormalize(y, in_place=False)
