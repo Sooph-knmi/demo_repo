@@ -43,6 +43,8 @@ class GraphForecaster(pl.LightningModule):
         """
         super().__init__()
 
+        LOGGER.setLevel(config.diagnostics.log.code.level)
+
         self.fcdim = config.data.num_features - config.data.num_aux_features
         num_levels = len(config.data.pl.levels)
 

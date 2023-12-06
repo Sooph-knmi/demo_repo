@@ -80,6 +80,9 @@ class RolloutEval(Callback):
             Dictionary with configuration settings
         """
         super().__init__()
+
+        LOGGER.setLevel(config.diagnostics.log.code.level)
+
         LOGGER.debug(
             "Setting up RolloutEval callback with rollout = %d, frequency = %d ...",
             config.diagnostics.eval.rollout,
@@ -351,6 +354,8 @@ def get_callbacks(config: DictConfig) -> List:
     List
         A list of PyTorch Lightning callbacks
     """
+
+    LOGGER.setLevel(config.diagnostics.log.code.level)
 
     checkpoint_settings = dict(
         monitor="val_wmse",

@@ -28,6 +28,9 @@ class ERA5DataModule(pl.LightningDataModule):
             Job configuration
         """
         super().__init__()
+
+        LOGGER.setLevel(config.diagnostics.log.code.level)
+
         self.bs_train = config.dataloader.batch_size.training
         self.bs_val = config.dataloader.batch_size.validation
 
