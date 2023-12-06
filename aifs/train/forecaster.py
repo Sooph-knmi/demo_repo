@@ -32,6 +32,8 @@ from aifs.utils.logger import get_code_logger
 
 # from aifs.distributed.helpers import shard_tensor
 
+LOGGER = get_code_logger(__name__, debug=True)
+
 
 class GraphForecaster(pl.LightningModule):
     """Graph neural network forecaster for PyTorch Lightning."""
@@ -50,10 +52,7 @@ class GraphForecaster(pl.LightningModule):
         config : DictConfig
             Job configuration
         """
-
         super().__init__()
-
-        self.LOGGER = get_code_logger(__name__, debug=config.model.logging.debug)
 
         self.fcdim = config.data.num_features - config.data.num_aux_features
         self.graph_data = torch.load(Path(config.hardware.paths.graph, config.hardware.files.graph))
@@ -84,13 +83,13 @@ class GraphForecaster(pl.LightningModule):
         self.nens_per_group = (
             config.training.ensemble_size_per_device * config.hardware.num_gpus_per_ensemble // config.hardware.num_gpus_per_model
         )
-        self.LOGGER.debug("Ensemble size: per device = %d, per ens-group = %d", self.nens_per_device, self.nens_per_group)
+        LOGGER.debug("Ensemble size: per device = %d, per ens-group = %d", self.nens_per_device, self.nens_per_group)
 
-        self.LOGGER.debug("Rollout window length: %d", self.rollout)
+        LOGGER.debug("Rollout window length: %d", self.rollout)
         if self.rollout_epoch_increment > 0:
-            self.LOGGER.debug("Rollout increase every %d epochs", self.rollout_epoch_increment)
-        self.LOGGER.debug("Rollout max : %d", self.rollout_max)
-        self.LOGGER.debug("Multistep: %d", self.multi_step)
+            LOGGER.debug("Rollout increase every %d epochs", self.rollout_epoch_increment)
+        LOGGER.debug("Rollout max : %d", self.rollout_max)
+        LOGGER.debug("Multistep: %d", self.multi_step)
 
         self.save_hyperparameters()
 
@@ -117,10 +116,10 @@ class GraphForecaster(pl.LightningModule):
         self.model_comm_group_size: int = 1
         self.ens_comm_group_size: int = 1
 
-        self.LOGGER.debug("Rollout window length: %d", self.rollout)
-        self.LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
-        self.LOGGER.debug("Rollout max : %d", self.rollout_max)
-        self.LOGGER.debug("Multistep: %d", self.multi_step)
+        LOGGER.debug("Rollout window length: %d", self.rollout)
+        LOGGER.debug("Rollout increase every : %d epochs", self.rollout_epoch_increment)
+        LOGGER.debug("Rollout max : %d", self.rollout_max)
+        LOGGER.debug("Multistep: %d", self.multi_step)
 
         self.enable_plot = config.diagnostics.plot.enabled
 
@@ -139,13 +138,13 @@ class GraphForecaster(pl.LightningModule):
         self.ens_comm_group_id = int(os.environ.get("SLURM_PROCID", "0")) // config.hardware.num_gpus_per_ensemble
         self.ens_comm_group_rank = int(os.environ.get("SLURM_PROCID", "0")) % config.hardware.num_gpus_per_ensemble
 
-        self.LOGGER.debug(
+        LOGGER.debug(
             "Model comm group ID = %d, rank = %d out of %d groups",
             self.model_comm_group_id,
             self.model_comm_group_rank,
             self.model_comm_num_groups,
         )
-        self.LOGGER.debug(
+        LOGGER.debug(
             "Ensemble comm group ID = %d, rank = %d out of %d groups",
             self.ens_comm_group_id,
             self.ens_comm_group_rank,
@@ -176,7 +175,7 @@ class GraphForecaster(pl.LightningModule):
         gather_matrix = torch.block_diag(*([gather_matrix_block] * self.model_comm_num_groups)).T
 
         torch.set_printoptions(precision=2)
-        self.LOGGER.debug(
+        LOGGER.debug(
             "Rank %d -- gather matrix shape %s and values: \n%s", self.global_rank, list(gather_matrix.shape), gather_matrix
         )
         torch.set_printoptions(precision=4)
@@ -191,7 +190,7 @@ class GraphForecaster(pl.LightningModule):
                 scl = config.training.loss_scaling.pl[pl_name]
             else:
                 scl = 1
-                self.LOGGER.debug("Parameter %s was not scaled.", pl_name)
+                LOGGER.debug("Parameter %s was not scaled.", pl_name)
             loss_scaling = np.append(loss_scaling, [scl] * pressure_level(config.data.pl.levels))
 
         for sfc_name in config.data.sfc.parameters:
@@ -199,7 +198,7 @@ class GraphForecaster(pl.LightningModule):
                 scl = config.training.loss_scaling.sfc[sfc_name]
             else:
                 scl = 1
-                self.LOGGER.debug("Parameter %s was not scaled.", sfc_name)
+                LOGGER.debug("Parameter %s was not scaled.", sfc_name)
             loss_scaling = np.append(loss_scaling, [scl])
 
         assert len(loss_scaling) == self.fcdim
@@ -237,12 +236,12 @@ class GraphForecaster(pl.LightningModule):
         return self.model(x, self.model_comm_group)
 
     def set_model_comm_group(self, model_comm_group: ProcessGroup) -> None:
-        self.LOGGER.debug("set_model_comm_group: %s", model_comm_group)
+        LOGGER.debug("set_model_comm_group: %s", model_comm_group)
         self.model_comm_group = model_comm_group
         self.model_comm_group_size = dist.get_world_size(group=model_comm_group)
 
     def set_ensemble_comm_group(self, ens_comm_group: ProcessGroup) -> None:
-        self.LOGGER.debug("set_ensemble_comm_group: %s", ens_comm_group)
+        LOGGER.debug("set_ensemble_comm_group: %s", ens_comm_group)
         self.ens_comm_group = ens_comm_group
         self.ens_comm_group_size = dist.get_world_size(group=ens_comm_group)
 
@@ -273,14 +272,14 @@ class GraphForecaster(pl.LightningModule):
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         # step 1/ gather among all GPUs in the same ensemble group
         y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)
-        self.LOGGER.debug("y_pred tensor shapes before %s and after gather %s", y_pred.shape, y_pred_ens.shape)
+        LOGGER.debug("y_pred tensor shapes before %s and after gather %s", y_pred.shape, y_pred_ens.shape)
 
         # step 2/ prune ensemble to get rid of the duplicates (if any) - uses the pre-built ensemble averaging matrix
         assert self._gather_matrix is not None
         y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")  # ensemble dim must come last
         y_pred_ens = y_pred_ens @ self._gather_matrix
         y_pred_ens = einops.rearrange(y_pred_ens, "bs v latlon e -> bs e latlon v")  # reshape back to what it was
-        self.LOGGER.debug("after pruning y_pred_ens.shape == %s", y_pred_ens.shape)
+        LOGGER.debug("after pruning y_pred_ens.shape == %s", y_pred_ens.shape)
 
         # step 3/ compute the loss (one member per model group)
         loss_inc = checkpoint(self._compute_loss, y_pred_ens, y[..., : self.fcdim], use_reentrant=False)
@@ -310,7 +309,7 @@ class GraphForecaster(pl.LightningModule):
         """
 
         if len(batch) == 1:
-            self.LOGGER.debug("batch[0].device = %s, dtype = %s", batch[0].device, batch[0].dtype)
+            LOGGER.debug("batch[0].device = %s, dtype = %s", batch[0].device, batch[0].dtype)
             # no EDA available, just stack the analysis IC nens_per_device times
             x_ = batch[0][:, 0 : self.multi_step, ...]  # (bs, multistep, latlon, nvar)
             return torch.stack([x_] * self.nens_per_device, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
@@ -326,7 +325,7 @@ class GraphForecaster(pl.LightningModule):
         x_pert = x_eda - x_eda.mean(dim=-1, keepdim=True)
         x_pert = einops.rearrange(x_pert, "bs ms latlon v e -> bs e ms latlon v")
         start, end = self.ens_comm_group_id * self.nens_per_device, (self.ens_comm_group_id + 1) * self.nens_per_device
-        self.LOGGER.debug(
+        LOGGER.debug(
             "Rank %d in (ensemble, model) group (%d, %d) got range [%d, %d) from a total of %d (maybe non-unique) ensemble members",
             self.global_rank,
             self.ens_comm_group_id,
@@ -355,7 +354,7 @@ class GraphForecaster(pl.LightningModule):
     ) -> Tuple:
         """Training / validation step."""
         loss = torch.zeros(1, dtype=batch.dtype, device=self.device, requires_grad=False)
-        self.LOGGER.debug(
+        LOGGER.debug(
             "Global rank %d with model (cgroup %d, rank %d) and ensemble (cgroup %d, rank %d) got batch index %03d with norm %.6e",
             self.global_rank,
             self.model_comm_group_id,
@@ -392,9 +391,7 @@ class GraphForecaster(pl.LightningModule):
                 # pointwise KCRPS
                 pkcrps = self._compute_kcrps(y_pred_group, y[..., : self.fcdim], squash=False)
 
-                self.LOGGER.debug(
-                    "pkcrps.dtype = %s, y_pred_group.dtype = %s, y.dtype = %s", pkcrps.dtype, y_pred_group.dtype, y.dtype
-                )
+                LOGGER.debug("pkcrps.dtype = %s, y_pred_group.dtype = %s, y.dtype = %s", pkcrps.dtype, y_pred_group.dtype, y.dtype)
                 # WMSE ensemble mean metrics
                 for mkey, (low, high) in self.metric_ranges.items():
                     y_denorm = self.model.normalizer.denormalize(y, in_place=False)
@@ -449,7 +446,7 @@ class GraphForecaster(pl.LightningModule):
     def on_train_epoch_end(self):
         if self.rollout_epoch_increment > 0 and self.current_epoch % self.rollout_epoch_increment == 0:
             self.rollout += 1
-            self.LOGGER.debug("Rollout window length: %d", self.rollout)
+            LOGGER.debug("Rollout window length: %d", self.rollout)
         self.rollout = min(self.rollout, self.rollout_max)
 
     def validation_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int) -> None:
