@@ -29,4 +29,4 @@ trainable_parameters:
   hidden2hidden: 8
 
 logging:
-  debug: True
+  debug: False

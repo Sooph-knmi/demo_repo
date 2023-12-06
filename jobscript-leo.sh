@@ -2,12 +2,12 @@
 
 #SBATCH -A DestE_340
 #SBATCH -p boost_usr_prod
-#SBATCH --nodes=8
-#SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=4
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=2
+#SBATCH --gpus-per-node=2
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=256G
-#SBATCH --time=24:00:00
+#SBATCH --mem=64G
+#SBATCH --time=00:15:00
 #SBATCH --output=aifs-ens-kcrps-mp-h5-part2.out.%j
 
 # debugging flags (optional)
@@ -24,15 +24,15 @@ export NCCL_DEBUG=TRACE
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="ens-kcrps-mpar-h5"
-export WANDB_NOTES="Model-parallel kcrps (H5, ens size = 8)"
+export WANDB_NAME="2 gpu leo"
+export WANDB_NOTES="2 gpu leo"
 
 # generic settings
 CONDA_ENV=aifs-dev
-GITDIR=/leonardo/home/userexternal/malexe00/aifs/aifs-mono
+GITDIR=/leonardo/home/userexternal/mclare00/aifs-mono
 WORKDIR=$GITDIR
 
 cd $WORKDIR
-module load python
-source $WORK/AIFS_env/aifs-dev/bin/activate
-srun aifs-ens-train hardware=leo_slurm --config-name=ens-large-dmp-h5
+source /leonardo/home/userexternal/mclare00/aifs_dev_mc/bin/activate
+wandb offline
+srun aifs-ens-train hardware=leo_slurm --config-name=ens-kcrps-h4
