@@ -17,6 +17,7 @@ from aifs.distributed.helpers import reduce_shard_tensor
 from aifs.distributed.helpers import reduce_tensor
 from aifs.distributed.helpers import shard_tensor
 from aifs.distributed.helpers import sync_tensor
+from aifs.distributed.helpers import gather_ensemble_members
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__, debug=True)
@@ -112,8 +113,8 @@ def register_parameter_grad_scaling_hooks(m: nn.Module, grad_scaling_factor: flo
     -> these are still divided by the total number of GPUs in DDP as if
     each rank would see a full set of inputs
     """
-    for _, param in m.named_parameters():
-        if param.requires_grad:  #  and "trainable" not in name:
+    for name, param in m.named_parameters():
+        if param.requires_grad and "trainable" not in name:
             param.register_hook(lambda grad: grad * grad_scaling_factor)
 
 
@@ -146,7 +147,7 @@ def test_gather_op(comm_group: ProcessGroup, input_shape: Tuple, rank: int) -> b
     def _test_gather(x_in) -> None:
         x = linear_map(x_in).reshape(input_shape)
         LOGGER.debug("x.shape = %s", x.shape)
-        y = gather_tensor(x, dim=1, shapes=[x.shape] * comm_group_size, mgroup=comm_group)
+        y = gather_tensor(x, dim=1, shapes=[x.shape] * comm_group_size, mgroup=comm_group, scale_gradients=True)
         LOGGER.debug("y.shape = %s", y.shape)
         loss = y.sum()
         return loss
@@ -187,7 +188,7 @@ def test_shard_op(comm_group: ProcessGroup, input_shape: Tuple, rank: int) -> bo
         LOGGER.debug("x.shape = %s", x_.shape)
         x = x_.repeat(1, comm_group_size, 1, 1)
         LOGGER.debug("x.repeat().shape = %s", x.shape)
-        y = shard_tensor(x, dim=1, shapes=[x_.shape] * comm_group_size, mgroup=comm_group)
+        y = shard_tensor(x, dim=1, shapes=[x_.shape] * comm_group_size, mgroup=comm_group, scale_gradients=True)
         LOGGER.debug("y.shape = %s", y.shape)
         loss = y.sum()
         return loss
@@ -307,13 +308,64 @@ def test_reduce_op(comm_group: ProcessGroup, input_shape: Tuple, rank: int) -> b
         x = linear_map(x_in).reshape(input_shape)
         LOGGER.debug("x.shape = %s", x.shape)
         # must do the reduction in FP64 (= _TEST_DTYPE) otherwise the gradient test will break
-        y = reduce_tensor(x, mgroup=comm_group, use_fp32=False)
+        y = reduce_tensor(x, mgroup=comm_group, use_fp32=False, scale_gradients=True)
         LOGGER.debug("y.shape = %s", y.shape)
         loss = y.sum()
         return loss
 
     result = gradcheck(_test_reduce, (x_input,), eps=1e-7, atol=1e-5, rtol=1e-4, nondet_tol=0.0)
     LOGGER.debug("Reduce test result: %s", result)  # "True" if the test passed
+    return result
+
+
+def test_gather_ensemble_members_op(comm_group: ProcessGroup, input_shape: Tuple, ens_per_device: int, gpus_per_model: int, rank: int) -> bool:
+    """Gradient test for gather_ensemble_members collective.
+
+    Inputs:
+        comm_group: ProcessGroup
+            Process communication group.
+        input_shape: Tuple
+            Shape of input to the communication operation.
+        ens_per_device: int
+            Number of ensemble members per device
+        gpus_per_model: int
+            Number of devices per model instance
+        rank: int
+            Global rank of current process.
+    Outputs:
+        True if the test passed OK.
+    """
+    small_input_shape = _TEST_INPUT_SHAPE
+    
+    comm_group_size = comm_group.size()
+    
+    assert comm_group_size % gpus_per_model == 0
+
+    x_input = torch.randn(*small_input_shape, dtype=_TEST_DTYPE, device=rank, requires_grad=True)
+
+    linear_map = torch.nn.Linear(
+        np.prod(small_input_shape),
+        np.prod(input_shape),
+        bias=False,
+        device=rank,
+        dtype=_TEST_DTYPE,
+    )
+    linear_map = linear_map.train()
+
+    def _test_gather_ensemble_members(x_in) -> None:
+        x = linear_map(x_in).reshape(input_shape)
+        LOGGER.debug("x.shape = %s", x.shape)
+
+        y = gather_ensemble_members(x, dim=1, shapes=[x.shape] * comm_group_size, 
+                                    nens=comm_group_size * ens_per_device // gpus_per_model,
+                                    memspacing=gpus_per_model, mgroup=comm_group, scale_gradients=True)
+
+        LOGGER.debug("y.shape = %s", y.shape)
+        loss = y.sum()
+        return loss
+
+    result = gradcheck(_test_gather_ensemble_members, (x_input,), eps=1e-6, atol=1e-4, rtol=1e-3, nondet_tol=0.0)
+    LOGGER.debug("Gather ensemble members test result: %s", result)  # "True" if the test passed
     return result
 
 
@@ -381,6 +433,13 @@ def comms_test(rank, world_size):
 
     # test reduce
     assert test_reduce_op(ens_comm_group, input_shape, rank)
+
+    # test gather ensemble members
+    gpus_per_model = 2
+    if ens_comm_group.size() % gpus_per_model == 0:
+        assert test_gather_ensemble_members_op(ens_comm_group, input_shape, cfg_.training.ensemble_size_per_device, gpus_per_model, rank)
+    else:
+        print(f"Skipping because ens_comm_group.size() % gpus_per_model != 0, ens_comm_group.size() = {ens_comm_group.size()}, gpus_per_model = {gpus_per_model}")
 
     cleanup()
 

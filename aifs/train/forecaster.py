@@ -282,16 +282,9 @@ class GraphForecaster(pl.LightningModule):
         # step 4/ send tensor shards back to all the ranks in the ensemble group
         y_pred_ens = self.model_comm_group_size * (y_pred_ens @ self._gather_matrix.T)
         y_pred_ens = einops.rearrange(y_pred_ens, "bs v latlon e -> bs e latlon v")  # reshape it back to what it was
-        y_pred = shard_tensor(
-            y_pred_ens,
-            dim=1,
-            shapes=[y_pred.shape] * self.ens_comm_group_size,
-            mgroup=self.ens_comm_group,
-        )
-        LOGGER.debug("after sharding y_pred.shape == %s", y_pred.shape)
 
         # during validation, we also return the pruned ensemble (from steps 2 / 3) so we can run diagnostics
-        return y_pred, loss_inc, y_pred_ens if validation_mode else None
+        return loss_inc, y_pred_ens if validation_mode else None
 
     def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
         # left-shift along the step dimension
@@ -375,7 +368,7 @@ class GraphForecaster(pl.LightningModule):
         for rstep in range(self.rollout):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
-            y_pred, loss_rstep, y_pred_group = self.gather_and_compute_loss(y_pred, y, validation_mode=validation_mode)
+            loss_rstep, y_pred_group = self.gather_and_compute_loss(y_pred, y, validation_mode=validation_mode)
             loss += loss_rstep
 
             x = self.advance_input(x, y, y_pred)

@@ -12,6 +12,7 @@ import torch.multiprocessing as mp
 from hydra import compose
 from hydra import initialize
 from torch.autograd import gradcheck
+from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch_geometric import seed_everything
 
@@ -106,6 +107,18 @@ def get_my_comm_group(global_rank, world_size, num_gpus_per_group) -> Tuple[int,
             comm_group_nr = comm_group
             comm_group_rank = np.ravel(np.asarray(comm_group == global_rank).nonzero())[0]
     return comm_group_id, comm_group_nr, comm_group_rank
+
+
+def register_parameter_grad_scaling_hooks(m: nn.Module, grad_scaling_factor: float) -> None:
+    """Register parameter hooks for gradient reduction.
+
+    Here, we rescale parameters that only see a subset of the input on each rank
+    -> these are still divided by the total number of GPUs in DDP as if
+    each rank would see a full set of inputs
+    """
+    for name, param in m.named_parameters():
+        if param.requires_grad and "trainable" not in name:
+            param.register_hook(lambda grad: grad * grad_scaling_factor)
 
 
 def build_avg_matrix_for_gather(
@@ -206,6 +219,9 @@ def grad_test(rank, world_size):
     # DDP model wrapper
     gnn = DDP(gnn, device_ids=[rank])
 
+    # only scale for model sharding, ens dimension is already accounted for
+    register_parameter_grad_scaling_hooks(gnn, model_comm_group_size)
+
     small_input_shape = _TEST_INPUT_SHAPE
     true_input_shape = (
         cfg_.dataloader.batch_size.training,
@@ -252,35 +268,35 @@ def grad_test(rank, world_size):
         # loss = y_pred.sum()
 
         # ver 2 / the extra comm step + dummy sum loss
-        # y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+        # y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group, scale_gradients=True)
         # loss = y_pred_ens.sum()
 
         # ver 3 / comm + pruning + sum loss
-        # y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+        # y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group, scale_gradients=True)
         # y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")
         # y_pred_ens = y_pred_ens @ gather_mat
         # loss = y_pred_ens.sum()
 
         # ver 4 / comm + pruning + kcrps loss
-        # y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+        # y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group, scale_gradients=True)
         # y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")
         # y_pred_ens = y_pred_ens @ gather_mat
         # loss = kcrps(y_pred_ens, y_target, squash=True)
 
         # ver 5 / unrolled rollout-2 loop - this can fail for some atol/rtol/eps combinations
         # but the numerical and analytical gradients should still be pretty close
-        y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+        y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group, scale_gradients=True)
         y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")
         y_pred_ens = y_pred_ens @ gather_mat
         loss_step1 = kcrps(y_pred_ens, y_target, squash=True)
         y_pred_ens = model_comm_group_size * (y_pred_ens @ gather_mat.T)
         y_pred_ens = einops.rearrange(y_pred_ens, "bs v latlon e -> bs e latlon v")
-        y_pred = shard_tensor(y_pred_ens, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+        y_pred = shard_tensor(y_pred_ens, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group, scale_gradients=True)
 
         x2 = x.detach().clone()
         x2[:, :, -1, :, : cfg_.data.num_features - cfg_.data.num_aux_features] = y_pred
         y_pred2 = gnn(x2, model_comm_group=model_comm_group, inject_noise=False)
-        y_pred_ens2 = gather_tensor(y_pred2, dim=1, shapes=[y_pred2.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+        y_pred_ens2 = gather_tensor(y_pred2, dim=1, shapes=[y_pred2.shape] * ens_comm_group_size, mgroup=ens_comm_group, scale_gradients=True)
         y_pred_ens2 = einops.rearrange(y_pred_ens2, "bs e latlon v -> bs v latlon e")
         y_pred_ens2 = y_pred_ens2 @ gather_mat
         loss_step2 = kcrps(y_pred_ens2, y_target, squash=True)

@@ -15,8 +15,9 @@ from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
 
+_SCALE_GRAD_DEFAULT = False
 
-def shard_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -> Tensor:
+def shard_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup, scale_gradients: bool = _SCALE_GRAD_DEFAULT) -> Tensor:
     """Shard tensor.
 
     Keeps only part of the tensor that is relevant for the current rank.
@@ -31,16 +32,18 @@ def shard_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) 
         Shapes of sharded Tensors
     mgroup : ProcessGroup
         model communication group
+    scale_gradients : bool
+        scale gradients to compensate for splitting across workers
 
     Returns
     -------
     Tensor
     """
 
-    return _ShardParallelSection.apply(input_, dim, shapes, mgroup)
+    return _ShardParallelSection.apply(input_, dim, shapes, scale_gradients, mgroup)
 
 
-def gather_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -> Tensor:
+def gather_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup, scale_gradients: bool = _SCALE_GRAD_DEFAULT) -> Tensor:
     """Gather tensor.
 
     Gathers tensor shards from ranks.
@@ -55,16 +58,18 @@ def gather_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup)
         Shapes of sharded Tensors
     mgroup : ProcessGroup
         model communication group
+    scale_gradients : bool
+        scale gradients to compensate for splitting across workers
 
     Returns
     -------
     Tensor
     """
 
-    return _GatherParallelSection.apply(input_, dim, shapes, mgroup)
+    return _GatherParallelSection.apply(input_, dim, shapes, scale_gradients, mgroup)
 
 
-def reduce_tensor(input_: Tensor, mgroup: ProcessGroup, use_fp32: bool = True) -> Tensor:
+def reduce_tensor(input_: Tensor, mgroup: ProcessGroup, use_fp32: bool = True, scale_gradients = _SCALE_GRAD_DEFAULT) -> Tensor:
     """Reduce tensor.
 
     Reduces tensor across ranks.
@@ -83,7 +88,7 @@ def reduce_tensor(input_: Tensor, mgroup: ProcessGroup, use_fp32: bool = True) -
     Tensor
     """
 
-    return _ReduceParallelSection.apply(input_, mgroup, use_fp32)
+    return _ReduceParallelSection.apply(input_, mgroup, scale_gradients, use_fp32)
 
 
 def sync_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: ProcessGroup) -> Tensor:
@@ -136,6 +141,38 @@ def reduce_shard_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: Process
     return _ReduceShardParallelSection.apply(input_, dim, shapes, mgroup, use_fp32)
 
 
+def gather_ensemble_members(input_: Tensor, dim: int, shapes: Tuple, nens : int, memspacing : int, mgroup: ProcessGroup, scale_gradients: bool = _SCALE_GRAD_DEFAULT) -> Tensor:
+    """Gather ensemble members.
+
+    Gather ensemble members and filter out duplicates due to model parallel runs.
+
+    Parameters
+    ----------
+    input_ : Tensor
+        Input
+    dim : int
+        dimension along which to gather
+    shapes : Tuple
+        Shapes of sharded Tensors
+        -> [input_.shape] * ens_comm_group_size
+    nens : int
+        number of unique ensemble members
+        -> ens_comm_group_size * ensemble_size_per_device // model_comm_group_size
+    memspacing : int,
+        spacing of unique members
+        -> model_comm_group_size
+    mgroup : ProcessGroup
+        model communication group
+    scale_gradients : bool
+        scale gradients to compensate for splitting across workers
+    Returns
+    -------
+    Tensor
+    """
+
+    return _GatherEnsembleMembers.apply(input_, dim, shapes, nens, memspacing, scale_gradients, mgroup)
+
+
 def get_shape_shards(tensor: Tensor, dim: int, mgroup: Optional[ProcessGroup] = None) -> List:
     """Get shape of tensor shards."""
 
@@ -164,6 +201,42 @@ def change_channels_in_shape(shape_list: List, channels: int) -> List:
         out = []
 
     return out
+
+
+class _GatherEnsembleMembers(torch.autograd.Function):
+    """Gather ensemble members and filter out duplicated members."""
+
+    @staticmethod
+    def forward(ctx, input_, dim_, shapes_, nens_, memspacing_, scale_gradients_, mgroup_):
+        ctx.dim = dim_
+        ctx.comm_group = mgroup_
+        ctx.shapes = shapes_
+        ctx.nens = nens_
+        ctx.memspacing = memspacing_
+        ctx.scale_gradients = scale_gradients_
+        if mgroup_:
+            out = _gather(input_, dim_, shapes_, group=mgroup_)
+            out = _filter(out, dim_, nens_, memspacing_)
+            return out
+        return input_
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        if ctx.comm_group:
+            grad_output = _expand(grad_output, ctx.dim, ctx.nens, ctx.memspacing)
+            grad_output = _split(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group)
+            if ctx.scale_gradients:
+                grad_output = grad_output * ctx.comm_group.size()
+            return (
+                grad_output,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        return grad_output, None, None, None, None, None, None
 
 
 class _SyncParallelSection(torch.autograd.Function):
@@ -224,10 +297,11 @@ class _ShardParallelSection(torch.autograd.Function):
     """Split the input and keep only the relevant chunk for each rank."""
 
     @staticmethod
-    def forward(ctx, input_, dim_, shapes_, mgroup_):
+    def forward(ctx, input_, dim_, shapes_, scale_gradients_, mgroup_):
         ctx.dim = dim_
         ctx.comm_group = mgroup_
         ctx.shapes = shapes_
+        ctx.scale_gradients = scale_gradients_
         if mgroup_:
             return _split(input_, dim_, shapes_, group=mgroup_)
         return input_
@@ -235,25 +309,28 @@ class _ShardParallelSection(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         if ctx.comm_group:
-            grad_scaler = 1.0 / ctx.comm_group.size()
+            output = _gather(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group)
+            if ctx.scale_gradients:
+                output = output * 1.0 / ctx.comm_group.size()
             return (
-                # scale gradients
-                grad_scaler * _gather(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
+                output,
+                None,
                 None,
                 None,
                 None,
             )
-        return grad_output, None, None, None
+        return grad_output, None, None, None, None
 
 
 class _GatherParallelSection(torch.autograd.Function):
     """Gather the input from parallel section and concatenate."""
 
     @staticmethod
-    def forward(ctx, input_, dim_, shapes_, mgroup_):
+    def forward(ctx, input_, dim_, shapes_, scale_gradients_, mgroup_):
         ctx.dim = dim_
         ctx.comm_group = mgroup_
         ctx.shapes = shapes_
+        ctx.scale_gradients = scale_gradients_
         if mgroup_:
             return _gather(input_, dim_, shapes_, group=mgroup_)
         return input_
@@ -261,22 +338,26 @@ class _GatherParallelSection(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         if ctx.comm_group:
+            output = _split(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group)
+            if ctx.scale_gradients:
+                output = output * ctx.comm_group.size()
             return (
-                # scale gradients
-                ctx.comm_group.size() * _split(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group),
+                output,
+                None,
                 None,
                 None,
                 None,
             )
-        return grad_output, None, None, None
+        return grad_output, None, None, None, None
 
 
 class _ReduceParallelSection(torch.autograd.Function):
     """All-reduce the input from the parallel section."""
 
     @staticmethod
-    def forward(ctx, input_, mgroup_, use_fp32_=True):
+    def forward(ctx, input_, mgroup_, scale_gradients_, use_fp32_=True):
         ctx.comm_group = mgroup_
+        ctx.scale_gradients = scale_gradients_
         if mgroup_:
             return _reduce(input_, use_fp32=use_fp32_, group=mgroup_)
         return input_
@@ -284,9 +365,40 @@ class _ReduceParallelSection(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         if ctx.comm_group:
-            # scale gradient
-            return ctx.comm_group.size() * grad_output, None, None
-        return grad_output, None, None
+            output = grad_output
+            if ctx.scale_gradients:
+                output = output * ctx.comm_group.size()
+            return output, None, None, None
+        return grad_output, None, None, None
+
+
+def _filter(input_: Tensor, dim_: int, nens_ : int, memspacing_ : int) -> Tensor:
+    """Only keep every x member input tensor along dim of members."""
+
+    assert input_.shape[dim_] % nens_ == 0 
+
+    # create a list of all members
+    input_list = torch.chunk(input_, input_.shape[dim_], dim=dim_)
+
+    # filter out duplicated members
+    output = torch.cat(input_list[::memspacing_], dim=dim_).contiguous(memory_format=get_memory_format(input_))
+
+    return output
+
+
+def _expand(input_: Tensor, dim_: int, nens_ : int, memspacing_ : int) -> Tensor:
+    """Copy gradients of members to every (duplicated) member of original input."""
+
+    # create indices to select members -> repeate unique members so we get back the number of original members
+    member_index = [member.repeat(memspacing_) for member in torch.arange(input_.shape[dim_]).chunk(memspacing_)]
+    member_index = torch.cat(member_index).tolist()
+
+    # create output tensor with duplicated members
+    input_list = torch.tensor_split(input_, input_.shape[dim_], dim=dim_)
+    output = torch.cat([input_list[member] for member in member_index], dim=dim_).contiguous(memory_format=get_memory_format(input_))
+    output = output * 1./memspacing_ # to compensate for the gradient inflation from the member duplication
+
+    return output
 
 
 def _split(input_: Tensor, dim_: int, shapes_: Tuple, group: ProcessGroup) -> Tensor:

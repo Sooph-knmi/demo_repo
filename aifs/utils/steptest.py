@@ -15,7 +15,7 @@ from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch_geometric import seed_everything
 
-from aifs.distributed.helpers import gather_tensor
+from aifs.distributed.helpers import gather_tensor, gather_ensemble_members
 from aifs.losses.kcrps import KernelCRPS
 from aifs.model.gnn import GraphMSG
 from aifs.utils.logger import get_code_logger
@@ -113,6 +113,18 @@ def get_parameters_as_a_flat_tensor(m: nn.Module) -> torch.Tensor:
     return torch.cat(p_flat)
 
 
+def register_parameter_grad_scaling_hooks(m: nn.Module, grad_scaling_factor: float) -> None:
+    """Register parameter hooks for gradient reduction.
+
+    Here, we rescale parameters that only see a subset of the input on each rank
+    -> these are still divided by the total number of GPUs in DDP as if
+    each rank would see a full set of inputs
+    """
+    for name, param in m.named_parameters():
+        if param.requires_grad and "trainable" not in name:
+            param.register_hook(lambda grad: grad * grad_scaling_factor)
+
+
 def build_avg_matrix_for_gather(
     ens_comm_group_size: int, model_comm_group_size: int, nens_per_device: int, rank: int
 ) -> torch.Tensor:
@@ -177,8 +189,8 @@ def single_step_test(rank, world_size):
         ],
     )
 
-    model_comm_group_size = cfg_.hardware.num_gpus_per_model
-    ens_comm_group_size = cfg_.hardware.num_gpus_per_ensemble
+    model_comm_group_size = 2 #cfg_.hardware.num_gpus_per_model
+    ens_comm_group_size = 4 #cfg_.hardware.num_gpus_per_ensemble
 
     # create communication groups
     model_comm_group, _ = create_model_comm_groups(rank, world_size, model_comm_group_size)
@@ -209,10 +221,8 @@ def single_step_test(rank, world_size):
     gnn = DDP(gnn, device_ids=[rank])
     gnn = gnn.train()
 
-    # TODO: is this the correct gradient scaling for all valid
-    # (num-gpus-per-model, num-gpus-per-ensemble) combinations?
-    # scaling is no longer necessary
-    # register_parameter_grad_scaling_hooks(gnn, float(ens_comm_group_size))
+    # only scale for model sharding, ens dimension is already accounted for
+    register_parameter_grad_scaling_hooks(gnn, model_comm_group_size)
 
     initial_params = get_parameters_as_a_flat_tensor(gnn)
 
@@ -248,9 +258,15 @@ def single_step_test(rank, world_size):
 
     with torch.autocast(device_type="cuda", dtype=PRECISION):
         y_pred = gnn(x_input, model_comm_group=model_comm_group, inject_noise=False)
-        y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group)
+        y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group, scale_gradients=True)
         y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")
         y_pred_ens = y_pred_ens @ gather_mat
+
+        # y_pred_ens = gather_ensemble_members(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, 
+        #                                     nens=ens_comm_group_size * cfg_.training.ensemble_size_per_device // model_comm_group.size(),
+        #                                     memspacing=model_comm_group.size(), mgroup=ens_comm_group, scale_gradients=True)
+        # y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")
+
         loss = kcrps(y_pred_ens, y_target, squash=True)
 
         scaler.scale(loss).backward()

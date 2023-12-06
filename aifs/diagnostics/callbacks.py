@@ -101,7 +101,7 @@ class RolloutEval(Callback):
                 y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
                 y = batch[:, pl_module.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
 
-                y_pred, loss_rstep, y_pred_group = pl_module.gather_and_compute_loss(
+                loss_rstep, y_pred_group = pl_module.gather_and_compute_loss(
                     y_pred, y[..., : pl_module.fcdim], validation_mode=True
                 )
                 loss += loss_rstep
