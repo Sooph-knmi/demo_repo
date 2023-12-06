@@ -57,6 +57,7 @@ GPU_METRICS_DICT = {
     "GPU device utilization (%)": "gpu",
     "GPU memory use (%)": "memory",
     "GPU memory allocated (%)": "memoryAllocated",
+    "GPU memory allocated (GB)": "memoryAllocatedBytes",
 }
 
 
@@ -72,7 +73,7 @@ def summarize_gpu_metrics(df: pd.DataFrame) -> Dict[str, float]:
     """
     gpu.{gpu_index}.memory - GPU memory utilization in percent for each GPU
     gpu.{gpu_index}.memoryAllocated - GPU memory allocated as a percentage of the total available memory for each GPU
-    #! use it? gpu.{gpu_index}.memoryAllocatedBytes - GPU memory allocated in bytes for each GPU
+    gpu.{gpu_index}.memoryAllocatedBytes - GPU memory allocated in bytes for each GPU
     gpu.{gpu_index}.gpu - GPU utilization in percent for each GPU
     """
     average_metric = {}
@@ -81,6 +82,8 @@ def summarize_gpu_metrics(df: pd.DataFrame) -> Dict[str, float]:
         pattern = r"system.gpu.\d.{}$".format(gpu_metric)
         sub_gpu_cols = [string for string in col_names if re.match(pattern, string)]
         metrics_per_gpu = df[sub_gpu_cols].mean(axis=0)
+        if gpu_metric == "memoryAllocatedBytes":
+            metrics_per_gpu = metrics_per_gpu * 1e-9
         average_metric[gpu_metric_name] = metrics_per_gpu.median()
         metrics_per_gpu.index = ["   " + index for index in metrics_per_gpu.index]
         average_metric.update(dict(metrics_per_gpu))
@@ -273,8 +276,7 @@ class BenchmarkProfiler(Profiler):
         )
 
     def __del__(self) -> None:
-        pass
-        # os.remove(self.memfile_path)
+        os.remove(self.memfile_path)
 
 
 class ProfilerProgressBar(TQDMProgressBar):
