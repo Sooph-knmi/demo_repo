@@ -29,7 +29,7 @@ dataloader:
     validation: 4
   limit_batches:
     training: 4000
-    validation: null
+    validation: null  # minimum 4 for evaluation to work
 
 training:
   lr:

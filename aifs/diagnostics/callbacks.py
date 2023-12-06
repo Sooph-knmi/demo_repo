@@ -21,7 +21,7 @@ from aifs.diagnostics.plots import plot_predicted_ensemble
 from aifs.diagnostics.plots import plot_rank_histograms
 from aifs.diagnostics.plots import plot_spread_skill
 from aifs.diagnostics.plots import plot_spread_skill_bins
-from aifs.utils.distributed import gather_tensor
+from aifs.distributed.helpers import gather_tensor
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)

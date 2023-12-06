@@ -1,7 +1,6 @@
 from typing import Optional
 from typing import Tuple
 
-import numpy as np
 import torch
 from torchmetrics import Metric
 
@@ -74,14 +73,12 @@ class SpreadSkill(Metric):
             .values
         )
 
-        idx_list = np.linspace(0, len(spread_err), self.nbins)
+        bin_width = int(len(spread_err) / (self.nbins - 1))
 
-        bins_rmse = torch.zeros(self.nbins - 1)
-        bins_spread = torch.zeros(self.nbins - 1)
-
-        for i in range(len(idx_list) - 1):
-            bins_spread[i] = torch.sqrt(spread_err[:, 0][int(idx_list[i]) : int(idx_list[i + 1])].sum())
-            bins_rmse[i] = torch.sqrt(spread_err[:, 1][int(idx_list[i]) : int(idx_list[i + 1])].sum())
+        # Split ordered spread-err into bins of equal width.
+        # Then take sum and sqrt to find the average spread and error of each bin for plotting
+        bins_spread = torch.Tensor([float(torch.sqrt(i.sum())) for i in torch.split(spread_err[:, 0], bin_width)][:-1])
+        bins_rmse = torch.Tensor([float(torch.sqrt(i.sum())) for i in torch.split(spread_err[:, 1], bin_width)][:-1])
 
         return torch.sqrt(weighted_rmse.sum()), torch.sqrt(weighted_spread.sum()), bins_rmse, bins_spread
 
