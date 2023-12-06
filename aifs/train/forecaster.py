@@ -270,7 +270,7 @@ class GraphForecaster(pl.LightningModule):
         validation_mode: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         # step 1/ gather among all GPUs in the same ensemble group
-        y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group)
+        y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * self.ens_comm_group_size, mgroup=self.ens_comm_group, scale_gradients=True)
         LOGGER.debug("y_pred tensor shapes before %s and after gather %s", y_pred.shape, y_pred_ens.shape)
 
         # step 2/ prune ensemble to get rid of the duplicates (if any) - uses the pre-built ensemble averaging matrix
