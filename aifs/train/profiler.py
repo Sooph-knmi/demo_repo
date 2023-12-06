@@ -1,6 +1,8 @@
+import warnings
 from functools import cached_property
 from typing import Dict
 from typing import List
+from typing import Optional
 
 import hydra
 import numpy as np
@@ -29,7 +31,8 @@ class AIFSProfiler(AIFSTrainer):
     def __init__(self, config: DictConfig):
         super().__init__(config)
 
-        assert self.config.diagnostics.log.wandb.enabled, "Profiling requires W&B logging"
+        if self.config.diagnostics.log.wandb.enabled:
+            warnings.warn("Warning: W&B logging is deactivated so no system report would be provided")
 
     def print_report(self, title: str, dataframe: pd.DataFrame, color="white", emoji=""):
         console.print(f"[bold {color}]{title}[/bold {color}]", f":{emoji}:")
@@ -42,17 +45,17 @@ class AIFSProfiler(AIFSTrainer):
     def print_benchmark_profiler_report(
         self,
         speed_metrics_df: pd.DataFrame,
-        memory_metrics_df: pd.DataFrame,
         time_metrics_df: pd.DataFrame,
-        wandb_memory_metrics_df: pd.DataFrame,
+        memory_metrics_df: pd.DataFrame,
+        wandb_memory_metrics_df: Optional[pd.DataFrame] = None,
     ) -> None:
         self.print_title()
         self.print_report("Time Profiling", time_metrics_df, color="green", emoji="alarm_clock")
         self.print_report("Speed Profiling", speed_metrics_df, color="yellow", emoji="racing_car")
         self.print_report("Memory Profiling", memory_metrics_df, color="purple", emoji="floppy_disk")
-        self.print_report("Wandb Memory Profiling", wandb_memory_metrics_df, color="purple", emoji="desktop_computer")
+        if wandb_memory_metrics_df:
+            self.print_report("Wandb Memory Profiling", wandb_memory_metrics_df, color="purple", emoji="desktop_computer")
 
-    # @rank_zero_only
     def write_benchmark_profiler_report(self) -> None:
         console.save_html("report.html")
 
@@ -64,7 +67,6 @@ class AIFSProfiler(AIFSTrainer):
         return df
 
     @cached_property
-    # @rank_zero_only
     def speed_profile(self):
         """Speed profiler.
 
@@ -86,11 +88,9 @@ class AIFSProfiler(AIFSTrainer):
         speed_metrics_dict["avg_training_dataloader_throughput_per_sample"] = (
             speed_metrics_dict["avg_training_dataloader_throughput"] / self.config.dataloader.batch_size.training
         )
-        # print('dict speed',speed_metrics_dict)
         return self.to_df(speed_metrics_dict)
 
     @cached_property
-    # @rank_zero_only
     def wandb_profile(self):
         """Get system metrics from W&B."""
         if not self.config.diagnostics.log.wandb.offline:
@@ -102,7 +102,6 @@ class AIFSProfiler(AIFSTrainer):
         return pd.DataFrame()
 
     @cached_property
-    # @rank_zero_only
     def memory_profile(self):
         return self.profiler.get_memory_profiler_df()
 
@@ -116,21 +115,27 @@ class AIFSProfiler(AIFSTrainer):
         """Print report to console."""
 
         print("printing Profiler report")
-
-        self._close_logger()
-        self.print_benchmark_profiler_report(
-            speed_metrics_df=self.speed_profile,
-            time_metrics_df=self.time_profile,
-            wandb_memory_metrics_df=self.wandb_profile,
-            memory_metrics_df=self.memory_profile,
-        )
-        self.write_benchmark_profiler_report()
+        if (not self.config.diagnostics.log.wandb.enabled) or (self.config.diagnostics.log.wandb.offline):
+            self.print_benchmark_profiler_report(
+                speed_metrics_df=self.speed_profile,
+                time_metrics_df=self.time_profile,
+                memory_metrics_df=self.memory_profile,
+            )
+        else:
+            self._close_logger()
+            self.print_benchmark_profiler_report(
+                speed_metrics_df=self.speed_profile,
+                time_metrics_df=self.time_profile,
+                memory_metrics_df=self.memory_profile,
+                wandb_memory_metrics_df=self.wandb_profile,
+            )
 
     @rank_zero_only
     def to_wandb(self) -> None:
         """Log report into W&B."""
 
         print("logging to W&B Profiler report")
+        self.write_benchmark_profiler_report()
 
         logger = WandbLogger(
             project=self.run_dict["project"],
@@ -163,14 +168,12 @@ class AIFSProfiler(AIFSTrainer):
 
 @hydra.main(version_base=None, config_path="../config", config_name="debug")
 def main(config: DictConfig):
-    # TODO: Override wandb offline
-    if config.diagnostics.log.wandb.offline:
-        config.diagnostics.log.wandb.offline = False
-
     print("running AIFS profiler")
+    print(config)
     trainer_aifs = AIFSProfiler(config)
     with trainer_aifs.profiler.memory_profiler:
         trainer_aifs.train()
 
     trainer_aifs.report()
-    trainer_aifs.to_wandb()
+    if (config.diagnostics.log.wandb.enabled) or (not config.diagnostics.log.wandb.offline):
+        trainer_aifs.to_wandb()
