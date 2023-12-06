@@ -15,7 +15,7 @@ from torch_geometric.utils import contains_isolated_nodes
 from torch_geometric.utils import dropout_edge
 
 from aifs.distributed.helpers import change_channels_in_shape
-from aifs.distributed.helpers import get_shape_shards
+from aifs.distributed.helpers import get_shape_shards, shard_tensor
 from aifs.model.layers import GNNMapper
 from aifs.model.layers import GNNProcessor
 from aifs.utils.config import DotConfig
@@ -242,6 +242,35 @@ class GraphMSG(nn.Module):
             dim=-1,  # feature dimension
         )
 
+    def _generate_noise(self, noise_ref: torch.Tensor, noise_dim : Tuple, shapes : list, inject_noise : bool, model_comm_group: ProcessGroup) -> torch.Tensor:
+        """Expand edge index correct number of times while adding the proper number to
+        the edge index.
+
+        Parameters
+        ----------
+        noise_ref : torch.Tensor
+            Reference tensor for noise
+        noise_dim : Tuple
+            shape of noise
+        shapes : list
+            Shapes of reference tensor for sharding
+        inject_noise : bool
+            return noise if true, else return 0. everywhere
+        model_comm_group : ProcessGroup
+            model communication group, specifies which GPUs work together
+            in one model instance
+        Returns
+        -------
+        torch.Tensor
+            Noise
+        """
+
+        noise = torch.randn(noise_dim).type_as(noise_ref) if inject_noise else torch.zeros(noise_dim).type_as(noise_ref)
+        noise.requires_grad = False
+        shapes_sharding = change_channels_in_shape(shapes, self.proc_noise_channels)
+
+        return shard_tensor(noise, 0, shapes_sharding, model_comm_group)
+
     def _expand_edges(self, edge_index: Adj, edge_inc: torch.Tensor, batch_size: int) -> Adj:
         """Expand edge index correct number of times while adding the proper number to
         the edge index.
@@ -445,10 +474,9 @@ class GraphMSG(nn.Module):
 
         LOGGER.debug("x_era_latent.shape = %s, x_latent.shape = %s", x_era_latent.shape, x_latent.shape)
 
-        # generate noise tensor
-        noise_shape = (*x_latent.shape[:-1], self.proc_noise_channels)
-        z = torch.randn(noise_shape).type_as(x_latent) if inject_noise else torch.zeros(noise_shape).type_as(x_latent)
-        z.requires_grad = False
+        # generate noise tensor and shard if necessary
+        z = self._generate_noise(x_latent, (*x_h_latent.shape[:-1], self.proc_noise_channels), shape_h_fwd, inject_noise, model_comm_group)
+
         LOGGER.debug("z.shape = %s, z.norm: %.9e", z.shape, torch.linalg.norm(z))
 
         x_latent_proc = self.h_processor(

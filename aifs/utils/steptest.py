@@ -258,6 +258,7 @@ def single_step_test(rank, world_size):
 
     with torch.autocast(device_type="cuda", dtype=PRECISION):
         y_pred = gnn(x_input, model_comm_group=model_comm_group, inject_noise=False)
+
         y_pred_ens = gather_tensor(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group, scale_gradients=True)
         y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")
         y_pred_ens = y_pred_ens @ gather_mat
