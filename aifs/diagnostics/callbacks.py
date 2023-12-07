@@ -20,6 +20,7 @@ from aifs.diagnostics.plots import plot_loss
 from aifs.diagnostics.plots import plot_predicted_ensemble
 from aifs.diagnostics.plots import plot_rank_histograms
 from aifs.diagnostics.plots import plot_spread_skill
+from aifs.diagnostics.plots import plot_spread_skill_bins
 from aifs.distributed.helpers import gather_tensor
 from aifs.utils.logger import get_code_logger
 
@@ -75,6 +76,7 @@ class RolloutEval(Callback):
         self.rollout = config.diagnostics.eval.rollout
         self.frequency = config.diagnostics.eval.frequency
         self.loss_type = config.training.loss
+        self.nbins = config.diagnostics.eval.nbins
 
     def _eval(
         self,
@@ -98,6 +100,13 @@ class RolloutEval(Callback):
             rmse = torch.zeros((self.rollout, len(self.eval_plot_parameters)), dtype=batch.dtype, device=pl_module.device)
             spread = torch.zeros_like(rmse)
 
+            bins_rmse = torch.zeros(
+                (self.rollout, len(self.eval_plot_parameters), self.nbins - 1),
+                dtype=batch.dtype,
+                device=pl_module.device,
+            )
+            bins_spread = torch.zeros_like(bins_rmse)
+
             for rstep in range(self.rollout):
                 y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
                 y = batch[:, pl_module.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
@@ -120,15 +129,16 @@ class RolloutEval(Callback):
                 for midx, (pidx, _) in enumerate(self.eval_plot_parameters.items()):
                     y_denorm = pl_module.model.normalizer.denormalize(y, in_place=False)
                     y_pred_denorm = pl_module.model.normalizer.denormalize(y_pred_group, in_place=False)
-                    # ensemble mean RMSE
-                    rmse[rstep, midx] = torch.sqrt(
-                        pl_module.metrics(y_pred_denorm[..., pidx : pidx + 1].mean(dim=1), y_denorm[..., pidx : pidx + 1])
-                    )
-                    # mean spread (ensemble stdev)
-                    spread[rstep, midx] = y_pred_denorm[..., pidx : pidx + 1].std(dim=1).mean()
+
+                    (
+                        rmse[rstep, midx],
+                        spread[rstep, midx],
+                        bins_rmse[rstep, midx],
+                        bins_spread[rstep, midx],
+                    ) = pl_module.spread_skill.calculate_spread_skill(y_pred_denorm, y_denorm, pidx)
 
             # update spread-skill metric state
-            _ = pl_module.spread_skill(rmse, spread)
+            _ = pl_module.spread_skill(rmse, spread, bins_rmse, bins_spread)
 
             # scale loss
             loss *= 1.0 / self.rollout
@@ -194,9 +204,13 @@ class SpreadSkillPlot(PlotCallback):
         assert hasattr(
             pl_module, "spread_skill"
         ), "To use this callback, you must define a `spread_skill` attribute of type SpreadSkill in your Forecaster class!"
-        rmse, spread = (r.cpu().numpy() for r in pl_module.spread_skill.compute())
+        rmse, spread, bins_rmse, bins_spread = (r.cpu().numpy() for r in pl_module.spread_skill.compute())
         fig = plot_spread_skill(self.config.diagnostics.plot.parameters, (rmse, spread), pl_module.spread_skill.time_step)
         self._output_figure(trainer, fig, tag="ens_spread_skill", exp_log_tag=f"val_spread_skill_{pl_module.global_rank}")
+        fig = plot_spread_skill_bins(
+            self.config.diagnostics.plot.parameters, (bins_rmse, bins_spread), pl_module.spread_skill.time_step
+        )
+        self._output_figure(trainer, fig, tag="ens_spread_skill_bins", exp_log_tag=f"val_spread_skill_bins_{pl_module.global_rank}")
         pl_module.ranks.reset()
 
 

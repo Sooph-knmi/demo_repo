@@ -106,7 +106,12 @@ class GraphForecaster(pl.LightningModule):
         self.ranks = RankHistogram(nens=self.nens_per_group, nvar=self.fcdim)
 
         # Spread-skill metric (eval-mode only - see the RolloutEval callback)
-        self.spread_skill = SpreadSkill(rollout=config.diagnostics.eval.rollout, nvar=len(config.diagnostics.plot.parameters))
+        self.spread_skill = SpreadSkill(
+            rollout=config.diagnostics.eval.rollout,
+            nvar=len(config.diagnostics.plot.parameters),
+            nbins=config.diagnostics.eval.nbins,
+            area_weights=self.era_weights,
+        )
 
         self.use_zero_optimizer = config.training.zero_optimizer
 

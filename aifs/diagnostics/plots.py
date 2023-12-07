@@ -448,3 +448,40 @@ def plot_spread_skill(
         ax_.set_xlabel("Lead time [hrs]")
 
     return fig
+
+
+def plot_spread_skill_bins(
+    parameters: Dict[int, str],
+    ss_metric: Tuple[np.ndarray, np.ndarray],
+    time_step: int,
+) -> Figure:
+    nplots = len(parameters)
+    figsize = (nplots * 5, 4)
+    fig, ax = plt.subplots(1, nplots, figsize=figsize)
+
+    assert isinstance(ss_metric, tuple), f"Expected a tuple and got {type(ss_metric)}!"
+    assert len(ss_metric) == 2, f"Expected a 2-tuple and got a {len(ss_metric)}-tuple!"
+    assert (
+        ss_metric[0].shape[1] == nplots
+    ), f"Shape mismatch in the RMSE metric: expected (..., {nplots}) and got {ss_metric[0].shape}!"
+    assert (
+        ss_metric[0].shape == ss_metric[1].shape
+    ), f"RMSE and spread metric shapes do not match! {ss_metric[0].shape} and {ss_metric[1].shape}"
+
+    bins_rmse, bins_spread = ss_metric[0], ss_metric[1]
+    rollout = bins_rmse.shape[0]
+
+    for i, (_, pname) in enumerate(parameters.items()):
+        ax_ = ax[i] if nplots > 1 else ax
+        for j in range(rollout):
+            (line,) = ax_.plot(bins_spread[j, i, :], bins_rmse[j, i, :], "-", label=str((j + 1) * time_step) + " hr")
+            ax_.plot(bins_rmse[j, i, :], bins_rmse[j, i, :], "--", color="black", label="__nolabel__")
+        bins_max = max(np.max(bins_rmse[:, i, :]), np.max(bins_spread[:, i, :]))
+        ax_.set_xlim([0, bins_max])
+        ax_.set_ylim([0, bins_max])
+        ax_.legend()
+        ax_.set_title(f"{pname} spread-skill binned")
+        ax_.set_xlabel("Spread")
+        ax_.set_ylabel("Skill")
+
+    return fig
