@@ -313,18 +313,14 @@ class ProfilerProgressBar(TQDMProgressBar):
     def summarize_metrics(self, config):
         speed_metrics = {}
 
-        n_epochs = config.training.max_epochs
-        n_batches_tr = config.dataloader.limit_batches.training
-        n_batches_val = config.dataloader.limit_batches.validation
-
         batch_size_tr = config.dataloader.batch_size.training
         batch_size_val = config.dataloader.batch_size.validation
 
-        training_rates_array = np.array(self.training_rates).reshape(n_epochs, n_batches_tr)
+        training_rates_array = np.array(self.training_rates)
         speed_metrics["training_avg_speed"] = training_rates_array.mean()
         speed_metrics["training_avg_speed_per_sample"] = training_rates_array.mean() / batch_size_tr
 
-        validation_rates_array = np.array(self.validation_rates).reshape(n_epochs, n_batches_val)
+        validation_rates_array = np.array(self.validation_rates)
         speed_metrics["validation_avg_speed"] = validation_rates_array.mean()
         speed_metrics["validation_avg_speed_per_sample"] = validation_rates_array.mean() / batch_size_val
 

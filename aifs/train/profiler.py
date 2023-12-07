@@ -53,7 +53,7 @@ class AIFSProfiler(AIFSTrainer):
         self.print_report("Time Profiling", time_metrics_df, color="green", emoji="alarm_clock")
         self.print_report("Speed Profiling", speed_metrics_df, color="yellow", emoji="racing_car")
         self.print_report("Memory Profiling", memory_metrics_df, color="purple", emoji="floppy_disk")
-        if wandb_memory_metrics_df:
+        if wandb_memory_metrics_df is not None:
             self.print_report("Wandb Memory Profiling", wandb_memory_metrics_df, color="purple", emoji="desktop_computer")
 
     def write_benchmark_profiler_report(self) -> None:
