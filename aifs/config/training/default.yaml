@@ -56,7 +56,6 @@ rollout:
 
 save_top_k: -1
 
-lead_time: 6
 max_epochs: 200
 lr:
   rate: 0.625e-4
@@ -64,6 +63,7 @@ lr:
   min: 1.5e-7 #Not scaled by #GPU
 
 loss_scaling:
+  default: 1
   pl:
     q: 0.6 #1
     t: 6 #1
@@ -77,11 +77,11 @@ loss_scaling:
     10u: 0.1
     10v: 0.1
     2d: 0.1
+    tp: 0.025
+    cp: 0.025
 
 metrics:
   - z_500
   - t_850
   - u_850
   - v_850
-  - 2t
-  - msl
