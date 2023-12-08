@@ -327,16 +327,18 @@ class InferenceCheckpoint(ModelCheckpoint):
         return trainer.model.module.model if hasattr(trainer.model, "module") else trainer.model.model
 
     def _save_checkpoint(self, trainer: pl.Trainer, filepath: str) -> None:
-        print("Saving inference model ...", trainer.is_global_zero, flush=True)
-        # if not trainer.is_global_zero:
-        #     return
+        if not trainer.is_global_zero:
+            return
 
         # trainer.save_checkpoint(filepath, self.save_weights_only)
 
         model = self._torch_drop_down(trainer)
 
-        save = model.config
+        save_config = model.config
         model.config = None
+
+        save_metadata = model.metadata
+        model.metadata = None
 
         torch.save(model, filepath)
 
@@ -344,10 +346,11 @@ class InferenceCheckpoint(ModelCheckpoint):
             base, _ = os.path.splitext(os.path.basename(filepath))
             zipf.writestr(
                 f"{base}/ai-models.json",
-                json.dumps(model.metadata, indent=4),
+                json.dumps(save_metadata, indent=4),
             )
 
-        model.config = save
+        model.config = save_config
+        model.metadata = save_metadata
 
         self._last_global_step_saved = trainer.global_step
 
