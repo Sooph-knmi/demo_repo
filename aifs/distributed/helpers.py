@@ -141,7 +141,7 @@ def reduce_shard_tensor(input_: Tensor, dim: int, shapes: Tuple, mgroup: Process
     return _ReduceShardParallelSection.apply(input_, dim, shapes, mgroup, use_fp32)
 
 
-def gather_ensemble_members(input_: Tensor, dim: int, shapes: Tuple, nens : int, memspacing : int, mgroup: ProcessGroup, scale_gradients: bool = _SCALE_GRAD_DEFAULT) -> Tensor:
+def gather_ensemble_members(input_: Tensor, dim: int, shapes: Tuple, nens : int, ndevices : int, memspacing : int, mgroup: ProcessGroup, scale_gradients: bool = _SCALE_GRAD_DEFAULT) -> Tensor:
     """Gather ensemble members.
 
     Gather ensemble members and filter out duplicates due to model parallel runs.
@@ -158,6 +158,8 @@ def gather_ensemble_members(input_: Tensor, dim: int, shapes: Tuple, nens : int,
     nens : int
         number of unique ensemble members
         -> ens_comm_group_size * ensemble_size_per_device // model_comm_group_size
+    ndevices : int,
+        number of devices in ensemble group
     memspacing : int,
         spacing of unique members
         -> model_comm_group_size
@@ -170,7 +172,7 @@ def gather_ensemble_members(input_: Tensor, dim: int, shapes: Tuple, nens : int,
     Tensor
     """
 
-    return _GatherEnsembleMembers.apply(input_, dim, shapes, nens, memspacing, scale_gradients, mgroup)
+    return _GatherEnsembleMembers.apply(input_, dim, shapes, nens, ndevices, memspacing, scale_gradients, mgroup)
 
 
 def get_shape_shards(tensor: Tensor, dim: int, mgroup: Optional[ProcessGroup] = None) -> List:
@@ -207,23 +209,24 @@ class _GatherEnsembleMembers(torch.autograd.Function):
     """Gather ensemble members and filter out duplicated members."""
 
     @staticmethod
-    def forward(ctx, input_, dim_, shapes_, nens_, memspacing_, scale_gradients_, mgroup_):
+    def forward(ctx, input_, dim_, shapes_, nens_, ndevice_, memspacing_, scale_gradients_, mgroup_):
         ctx.dim = dim_
         ctx.comm_group = mgroup_
         ctx.shapes = shapes_
         ctx.nens = nens_
+        ctx.ndevice = ndevice_
         ctx.memspacing = memspacing_
         ctx.scale_gradients = scale_gradients_
         if mgroup_:
             out = _gather(input_, dim_, shapes_, group=mgroup_)
-            out = _filter(out, dim_, nens_, memspacing_)
+            out = _filter(out, dim_, nens_, ndevice_, memspacing_)
             return out
         return input_
 
     @staticmethod
     def backward(ctx, grad_output):
         if ctx.comm_group:
-            grad_output = _expand(grad_output, ctx.dim, ctx.nens, ctx.memspacing)
+            grad_output = _expand(grad_output, ctx.dim, ctx.nens, ctx.ndevice, ctx.memspacing)
             grad_output = _split(grad_output, ctx.dim, ctx.shapes, group=ctx.comm_group)
             if ctx.scale_gradients:
                 grad_output = grad_output * ctx.comm_group.size()
@@ -235,8 +238,9 @@ class _GatherEnsembleMembers(torch.autograd.Function):
                 None,
                 None,
                 None,
+                None,
             )
-        return grad_output, None, None, None, None, None, None
+        return grad_output, None, None, None, None, None, None, None
 
 
 class _SyncParallelSection(torch.autograd.Function):
@@ -372,25 +376,29 @@ class _ReduceParallelSection(torch.autograd.Function):
         return grad_output, None, None, None
 
 
-def _filter(input_: Tensor, dim_: int, nens_ : int, memspacing_ : int) -> Tensor:
+def _filter(input_: Tensor, dim_: int, nens_ : int, ndevices_ : int, memspacing_ : int) -> Tensor:
     """Only keep every x member input tensor along dim of members."""
 
-    assert input_.shape[dim_] % nens_ == 0 
+    if memspacing_ == 1:
+        return input_
 
-    # create a list of all members
-    input_list = torch.chunk(input_, input_.shape[dim_], dim=dim_)
+    assert input_.shape[dim_] % ndevices_ == 0 
 
-    # filter out duplicated members
-    output = torch.cat(input_list[::memspacing_], dim=dim_).contiguous(memory_format=get_memory_format(input_))
+    input_list = torch.chunk(input_, ndevices_, dim=dim_)[::memspacing_]
+    output = torch.cat(input_list, dim=dim_).contiguous(memory_format=get_memory_format(input_))
 
     return output
 
 
-def _expand(input_: Tensor, dim_: int, nens_ : int, memspacing_ : int) -> Tensor:
+def _expand(input_: Tensor, dim_: int, nens_ : int, ndevices_ : int, memspacing_ : int) -> Tensor:
     """Copy gradients of members to every (duplicated) member of original input."""
 
-    # create indices to select members -> repeate unique members so we get back the number of original members
-    member_index = [member.repeat(memspacing_) for member in torch.arange(input_.shape[dim_]).chunk(memspacing_)]
+    if memspacing_ == 1:
+        return input_
+
+    assert input_.shape[dim_] % nens_ == 0
+
+    member_index = [member.repeat(memspacing_) for member in torch.arange(input_.shape[dim_]).chunk(input_.shape[dim_] // nens_)]
     member_index = torch.cat(member_index).tolist()
 
     # create output tensor with duplicated members

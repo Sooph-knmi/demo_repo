@@ -186,6 +186,7 @@ def single_step_test(rank, world_size):
             "model.trainable_parameters.hidden2era=2",
             "model.trainable_parameters.hidden2hidden=2",
             "model.num_channels=32",
+            "training.ensemble_size_per_device=3",
         ],
     )
 
@@ -263,12 +264,14 @@ def single_step_test(rank, world_size):
         y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")
         y_pred_ens = y_pred_ens @ gather_mat
 
+        # use autograd function to gather and filter member
         # y_pred_ens = gather_ensemble_members(y_pred, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, 
-        #                                     nens=ens_comm_group_size * cfg_.training.ensemble_size_per_device // model_comm_group.size(),
+        #                                     nens=cfg_.training.ensemble_size_per_device, ndevices=ens_comm_group_size,
         #                                     memspacing=model_comm_group.size(), mgroup=ens_comm_group, scale_gradients=True)
-        # y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")
 
         loss = kcrps(y_pred_ens, y_target, squash=True)
+
+        LOGGER.debug("Rank %d has loss: %.10e", rank, loss)
 
         scaler.scale(loss).backward()
         scaler.step(optimizer)

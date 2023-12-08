@@ -135,5 +135,12 @@ class DDPGroupStrategy(DDPStrategy):
         return comm_group_id, comm_group_nr, comm_group_rank
 
     def register_parameter_hooks(self):
-        """Register parameter hooks for gradient reduction."""
-        pass  # do nothing
+        """Register parameter hooks for gradient reduction.
+
+        Here, we rescale parameters that only see a subset of the input on each rank
+        -> these are still divided by the total number of GPUs in DDP as if each rank would see a full set of inputs
+        note: the trainable parameters are added before the split across GPUs and are therefore not rescaled.
+        """
+        for name, param in self.model.named_parameters():
+            if param.requires_grad is True and "trainable" not in name:
+                param.register_hook(lambda grad: grad * float(self.model_comm_group_size))
