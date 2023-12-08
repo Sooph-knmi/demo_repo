@@ -7,7 +7,7 @@ from torch import nn
 
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__, debug=True)
+LOGGER = get_code_logger(__name__)
 
 
 class InputNormalizer(nn.Module):
@@ -22,6 +22,7 @@ class InputNormalizer(nn.Module):
             Zarr metadata dictionary
         """
         super().__init__()
+        LOGGER.setLevel(config.diagnostics.log.code.level)
 
         default = config.data.normalizer.default
 

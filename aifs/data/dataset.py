@@ -12,8 +12,7 @@ from torch.utils.data import IterableDataset
 
 from aifs.utils.logger import get_code_logger
 
-
-LOGGER = get_code_logger(__name__, debug=False)
+LOGGER = get_code_logger(__name__)
 
 
 class NativeGridDataset(IterableDataset):
