@@ -243,8 +243,7 @@ class GraphMSG(nn.Module):
         )
 
     def _generate_noise(self, noise_ref: torch.Tensor, noise_dim : Tuple, shapes : list, inject_noise : bool, model_comm_group: ProcessGroup) -> torch.Tensor:
-        """Expand edge index correct number of times while adding the proper number to
-        the edge index.
+        """Generate Noies Tensor.
 
         Parameters
         ----------
