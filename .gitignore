@@ -159,3 +159,11 @@ scratch
 # hydra outputs
 outputs/
 .hydra/
+
+?.*
+plots/
+checkpoint/
+*.ckpt
+*.swp
+?
+*.grib
