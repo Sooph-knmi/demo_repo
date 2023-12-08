@@ -1,5 +1,5 @@
 defaults:
-  - hardware: leo_slurm
+  - hardware: atos_slurm
   - data: zarr
   - dataloader: default
   - model: gnn
@@ -15,14 +15,17 @@ defaults:
 
 hardware:
   paths:
-    training: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
-    validation: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
+    training:
+      an: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
+    validation:
+      an: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}
   files:
-    training: panguweather-${data.resolution}-1979-2015-6h.zarr
-    validation: panguweather-${data.resolution}-2016-2017-6h.zarr
-    graph: graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4_5.pt
-    checkpoint: aifs-ens-h5-512-rollout_{rollout:.0f}_epoch_{epoch:03d}-train_kcrps_{train_kcrps_epoch:.3e}
-    warm_start: aifs-ens-h5-512-epoch_021-train_kcrps_2.435e+00.ckpt
+    training:
+      an: panguweather-${data.resolution}-1979-2015-6h.zarr
+    validation:
+      an: panguweather-${data.resolution}-2016-2017-6h.zarr
+    graph: graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4.pt
+    checkpoint: aifs-ens-h4-512-rollout{rollout:.0f}-epoch_{epoch:03d}-train_kcrps_{train_kcrps_epoch:.3e}
   group_size: 4
 
 model:
@@ -30,34 +33,33 @@ model:
 
 dataloader:
   batch_size:
-    training: 1
+    training: 2
     validation: 1
   limit_batches:
-    training: 4000
+    training: 5000
     validation: null
 
 training:
-  run_id: null
-  fork_run_id: 1720475f-314f-4412-9f56-715f448451ac
-  max_epochs: 50
-
+  accum_grad_batches: 2
+  max_epochs: 100
   rollout:
-    start: 2
-    epoch_increment: 1
-    max: 8
+    start: 1
+    epoch_increment: 0
+    max: 1
   ensemble_size: 2
   lr:
-    rate: 0.125e-5
-    iterations: 100000
+    rate: 0.425e-4
+    iterations: 300000
     min: 1.5e-7
   loss_scaling:
     pl:
       q: 0.6
-      t: 12
+      t: 10
       u: 0.8
       v: 0.5
       w: 0.001
       z: 8
+  loss: 'kcrps'
 
 diagnostics:
   eval:

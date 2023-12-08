@@ -1,7 +1,13 @@
-training: /leonardo_scratch/large/userexternal/malexe00/aifs-input/${data.resolution}
-validation: /leonardo_scratch/large/userexternal/malexe00/aifs-input/${data.resolution}
+training: 
+  an: /leonardo_scratch/large/userexternal/malexe00/aifs-input/${data.resolution}
+  eda: null
+validation: 
+  an: /leonardo_scratch/large/userexternal/malexe00/aifs-input/${data.resolution}
+  eda: null
 output: ${oc.env:SCRATCH}/aifs-output/${data.resolution}/
-logs: ${hardware.paths.output}/logs
+logs:
+  wandb: ${hardware.paths.output}/logs/wandb
+  tensorboard: ${hardware.paths.output}/logs/tensorboard
 checkpoints: ${hardware.paths.output}/checkpoint
 plots: ${hardware.paths.output}/plots
 graph: /leonardo_scratch/large/userexternal/malexe00/aifs-graphs

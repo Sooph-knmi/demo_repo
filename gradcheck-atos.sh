@@ -2,13 +2,13 @@
 
 #SBATCH --account=ecaifs
 #SBATCH --qos=ng
-#SBATCH --time=00:15:00
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=4
+#SBATCH --time=00:10:00
+#SBATCH --nodes=3
+#SBATCH --ntasks-per-node=3
+#SBATCH --gpus-per-node=
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --output=gradtest.out.%j
+#SBATCH --output=gradcheck.out.%j
 
 # debugging flags (optional)
 # export NCCL_DEBUG=INFO
@@ -18,15 +18,14 @@ export HYDRA_FULL_ERROR=1
 # export TORCH_CPP_LOG_LEVEL=INFO
 # export TORCH_DISTRIBUTED_DEBUG=DETAIL
 # export CUDA_LAUNCH_BLOCKING=1
-export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
 # on your cluster you might need these:
 # set the network interface
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-# export WANDB_NAME="gradtest"
-# export WANDB_NOTES="Gradteset"
+# export WANDB_NAME="gradcheck"
+# export WANDB_NOTES="Gradcheck"
 
 # generic settings
 CONDA_ENV=aifs_dev
@@ -36,4 +35,4 @@ WORKDIR=$GITDIR
 cd $WORKDIR
 module load conda
 conda activate $CONDA_ENV
-aifs-ens-gradtest
+srun aifs-ens-gradcheck hardware=atos_slurm --config-name=gradcheck

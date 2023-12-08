@@ -3,6 +3,7 @@ eval:
   # use this to evaluate the model over longer rollouts, every so many validation batches
   rollout: 12
   frequency: 5
+  nbins: 101
 plot:
   enabled: True
   frequency: 750
@@ -28,6 +29,11 @@ debug:
 # activate the pytorch profiler (disable this in production)
 # remember to also activate the tensorboard logger (below)
 profiler: False
+
+checkpoint:
+  every_n_minutes: 15 # Approximate, as this is checked at the end of training steps
+  every_n_epochs: 1
+  every_n_train_steps: 1000 # Does not scale with rollout
 
 log:
   wandb:
