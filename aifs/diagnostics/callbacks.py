@@ -1,9 +1,13 @@
+import json
+import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
+from zipfile import ZipFile
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -101,22 +105,28 @@ class RolloutEval(Callback):
         metrics = {}
 
         # start rollout
-        x = batch[:, 0 : pl_module.multi_step, ...]  # (bs, multi_step, latlon, nvar)
+        x = batch[:, 0 : pl_module.multi_step, ..., pl_module.data_indices.data.input.full]  # (bs, multi_step, latlon, nvar)
         assert batch.shape[1] >= self.rollout + pl_module.multi_step, "Batch length not sufficient for requested rollout length!"
 
         with torch.no_grad():
             for rstep in range(self.rollout):
                 y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
-                y = batch[:, pl_module.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
+                y = batch[
+                    :, pl_module.multi_step + rstep, ..., pl_module.data_indices.data.output.full
+                ]  # target, shape = (bs, latlon, nvar)
                 # y includes the auxiliary variables, so we must leave those out when computing the loss
-                loss += pl_module.loss(y_pred, y[..., : pl_module.fcdim])
+                loss += pl_module.loss(y_pred, y)
 
-                x = pl_module.advance_input(x, y, y_pred)
+                x = pl_module.advance_input(batch, y_pred)
 
-                for mkey, (low, high) in pl_module.metric_ranges.items():
-                    y_denorm = pl_module.model.normalizer.denormalize(y, in_place=False)
-                    y_pred_denorm = pl_module.model.normalizer.denormalize(x[:, -1, ...], in_place=False)
-                    metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
+                y_denorm = pl_module.model.normalizer.denormalize(
+                    y, in_place=False, data_index=pl_module.data_indices.data.output.full
+                )
+                y_pred_denorm = pl_module.model.normalizer.denormalize(
+                    x[:, -1, ...], in_place=False, data_index=pl_module.data_indices.data.output.full
+                )
+                for mkey, indices in pl_module.metric_ranges.items():
+                    metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
 
             # scale loss
             loss *= 1.0 / self.rollout
@@ -160,7 +170,7 @@ class RolloutEval(Callback):
             self._eval(pl_module, batch)
 
 
-class GraphTrainableFeaturesPlot(AsyncPlotCallback):
+class GraphTrainableFeaturesPlot(PlotCallback):
     """Visualize the trainable features defined at the ERA and H graph nodes, if any.
 
     TODO: How best to visualize the learned edge embeddings? Offline, perhaps - using code from @Simon's notebook?
@@ -185,14 +195,13 @@ class GraphTrainableFeaturesPlot(AsyncPlotCallback):
     def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         if pl_module.global_rank == 0:
             model = pl_module.model.module.model if hasattr(pl_module.model, "module") else pl_module.model.model
-            graph = pl_module.graph_data
+            graph = pl_module.graph_data.cpu()
             epoch = trainer.current_epoch
 
             if model.era_trainable is not None:
                 ecoords = np.rad2deg(graph[("era", "to", "era")].ecoords_rad.numpy())
 
-                self._executor.submit(
-                    self._plot,
+                self._plot(
                     trainer,
                     ecoords,
                     model.era_trainable.cpu(),
@@ -203,12 +212,10 @@ class GraphTrainableFeaturesPlot(AsyncPlotCallback):
 
             if model.h_trainable is not None:
                 hcoords = np.rad2deg(graph[("h", "to", "h")].hcoords_rad.numpy())
-                self._executor.submit(
-                    self._plot, trainer, hcoords, model.h_trainable.cpu(), epoch=epoch, tag="h_trainable", exp_log_tag="h_trainable"
-                )
+                self._plot(trainer, hcoords, model.h_trainable.cpu(), epoch=epoch, tag="h_trainable", exp_log_tag="h_trainable")
 
 
-class PlotLoss(AsyncPlotCallback):
+class PlotLoss(PlotCallback):
     """Plots the unsqueezed loss over rollouts."""
 
     def __init__(self, config):
@@ -225,7 +232,7 @@ class PlotLoss(AsyncPlotCallback):
     ) -> None:
         for rollout_step in range(pl_module.rollout):
             y_hat = outputs[1][rollout_step]
-            y_true = batch[:, pl_module.multi_step + rollout_step, :, : pl_module.fcdim]
+            y_true = batch[:, pl_module.multi_step + rollout_step, :, pl_module.data_indices.data.output.full]
             loss = pl_module.loss(y_hat, y_true, squash=False).cpu().numpy()
 
             fig = plot_loss(loss)
@@ -239,12 +246,10 @@ class PlotLoss(AsyncPlotCallback):
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
-            self._executor.submit(self._plot, trainer, pl_module, outputs, batch, epoch=trainer.current_epoch)
-            if self._error:
-                raise self._error
+            self._plot(trainer, pl_module, outputs, batch, epoch=trainer.current_epoch)
 
 
-class PlotSample(AsyncPlotCallback):
+class PlotSample(PlotCallback):
     """Plots a denormalized sample: input, target and prediction."""
 
     def __init__(self, config):
@@ -261,23 +266,39 @@ class PlotSample(AsyncPlotCallback):
         batch_idx,
         epoch,
     ) -> None:
+        # Build dictionary of inidicies and parameters to be plotted
+        plot_parameters_dict = {
+            pl_module.data_indices.model.output.name_to_index[name]: (name, name not in self.config.data.diagnostic)
+            for name in self.config.diagnostics.plot.parameters
+        }
+
         data = (
             pl_module.model.normalizer.denormalize(
-                batch[self.sample_idx, pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1, ...], in_place=False
+                batch[
+                    self.sample_idx,
+                    pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1,
+                    ...,
+                    pl_module.data_indices.data.output.full,
+                ],
+                in_place=False,
+                data_index=pl_module.data_indices.data.output.full,
             )
             .cpu()
             .numpy()
         )
 
+        latlons = np.rad2deg(pl_module.data_latlons.cpu().numpy())
         for rollout_step in range(pl_module.rollout):
             fig = plot_predicted_multilevel_flat_sample(
-                self.config.diagnostics.plot.parameters,
+                plot_parameters_dict,
                 self.config.diagnostics.plot.per_sample,
-                np.rad2deg(pl_module.era_latlons.numpy()),
-                data[0, ..., : pl_module.fcdim].squeeze(),
-                data[rollout_step + 1, ..., : pl_module.fcdim].squeeze(),
+                latlons,
+                data[0, ...].squeeze(),
+                data[rollout_step + 1, ...].squeeze(),
                 pl_module.model.normalizer.denormalize(
-                    outputs[1][rollout_step][self.sample_idx, ..., : pl_module.fcdim], in_place=False
+                    outputs[1][rollout_step][self.sample_idx, ...],
+                    in_place=False,
+                    data_index=pl_module.data_indices.data.output.full,
                 )
                 .squeeze()
                 .cpu()
@@ -294,10 +315,7 @@ class PlotSample(AsyncPlotCallback):
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
-            self._executor.submit(self._plot, trainer, pl_module, outputs, batch, batch_idx, epoch=trainer.current_epoch)
-
-            if self._error:
-                raise self._error
+            self._plot(trainer, pl_module, outputs, batch, batch_idx, epoch=trainer.current_epoch)
 
 
 class InferenceCheckpoint(ModelCheckpoint):
@@ -308,28 +326,35 @@ class InferenceCheckpoint(ModelCheckpoint):
         self.config = config
 
     def _torch_drop_down(self, trainer: pl.Trainer) -> torch.nn.Module:
-        # Get the model from the DataParallel wrapper
+        # Get the model from the DataParallel wrapper, for single and multi-gpu cases
+        assert hasattr(trainer, "model"), "Trainer has no attribute 'model'! Is the Pytorch Lightning version correct?"
         return trainer.model.module.model if hasattr(trainer.model, "module") else trainer.model.model
 
-    def _sanitise_checkpoints(self, model) -> None:
-        # Delete paths from checkpoint
-        for path in model.config.hardware.paths.keys():
-            model.config.hardware.paths[path] = "/"
-        # Delete filenames from checkpoint
-        for file in model.config.hardware.files.keys():
-            model.config.hardware.files[file] = "/"
-        # Disable logging and plotting
-        model.config.diagnostics.plot.enabled = False
-        model.config.diagnostics.log.wandb.enabled = False
-        return model
-
     def _save_checkpoint(self, trainer: pl.Trainer, filepath: str) -> None:
+        if not trainer.is_global_zero:
+            return
+
         # trainer.save_checkpoint(filepath, self.save_weights_only)
 
         model = self._torch_drop_down(trainer)
-        model = self._sanitise_checkpoints(model)
+
+        save_config = model.config
+        model.config = None
+
+        save_metadata = model.metadata
+        model.metadata = None
 
         torch.save(model, filepath)
+
+        with ZipFile(filepath, "a") as zipf:
+            base, _ = os.path.splitext(os.path.basename(filepath))
+            zipf.writestr(
+                f"{base}/ai-models.json",
+                json.dumps(save_metadata, indent=4),
+            )
+
+        model.config = save_config
+        model.metadata = save_metadata
 
         self._last_global_step_saved = trainer.global_step
 
@@ -358,36 +383,50 @@ def get_callbacks(config: DictConfig) -> List:
     LOGGER.setLevel(config.diagnostics.log.code.level)
 
     checkpoint_settings = dict(
-        monitor="val_wmse",
+        dirpath=config.hardware.paths.checkpoints,
         verbose=False,
-        save_top_k=config.training.save_top_k,
         # save weights, optimizer states, LR-schedule states, hyperparameters etc.
         # https://pytorch-lightning.readthedocs.io/en/stable/common/checkpointing_basic.html#contents-of-a-checkpoint
         save_weights_only=False,
-        mode="min",
         auto_insert_metric_name=False,
         # save after every validation epoch, if we've improved
         save_on_train_epoch_end=False,
-        every_n_epochs=1,
+        enable_version_counter=False,
     )
+
+    ckpt_frequency_save_dict = {}
+    for key, frequency in config.diagnostics.checkpoint.items():
+        if key == "every_n_minutes":
+            target = "train_time_interval"
+            frequency = timedelta(minutes=frequency)
+        else:
+            target = key
+        ckpt_frequency_save_dict[target] = (config.hardware.files.checkpoint[key], frequency)
 
     trainer_callbacks = []
     if not config.diagnostics.profiler:
-        trainer_callbacks = [
-            ModelCheckpoint(
-                dirpath=config.hardware.paths.checkpoints,
-                filename=config.hardware.files.checkpoint,
-                save_last=True,
-                **checkpoint_settings,
-            ),
-            InferenceCheckpoint(
-                config=config,
-                dirpath=config.hardware.paths.checkpoints,
-                filename="inference-" + config.hardware.files.checkpoint,
-                save_last=False,
-                **checkpoint_settings,
-            ),
-        ]
+        for save_key, (name, save_frequency) in ckpt_frequency_save_dict.items():
+            if save_frequency is not None:
+                LOGGER.debug("Checkpoint callback at %s = %s ...", save_key, save_frequency)
+                trainer_callbacks.extend(
+                    [
+                        ModelCheckpoint(
+                            filename=name,
+                            save_last=True,
+                            **{save_key: save_frequency},
+                            **checkpoint_settings,
+                        ),
+                        InferenceCheckpoint(
+                            config=config,
+                            filename="inference-" + name,
+                            save_last=False,
+                            **{save_key: save_frequency},
+                            **checkpoint_settings,
+                        ),
+                    ]
+                )
+            else:
+                LOGGER.debug("Not setting up a checkpoint callback with %s", save_key)
     else:
         # the tensorboard logger + pytorch profiler cause pickling errors when writing checkpoints
         LOGGER.warning("Profiling is enabled - AIFS will not write any training or inference model checkpoints!")

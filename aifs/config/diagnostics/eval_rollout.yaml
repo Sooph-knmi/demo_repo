@@ -9,15 +9,16 @@ plot:
   sample_idx: 0
   per_sample: 6
   parameters:
-    10: q_850
-    23: t_850
-    36: u_850
-    49: v_850
-    75: z_850
-    83: 2t
-    81: 10u
-    82: 10v
-    79: msl
+    - z_500
+    - t_850
+    - u_850
+    - v_850
+    - 2t
+    - 10u
+    - 10v
+    - sp
+    - tp
+    - sd
   learned_features: True
 
 debug:
@@ -27,6 +28,11 @@ debug:
 # activate the pytorch profiler (disable this in production)
 # remember to also activate the tensorboard logger (below)
 profiler: False
+
+checkpoint:
+  every_n_minutes: 15 # Approximate, as this is checked at the end of training steps
+  every_n_epochs: 1
+  every_n_train_steps: 1000 # Does not scale with rollout
 
 log:
   wandb:

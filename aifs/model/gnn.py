@@ -27,8 +27,10 @@ class GraphMSG(nn.Module):
 
     def __init__(
         self,
+        *,
         config: DotConfig,
-        graph_data: HeteroData = None,
+        data_indices: dict,
+        graph_data: HeteroData,
     ) -> None:
         """Initializes the graph neural network.
 
@@ -36,27 +38,36 @@ class GraphMSG(nn.Module):
         ----------
         config : DictConfig
             Job configuration
-        graph_data : HeteroData, optional
-            Graph definition, by default None
+        graph_data : HeteroData
+            Graph definition
         """
         super().__init__()
 
         self._graph_data = graph_data
 
-        self.in_channels = config.data.num_features - config.data.num_aux_features
+        # Calculate shapes and indices
+        self.num_input_channels = len(data_indices.model.input)
+        self.num_output_channels = len(data_indices.model.output)
+        self._internal_input_idx = data_indices.model.input.prognostic
+        self._internal_output_idx = data_indices.model.output.prognostic
+
+        assert len(self._internal_output_idx) == len(data_indices.model.output.full) - len(data_indices.model.output.diagnostic), (
+            f"Mismatch between the internal data indices ({len(self._internal_output_idx)}) and the output indices excluding "
+            f"diagnostic variables ({len(data_indices.model.output.full)-len(data_indices.model.output.diagnostic)})",
+        )
+        assert len(self._internal_input_idx) == len(
+            self._internal_output_idx
+        ), f"Model indices must match {self._internal_input_idx} != {self._internal_output_idx}"
+
         self.multi_step = config.training.multistep_input
-        self.aux_in_channels = config.data.num_aux_features
-
-        LOGGER.debug("self.in_channels + self.aux_channels == %d", self.in_channels + self.aux_in_channels)
-
         self.activation = config.model.activation
 
         # Create Graph edges
         self._create_edges()
 
         # Define Sizes of different tensors
-        self._era_size = self._graph_data[("era", "to", "era")].ecoords_rad.shape[0]
-        self._h_size = self._graph_data[("h", "to", "h")].hcoords_rad.shape[0]
+        self._data_grid_size = self._graph_data[("era", "to", "era")].ecoords_rad.shape[0]
+        self._hidden_grid_size = self._graph_data[("h", "to", "h")].hcoords_rad.shape[0]
 
         self.era_trainable_size = config.model.trainable_parameters.era
         self.h_trainable_size = config.model.trainable_parameters.hidden
@@ -68,9 +79,9 @@ class GraphMSG(nn.Module):
         self._create_trainable_attr()
 
         # Register edge increments
-        self._register_edge_inc("e2h", self._era_size, self._h_size)
-        self._register_edge_inc("h2e", self._h_size, self._era_size)
-        self._register_edge_inc("h2h", self._h_size, self._h_size)
+        self._register_edge_inc("e2h", self._data_grid_size, self._hidden_grid_size)
+        self._register_edge_inc("h2e", self._hidden_grid_size, self._data_grid_size)
+        self._register_edge_inc("h2h", self._hidden_grid_size, self._hidden_grid_size)
 
         # Register lat/lon
         self._register_latlon("era")
@@ -81,9 +92,7 @@ class GraphMSG(nn.Module):
 
         # Encoder from ERA -> H
         self.forward_mapper = GNNMapper(
-            in_channels_src=self.multi_step * (self.in_channels + self.aux_in_channels)
-            + self.era_latlons.shape[1]
-            + self.era_trainable_size,
+            in_channels_src=self.multi_step * self.num_input_channels + self.era_latlons.shape[1] + self.era_trainable_size,
             in_channels_dst=self.h_latlons.shape[1] + self.h_trainable_size,
             hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
@@ -106,7 +115,7 @@ class GraphMSG(nn.Module):
         self.backward_mapper = GNNMapper(
             in_channels_src=self.num_channels,
             in_channels_dst=self.num_channels,
-            out_channels_dst=self.in_channels,
+            out_channels_dst=self.num_output_channels,
             hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
@@ -127,8 +136,8 @@ class GraphMSG(nn.Module):
             f"{name}_latlons",
             torch.cat(
                 [
-                    torch.as_tensor(np.sin(self._graph_data[(name, "to", name)][f"{name[:1]}coords_rad"])),
-                    torch.as_tensor(np.cos(self._graph_data[(name, "to", name)][f"{name[:1]}coords_rad"])),
+                    torch.sin(self._graph_data[(name, "to", name)][f"{name[:1]}coords_rad"]),
+                    torch.cos(self._graph_data[(name, "to", name)][f"{name[:1]}coords_rad"]),
                 ],
                 dim=-1,
             ),
@@ -160,8 +169,8 @@ class GraphMSG(nn.Module):
 
     def _create_trainable_attr(self) -> None:
         """Create all trainable attributes."""
-        self.era_trainable = self._create_trainable_tensor(tensor_size=self._era_size, trainable_size=self.era_trainable_size)
-        self.h_trainable = self._create_trainable_tensor(tensor_size=self._h_size, trainable_size=self.h_trainable_size)
+        self.era_trainable = self._create_trainable_tensor(tensor_size=self._data_grid_size, trainable_size=self.era_trainable_size)
+        self.h_trainable = self._create_trainable_tensor(tensor_size=self._hidden_grid_size, trainable_size=self.h_trainable_size)
         self.e2h_trainable = self._create_trainable_tensor(graph=("era", "h"), trainable_size=self.e2h_trainable_size)
         self.h2e_trainable = self._create_trainable_tensor(graph=("h", "era"), trainable_size=self.h2e_trainable_size)
         self.h2h_trainable = self._create_trainable_tensor(graph=("h", "h"), trainable_size=self.h2h_trainable_size)
@@ -272,7 +281,7 @@ class GraphMSG(nn.Module):
         edge_attr : torch.Tensor
             Trainable edge attribute tensor
         shape_nodes: Tuple[List, List]
-            Shapes of input fileds the task holds when running with multiple GPUs
+            Shapes of input fields the task holds when running with multiple GPUs
         size: Size
             Number of source and target nodes of bipartite graph
         model_comm_group : ProcessGroup
@@ -355,7 +364,8 @@ class GraphMSG(nn.Module):
             model_comm_group=model_comm_group,
         )
 
-        x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=self.batch_size)
+        x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=self.batch_size).to(dtype=x.dtype).clone()
 
-        # residual connection (just for the predicted variables)
-        return x_out + x[:, -1, :, : self.in_channels]
+        # residual connection (just for the prognostic variables)
+        x_out[..., self._internal_output_idx] += x[:, -1, :, self._internal_input_idx]
+        return x_out
