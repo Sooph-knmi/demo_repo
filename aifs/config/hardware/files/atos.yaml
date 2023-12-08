@@ -1,4 +1,7 @@
 dataset: aifs-ea-an-oper-0001-mars-${data.resolution}-1979-2022-1h-v4.zarr
 graph: graph_mappings_normed_edge_attrs_2023062700_${data.resolution}_h_0_1_2_3_4_5.pt
-checkpoint: aifs-ckpt-epoch_{epoch:03d}-val_wmse_{val_wmse:.3e}
+checkpoint:
+  every_n_epochs: aifs-by_epoch-epoch_{epoch:03d}-val_wmse_{val_wmse:.3e}
+  every_n_train_steps: aifs-by_step-epoch_{epoch:03d}
+  every_n_minutes: aifs-by_time-epoch_{epoch:03d}-step_{step:06d}
 warm_start: null

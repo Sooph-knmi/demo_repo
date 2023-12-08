@@ -1,6 +1,7 @@
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from typing import Dict
@@ -377,36 +378,50 @@ def get_callbacks(config: DictConfig) -> List:
     """
 
     checkpoint_settings = dict(
-        monitor="val_wmse",
+        dirpath=config.hardware.paths.checkpoints,
         verbose=False,
-        save_top_k=config.training.save_top_k,
         # save weights, optimizer states, LR-schedule states, hyperparameters etc.
         # https://pytorch-lightning.readthedocs.io/en/stable/common/checkpointing_basic.html#contents-of-a-checkpoint
         save_weights_only=False,
-        mode="min",
         auto_insert_metric_name=False,
         # save after every validation epoch, if we've improved
         save_on_train_epoch_end=False,
-        every_n_epochs=1,
+        enable_version_counter=False,
     )
+
+    ckpt_frequency_save_dict = {}
+    for key, frequency in config.diagnostics.checkpoint.items():
+        if key == "every_n_minutes":
+            target = "train_time_interval"
+            frequency = timedelta(minutes=frequency)
+        else:
+            target = key
+        ckpt_frequency_save_dict[target] = (config.hardware.files.checkpoint[key], frequency)
 
     trainer_callbacks = []
     if not config.diagnostics.profiler:
-        trainer_callbacks = [
-            ModelCheckpoint(
-                dirpath=config.hardware.paths.checkpoints,
-                filename=config.hardware.files.checkpoint,
-                save_last=True,
-                **checkpoint_settings,
-            ),
-            InferenceCheckpoint(
-                config=config,
-                dirpath=config.hardware.paths.checkpoints,
-                filename="inference-" + config.hardware.files.checkpoint,
-                save_last=False,
-                **checkpoint_settings,
-            ),
-        ]
+        for save_key, (name, save_frequency) in ckpt_frequency_save_dict.items():
+            if save_frequency is not None:
+                LOGGER.debug("Checkpoint callback at %s = %s ...", save_key, save_frequency)
+                trainer_callbacks.extend(
+                    [
+                        ModelCheckpoint(
+                            filename=name,
+                            save_last=True,
+                            **{save_key: save_frequency},
+                            **checkpoint_settings,
+                        ),
+                        InferenceCheckpoint(
+                            config=config,
+                            filename="inference-" + name,
+                            save_last=False,
+                            **{save_key: save_frequency},
+                            **checkpoint_settings,
+                        ),
+                    ]
+                )
+            else:
+                LOGGER.debug("Not setting up a checkpoint callback with %s", save_key)
     else:
         # the tensorboard logger + pytorch profiler cause pickling errors when writing checkpoints
         LOGGER.warning("Profiling is enabled - AIFS will not write any training or inference model checkpoints!")
