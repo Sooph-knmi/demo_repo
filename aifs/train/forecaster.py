@@ -180,9 +180,9 @@ class GraphForecaster(pl.LightningModule):
 
             if validation_mode:
                 y_denorm = self.model.normalizer.denormalize(y, in_place=False)
-                y_hat_denorm = self.model.normalizer.denormalize(x[:, -1, ..., self.data_indices.data.output.full], in_place=False)
+                y_pred_denorm = self.model.normalizer.denormalize(y_pred, in_place=False)
                 for mkey, indices in self.metric_ranges.items():
-                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., indices], y_denorm[..., indices])
+                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
 
                 if self.enable_plot:
                     y_preds.append(y_pred.detach())
