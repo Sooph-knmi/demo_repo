@@ -16,6 +16,7 @@ processor:
   num_layers: 8
   num_noise_channels: 4
   chunks: 2
+  inject_noise: True
 
 # choose rate of dropout of edges
 edge_dropout:
@@ -27,6 +28,3 @@ trainable_parameters:
   era2hidden: 8
   hidden2era: 8
   hidden2hidden: 8
-
-logging:
-  debug: True

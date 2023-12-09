@@ -201,17 +201,25 @@ class SpreadSkillPlot(PlotCallback):
         super().__init__(config)
 
     def on_validation_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
-        assert hasattr(
-            pl_module, "spread_skill"
-        ), "To use this callback, you must define a `spread_skill` attribute of type SpreadSkill in your Forecaster class!"
-        rmse, spread, bins_rmse, bins_spread = (r.cpu().numpy() for r in pl_module.spread_skill.compute())
-        fig = plot_spread_skill(self.config.diagnostics.plot.parameters, (rmse, spread), pl_module.spread_skill.time_step)
-        self._output_figure(trainer, fig, tag="ens_spread_skill", exp_log_tag=f"val_spread_skill_{pl_module.global_rank}")
-        fig = plot_spread_skill_bins(
-            self.config.diagnostics.plot.parameters, (bins_rmse, bins_spread), pl_module.spread_skill.time_step
-        )
-        self._output_figure(trainer, fig, tag="ens_spread_skill_bins", exp_log_tag=f"val_spread_skill_bins_{pl_module.global_rank}")
-        pl_module.ranks.reset()
+        if (
+            self.config.training.ensemble_size_per_device
+            * self.config.hardware.num_gpus_per_ensemble
+            / self.config.hardware.num_gpus_per_model
+            > 1
+        ):
+            assert hasattr(
+                pl_module, "spread_skill"
+            ), "To use this callback, you must define a `spread_skill` attribute of type SpreadSkill in your Forecaster class!"
+            rmse, spread, bins_rmse, bins_spread = (r.cpu().numpy() for r in pl_module.spread_skill.compute())
+            fig = plot_spread_skill(self.config.diagnostics.plot.parameters, (rmse, spread), pl_module.spread_skill.time_step)
+            self._output_figure(trainer, fig, tag="ens_spread_skill", exp_log_tag=f"val_spread_skill_{pl_module.global_rank}")
+            fig = plot_spread_skill_bins(
+                self.config.diagnostics.plot.parameters, (bins_rmse, bins_spread), pl_module.spread_skill.time_step
+            )
+            self._output_figure(
+                trainer, fig, tag="ens_spread_skill_bins", exp_log_tag=f"val_spread_skill_bins_{pl_module.global_rank}"
+            )
+            pl_module.ranks.reset()
 
 
 class KCRPSMapPlot(PlotCallback):

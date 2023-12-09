@@ -40,6 +40,7 @@ class KernelCRPS(nn.Module):
         mae = torch.mean(torch.abs(targets[..., None] - preds), dim=-1)
 
         if ens_size == 1:
+            # mse = torch.square(targets[..., None] - preds)[:, :, :, 0]
             return mae
 
         if fair:

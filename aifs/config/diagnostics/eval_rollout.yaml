@@ -46,3 +46,5 @@ log:
   tensorboard:
     enabled: False
   interval: 100
+  code:
+    level: "CRITICAL"

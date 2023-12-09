@@ -3,12 +3,12 @@
 #SBATCH --account=ecaifs
 #SBATCH --qos=ng
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=4
+#SBATCH --ntasks-per-node=2
+#SBATCH --gpus-per-node=2
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
-#SBATCH --time=00:15:00
-#SBATCH --output=new-ens-test-h4-atos.out.%j
+#SBATCH --mem=64G
+#SBATCH --time=48:00:00
+#SBATCH --output=ens-test-h4-atos.out.%j
 
 # debugging flags (optional)
 # export NCCL_DEBUG=INFO
@@ -24,17 +24,17 @@ export HYDRA_FULL_ERROR=1
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="ens-kcrps-mpar-test-atos"
-export WANDB_NOTES="KCRPS ensemble - quick test on Atos"
+export WANDB_NAME="ens 4"
+export WANDB_NOTES="ens 4"
 
 # generic settings
-VENV=aifs-ens-score
-GITDIR=/home/$USER/AIFS/aifs-ens-score/aifs-mono
+CONDA_ENV=aifs_dev
+GITDIR=/home/momc/AIFS/aifs-mono
 WORKDIR=$GITDIR
 
 cd $WORKDIR
+module load conda
+conda activate $CONDA_ENV
 
-module load python3/may23
-source /perm/$USER/venvs/shared/$VENV/bin/activate
-
+wandb online
 srun aifs-ens-train hardware=atos_slurm --config-name=ens-kcrps-h4

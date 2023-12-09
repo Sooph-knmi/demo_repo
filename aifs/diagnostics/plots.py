@@ -190,7 +190,6 @@ def scatter_plot(
     title : _type_, optional
         Title for plot, by default None
     """
-
     psc = ax.scatter(
         *pc(lon, lat),
         c=data,
@@ -247,7 +246,11 @@ def plot_predicted_ensemble(
     Returns:
         The figure object handle.
     """
-    nens = y_pred.shape[0]
+    if len(y_pred.shape) == 3:
+        nens = y_pred.shape[0]
+    else:
+        nens = 1
+
     n_plots_x, n_plots_y = len(parameters), nens + 4  # we also plot the truth, ensemble mean, mean error and spread
     LOGGER.debug("n_plots_x = %d, n_plots_y = %d", n_plots_x, n_plots_y)
 
@@ -326,8 +329,13 @@ def plot_ensemble(
     Gaussian) grids."""
 
     lat, lon = latlons[:, 0], latlons[:, 1]
-    nens = pred.shape[ens_dim]
-    ens_mean, ens_sd = pred.mean(axis=ens_dim), pred.std(axis=ens_dim)
+    if len(pred.shape) == 2:
+        nens = pred.shape[ens_dim]
+        ens_mean, ens_sd = pred.mean(axis=ens_dim), pred.std(axis=ens_dim)
+    else:
+        nens = 1
+        ens_mean = pred
+        ens_sd = np.zeros(pred.shape)
 
     LOGGER.debug("latlons.shape = %s truth.shape = %s pred.shape = %s", latlons.shape, truth.shape, pred.shape)
 
