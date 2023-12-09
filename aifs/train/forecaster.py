@@ -287,7 +287,7 @@ class GraphForecaster(pl.LightningModule):
         LOGGER.debug("after pruning y_pred_ens.shape == %s", y_pred_ens.shape)
 
         # step 3/ compute the loss (one member per model group)
-        loss_inc = checkpoint(self._compute_loss, y_pred_ens, y[..., : self.fcdim], use_reentrant=False)
+        loss_inc = self._compute_loss(y_pred_ens, y[..., : self.fcdim])
 
         # during validation, we also return the pruned ensemble (from step 2) so we can run diagnostics
         # an explicit cast is needed when running in mixed precision (i.e. with y_pred_ens.dtype == torch.(b)float16)
@@ -384,7 +384,7 @@ class GraphForecaster(pl.LightningModule):
         for rstep in range(self.rollout):
             y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
             y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
-            loss_rstep, y_pred_group = self.gather_and_compute_loss(y_pred, y, validation_mode=validation_mode)
+            loss_rstep, y_pred_group = checkpoint(self.gather_and_compute_loss, y_pred, y, validation_mode=validation_mode, use_reentrant=False)
             loss += loss_rstep
 
             x = self.advance_input(x, y, y_pred)
