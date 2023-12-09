@@ -18,9 +18,8 @@ from torch_geometric.utils import scatter
 
 from aifs.distributed.helpers import change_channels_in_shape
 from aifs.distributed.helpers import gather_tensor
-from aifs.distributed.helpers import get_shape_shards
-from aifs.distributed.helpers import reduce_shard_tensor
 from aifs.distributed.helpers import shard_tensor
+from aifs.distributed.helpers import sort_edges_1hop
 from aifs.distributed.helpers import sync_tensor
 from aifs.utils.logger import get_code_logger
 
@@ -144,24 +143,23 @@ class GNNProcessor(nn.Module):
 
         self.proc = nn.ModuleList()
         for i in range(self.hidden_layers):
-            if i > 0:
-                edge_dim = None  # only embbed edges in first chunk
             self.proc.append(
                 GNNProcessorChunk(
                     hidden_dim,
                     hidden_layers=chunk_size,
                     mlp_extra_layers=mlp_extra_layers,
                     activation=activation,
-                    edge_dim=edge_dim,
+                    edge_dim=edge_dim if i == 0 else None,
                 )
             )
 
         if cpu_offload:
             self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
 
-    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, model_comm_group: ProcessGroup) -> Tensor:
-        shapes_edge_idx = get_shape_shards(edge_index, 1, model_comm_group)
-        shapes_edge_attr = get_shape_shards(edge_attr, 0, model_comm_group)
+    def forward(
+        self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, size: Size, model_comm_group: ProcessGroup
+    ) -> Tensor:
+        edge_index, edge_attr, shapes_edge_idx, shapes_edge_attr = sort_edges_1hop(size, edge_index, edge_attr, model_comm_group)
         edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_comm_group)
         edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_comm_group)
 
@@ -345,8 +343,7 @@ class GNNMapper(nn.Module):
     def forward(
         self, x: PairTensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, size: Size, model_comm_group: ProcessGroup
     ) -> PairTensor:
-        shapes_edge_idx = get_shape_shards(edge_index, 1, model_comm_group)
-        shapes_edge_attr = get_shape_shards(edge_attr, 0, model_comm_group)
+        edge_index, edge_attr, shapes_edge_idx, shapes_edge_attr = sort_edges_1hop(size, edge_index, edge_attr, model_comm_group)
         edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_comm_group)
         edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_comm_group)
         edge_attr = self.emb_edges(edge_attr)
@@ -454,7 +451,7 @@ class GNNBlock(nn.Module):
         else:
             out, edges_new = self.conv(x_in, edge_index, edge_attr, size=size)
 
-        out = reduce_shard_tensor(out, 0, shapes[1], model_comm_group)
+        out = shard_tensor(out, 0, shapes[1], model_comm_group, gather_in_backward=False)
 
         if isinstance(x, Tensor):
             nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x

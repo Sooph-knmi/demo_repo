@@ -6,6 +6,7 @@ import einops
 import numpy as np
 import torch
 from torch import nn
+from torch import Tensor
 from torch.distributed.distributed_c10d import ProcessGroup
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
@@ -208,19 +209,19 @@ class GraphMSG(nn.Module):
             else None
         )
 
-    def _fuse_trainable_tensors(self, edge: torch.Tensor, trainable: Optional[torch.Tensor]) -> torch.Tensor:
+    def _fuse_trainable_tensors(self, edge: Tensor, trainable: Optional[Tensor]) -> Tensor:
         """Fuse edge and trainable tensors.
 
         Parameters
         ----------
-        edge : torch.Tensor
+        edge : Tensor
             Edge tensor
-        trainable : Optional[torch.Tensor]
+        trainable : Optional[Tensor]
             Tensor with trainable edges
 
         Returns
         -------
-        torch.Tensor
+        Tensor
             Fused tensors for latent space
         """
         latent = [einops.repeat(edge, "e f -> (repeat e) f", repeat=self.batch_size)]
@@ -231,7 +232,7 @@ class GraphMSG(nn.Module):
             dim=-1,  # feature dimension
         )
 
-    def _expand_edges(self, edge_index: Adj, edge_inc: torch.Tensor) -> Adj:
+    def _expand_edges(self, edge_index: Adj, edge_inc: Tensor) -> Adj:
         """Expand edge index correct number of times while adding the proper number to
         the edge index.
 
@@ -239,12 +240,12 @@ class GraphMSG(nn.Module):
         ----------
         edge_index : Adj
             Edge index to start
-        edge_inc : torch.Tensor
+        edge_inc : Tensor
             Edge increment to use
 
         Returns
         -------
-        torch.Tensor
+        Tensor
             Edge Index
         """
         edge_index = torch.cat(
@@ -257,10 +258,10 @@ class GraphMSG(nn.Module):
     def _run_mapper(
         self,
         mapper: nn.Module,
-        data: Tuple[torch.Tensor],
+        data: Tuple[Tensor],
         edge_index: Adj,
-        edge_inc: torch.Tensor,
-        edge_attr: torch.Tensor,
+        edge_inc: Tensor,
+        edge_attr: Tensor,
         shape_nodes: Tuple[List, List],
         size: Size,
         model_comm_group: ProcessGroup,
@@ -272,13 +273,13 @@ class GraphMSG(nn.Module):
         ----------
         mapper : nn.Module
             Which processor to use
-        data : Tuple[torch.Tensor]
+        data : Tuple[Tensor]
             Tuple of data to pass in
         edge_index : int
             Edge index to start
         edge_inc : int
             Edge increment to use
-        edge_attr : torch.Tensor
+        edge_attr : Tensor
             Trainable edge attribute tensor
         shape_nodes: Tuple[List, List]
             Shapes of input fields the task holds when running with multiple GPUs
@@ -306,7 +307,7 @@ class GraphMSG(nn.Module):
             use_reentrant=use_reentrant,
         )
 
-    def forward(self, x: torch.Tensor, model_comm_group: Optional[ProcessGroup] = None) -> torch.Tensor:
+    def forward(self, x: Tensor, model_comm_group: Optional[ProcessGroup] = None) -> Tensor:
         self.batch_size = x.shape[0]
 
         # add ERA positional info (lat/lon)
@@ -320,9 +321,10 @@ class GraphMSG(nn.Module):
         edge_h_to_h_latent = self._fuse_trainable_tensors(self.h2h_edge_attr, self.h2h_trainable)
         edge_h_to_e_latent = self._fuse_trainable_tensors(self.h2e_edge_attr, self.h2e_trainable)
 
-        # size for mappers:
+        # size for mappers and processor:
         size_fwd = (x_era_latent.shape[0], x_h_latent.shape[0])
         size_bwd = (x_h_latent.shape[0], x_era_latent.shape[0])
+        size_proc = x_h_latent.shape[0]
 
         # shapes of node shards:
         shape_x_fwd = get_shape_shards(x_era_latent, 0, model_comm_group)
@@ -347,6 +349,7 @@ class GraphMSG(nn.Module):
             edge_index=self._expand_edges(self.h2h_edge_index, self._h2h_edge_inc),
             edge_attr=edge_h_to_h_latent,
             shape_nodes=shape_h_proc,
+            size=size_proc,
             model_comm_group=model_comm_group,
         )
 
