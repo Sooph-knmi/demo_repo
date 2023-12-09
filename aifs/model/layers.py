@@ -710,8 +710,8 @@ class TransformerProcessor(nn.Module):
         assert model_comm_group.size() == 1 or batch_size == 1, "Either one GPU per model instance, or batch_size has to be 1"
 
         for i in range(self.hidden_layers):
-            x = checkpoint(self.proc[i], x, shape_nodes, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
-            # x = self.proc[i](x, shape_nodes, batch_size, model_comm_group=model_comm_group)
+            # x = checkpoint(self.proc[i], x, shape_nodes, batch_size, model_comm_group=model_comm_group, use_reentrant=False)
+            x = self.proc[i](x, shape_nodes, batch_size, model_comm_group=model_comm_group)
 
         return x
 
