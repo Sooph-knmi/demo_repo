@@ -30,9 +30,9 @@ debug:
 profiler: False
 
 checkpoint:
-  every_n_minutes: 15 # Approximate, as this is checked at the end of training steps
+  every_n_minutes: 30 # Approximate, as this is checked at the end of training steps
   every_n_epochs: 1
-  every_n_train_steps: 1000 # Does not scale with rollout
+  every_n_train_steps: null # Does not scale with rollout
 
 log:
   wandb:
