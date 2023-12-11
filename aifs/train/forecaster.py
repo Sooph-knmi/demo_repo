@@ -1,5 +1,6 @@
 import math
 import os
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict
 from typing import List
@@ -26,8 +27,10 @@ from aifs.losses.patched_energy import PatchedEnergyScore
 from aifs.losses.wmse import WeightedMSELoss
 from aifs.metrics.ranks import RankHistogram
 from aifs.metrics.spread import SpreadSkill
+from aifs.model.losses import grad_scaler
 from aifs.model.model import AIFSModelGNN
 from aifs.utils.config import DotConfig
+from aifs.utils.jsonify import map_config_to_primitives
 from aifs.utils.logger import get_code_logger
 
 # from aifs.distributed.helpers import shard_tensor
@@ -40,31 +43,52 @@ class GraphForecaster(pl.LightningModule):
 
     def __init__(
         self,
-        metadata: Dict,
+        *,
         config: DictConfig,
+        statistics: dict,
+        data_indices: dict,
+        metadata: dict,
     ) -> None:
         """Initialize graph neural network forecaster.
 
         Parameters
         ----------
-        metadata : Dict
-            Zarr metadata
         config : DictConfig
             Job configuration
+        statistics : dict
+            Statistics of the training data
+        data_indices : dict
+            Indices of the training data,
+        metadata : dict
+            Provenance information
         """
         super().__init__()
 
-        self.fcdim = config.data.num_features - config.data.num_aux_features
-        self.graph_data = torch.load(Path(config.hardware.paths.graph, config.hardware.files.graph))
+        self.graph_data = torch.load(Path(config.hardware.paths.graph, config.hardware.files.graph), map_location=self.device)
 
         self.model = AIFSModelGNN(
+            statistics=statistics,
+            data_indices=data_indices,
             metadata=metadata,
             graph_data=self.graph_data,
-            config=DotConfig(OmegaConf.to_container(config, resolve=True)),
+            config=DotConfig(map_config_to_primitives(OmegaConf.to_container(config, resolve=True))),
         )
 
-        self.enable_plot = config.diagnostics.plot.enabled
+        self.data_indices = data_indices
+
+        self.save_hyperparameters()
+
+        self.data_latlons = self.graph_data[("era", "to", "era")].ecoords_rad
+        self.area_weights = self.graph_data[("era", "to", "era")].area_weights
+
         self.logger_enabled = config.diagnostics.log.wandb.enabled
+
+        self.metric_ranges, loss_scaling = self.metrics_loss_scaling(config, data_indices)
+        self.loss = WeightedMSELoss(area_weights=self.area_weights, data_variances=loss_scaling)
+        self.metrics = WeightedMSELoss(area_weights=self.area_weights)
+
+        if config.training.loss_gradient_scaling:
+            self.loss.register_full_backward_hook(grad_scaler, prepend=False)
 
         self.multi_step = config.training.multistep_input
         self.lr = (
@@ -240,7 +264,35 @@ class GraphForecaster(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x, self.model_comm_group)
 
-    def set_model_comm_group(self, model_comm_group: ProcessGroup) -> None:
+    @staticmethod
+    def metrics_loss_scaling(config: DictConfig, data_indices):
+        metric_ranges = defaultdict(list)
+        loss_scaling = np.ones((len(data_indices.data.output.full),), dtype=np.float32) * config.training.loss_scaling.default
+        for key, idx in data_indices.model.output.name_to_index.items():
+            # Split pressure levels on "_" separator
+            split = key.split("_")
+            if len(split) > 1:
+                # Create grouped metrics for pressure levels (e.g. Q, T, U, V, etc.) for logger
+                metric_ranges[f"pl_{split[0]}"].append(idx)
+                # Create pressure levels in loss scaling vector
+                if split[0] in config.training.loss_scaling.pl:
+                    loss_scaling[idx] = config.training.loss_scaling.pl[split[0]] * pressure_level(int(split[1]))
+                else:
+                    LOGGER.debug("Parameter %s was not scaled.", key)
+            else:
+                metric_ranges[f"sfc_{key}"].append(idx)
+                # Create surface variables in loss scaling vector
+                if key in config.training.loss_scaling.sfc:
+                    loss_scaling[idx] = config.training.loss_scaling.sfc[key]
+                else:
+                    LOGGER.debug("Parameter %s was not scaled.", key)
+            # Create specific metrics from hydra to log in logger
+            if key in config.training.metrics:
+                metric_ranges[key] = [idx]
+        loss_scaling = torch.from_numpy(loss_scaling)
+        return metric_ranges, loss_scaling
+
+    def set_model_comm_group(self, model_comm_group) -> None:
         LOGGER.debug("set_model_comm_group: %s", model_comm_group)
         self.model_comm_group = model_comm_group
         self.model_comm_group_size = dist.get_world_size(group=model_comm_group)
@@ -287,19 +339,22 @@ class GraphForecaster(pl.LightningModule):
         LOGGER.debug("after pruning y_pred_ens.shape == %s", y_pred_ens.shape)
 
         # step 3/ compute the loss (one member per model group)
-        loss_inc = checkpoint(self._compute_loss, y_pred_ens, y[..., : self.fcdim], use_reentrant=False)
+        loss_inc = checkpoint(self._compute_loss, y_pred_ens, y[..., self.data_indices.data.output.full], use_reentrant=False)
 
         # during validation, we also return the pruned ensemble (from step 2) so we can run diagnostics
         # an explicit cast is needed when running in mixed precision (i.e. with y_pred_ens.dtype == torch.(b)float16)
         return loss_inc, y_pred_ens.to(dtype=y.dtype) if validation_mode else None
 
-    def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
-        # left-shift along the step dimension
-        x = x.roll(-1, dims=2)
-        # autoregressive predictions - we re-init the "variable" part of x
-        x[:, :, self.multi_step - 1, :, : self.fcdim] = y_pred
+    def advance_input(self, batch: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
+        x = batch[:, :, 0 : self.multi_step, ...].roll(-1, dims=2)  # TODO: Is this correct in dim 2?
+
+        x[:, :, self.multi_step - 1, :, self.data_indices.model.input.prognostic] = y_pred[
+            ..., self.data_indices.model.output.prognostic
+        ]
         # get new "constants" needed for time-varying fields
-        x[:, :, self.multi_step - 1, :, self.fcdim :] = y[:, None, :, self.fcdim :]  # add dummy ensemble dim to match x
+        x[:, :, self.multi_step - 1, :, self.data_indices.model.input.forcing] = batch[
+            :, :, self.multi_step, ..., self.data_indices.data.input.forcing
+        ]
         return x
 
     def _generate_ens_inicond(self, batch: Tuple[torch.Tensor, ...]) -> torch.Tensor:
@@ -382,29 +437,33 @@ class GraphForecaster(pl.LightningModule):
         y_preds: List[torch.Tensor] = []
         kcrps_preds: List[torch.Tensor] = []
         for rstep in range(self.rollout):
-            y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
-            y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
+            # if rstep > 0: torch.cuda.empty_cache() # uncomment if rollout fails with OOM
+            y_pred = self(x[..., self.data_indices.data.input.full])  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+
+            y = batch[:, self.multi_step + rstep, ..., self.data_indices.data.output.full]
+            # y includes the auxiliary variables, so we must leave those out when computing the loss
+            # loss += checkpoint(self.loss, y_pred, y, use_reentrant=False)
             loss_rstep, y_pred_group = self.gather_and_compute_loss(y_pred, y, validation_mode=validation_mode)
             loss += loss_rstep
 
-            x = self.advance_input(x, y, y_pred)
+            x = self.advance_input(batch, y_pred)
 
             if validation_mode:
                 assert y_pred_group is not None, "Logic error! Incorrect return args from gather_and_compute_loss()"
                 # rank histograms - update metric state
-                _ = self.ranks(y[..., : self.fcdim], y_pred_group)
+                _ = self.ranks(y[..., self.data_indices.data.output.full], y_pred_group)
                 # pointwise KCRPS
-                pkcrps = self._compute_kcrps(y_pred_group, y[..., : self.fcdim], squash=False)
+                pkcrps = self._compute_kcrps(y_pred_group, y[..., self.data_indices.data.output.full], squash=False)
 
                 LOGGER.debug("pkcrps.dtype = %s, y_pred_group.dtype = %s, y.dtype = %s", pkcrps.dtype, y_pred_group.dtype, y.dtype)
                 # WMSE ensemble mean metrics
-                for mkey, (low, high) in self.metric_ranges.items():
-                    y_denorm = self.model.normalizer.denormalize(y, in_place=False)
-                    y_hat_denorm = self.model.normalizer.denormalize(y_pred_group.mean(dim=1), in_place=False)  # ensemble mean
-                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
+                y_denorm = self.model.normalizer.denormalize(y, in_place=False)
+                y_pred_denorm = self.model.normalizer.denormalize(y_pred_group.mean(dim=1), in_place=False)
+                for mkey, indices in self.metric_ranges.items():
+                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
 
                 if self.enable_plot:
-                    y_preds.append(y_pred_group)
+                    y_preds.append(y_pred_group.detach())
                     kcrps_preds.append(pkcrps)
 
         # scale loss

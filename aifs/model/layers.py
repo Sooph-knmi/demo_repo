@@ -16,9 +16,8 @@ from torch_geometric.utils import scatter
 
 from aifs.distributed.helpers import change_channels_in_shape
 from aifs.distributed.helpers import gather_tensor
-from aifs.distributed.helpers import get_shape_shards
-from aifs.distributed.helpers import reduce_shard_tensor
 from aifs.distributed.helpers import shard_tensor
+from aifs.distributed.helpers import sort_edges_1hop
 from aifs.distributed.helpers import sync_tensor
 from aifs.utils.logger import get_code_logger
 
@@ -154,15 +153,13 @@ class GNNProcessor(nn.Module):
 
         self.proc = nn.ModuleList()
         for i in range(self.hidden_layers):
-            if i > 0:
-                edge_dim = None  # only embbed edges in first chunk
             self.proc.append(
                 GNNProcessorChunk(
                     hidden_dim,
                     hidden_layers=chunk_size,
                     mlp_extra_layers=mlp_extra_layers,
                     activation=activation,
-                    edge_dim=edge_dim,
+                    edge_dim=edge_dim if i == 0 else None,
                     mlp_dropout=mlp_dropout,
                 )
             )
@@ -180,9 +177,10 @@ class GNNProcessor(nn.Module):
         if cpu_offload:
             self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
 
-    def forward(self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, model_comm_group: ProcessGroup) -> Tensor:
-        shapes_edge_idx = get_shape_shards(edge_index, 1, model_comm_group)
-        shapes_edge_attr = get_shape_shards(edge_attr, 0, model_comm_group)
+    def forward(
+        self, x: Tensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, size: Size, model_comm_group: ProcessGroup
+    ) -> Tensor:
+        edge_index, edge_attr, shapes_edge_idx, shapes_edge_attr = sort_edges_1hop(size, edge_index, edge_attr, model_comm_group)
         edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_comm_group)
         edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_comm_group)
 
@@ -289,7 +287,6 @@ class GNNMapper(nn.Module):
         cpu_offload: bool = False,
         backward_mapper: bool = False,
         out_channels_dst: Optional[int] = None,
-        fp32_comm_ops: bool = True,
     ) -> None:
         """Initialize GNNMapper.
 
@@ -317,8 +314,6 @@ class GNNMapper(nn.Module):
             Map from (true) hidden to era or (false) reverse, by default False
         out_channels_dst : Optional[int], optional
             Output channels of the destination node, by default None
-        fp32_comm_ops: bool, optional
-            Use FP32 arithmetic for some collective communication operations (reduce_shard_tensor), by default True
         """
         super().__init__()
 
@@ -344,7 +339,6 @@ class GNNMapper(nn.Module):
             update_src_nodes=update_src_nodes,
             num_chunks=num_chunks,
             mlp_dropout=mlp_dropout,
-            fp32_comm_ops=fp32_comm_ops,
         )
 
         if cpu_offload:
@@ -383,8 +377,7 @@ class GNNMapper(nn.Module):
     def forward(
         self, x: PairTensor, edge_index: Adj, edge_attr: Tensor, shape_nodes: Tuple, size: Size, model_comm_group: ProcessGroup
     ) -> PairTensor:
-        shapes_edge_idx = get_shape_shards(edge_index, 1, model_comm_group)
-        shapes_edge_attr = get_shape_shards(edge_attr, 0, model_comm_group)
+        edge_index, edge_attr, shapes_edge_idx, shapes_edge_attr = sort_edges_1hop(size, edge_index, edge_attr, model_comm_group)
         edge_index = shard_tensor(edge_index, 1, shapes_edge_idx, model_comm_group)
         edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_comm_group)
         edge_attr = self.emb_edges(edge_attr)
@@ -423,7 +416,6 @@ class GNNBlock(nn.Module):
         mlp_dropout: float = 0.0,
         update_src_nodes: bool = True,
         num_chunks: int = 1,
-        fp32_comm_ops: bool = True,
         **kwargs,
     ) -> None:
         """Initialize GNNBlock.
@@ -449,7 +441,6 @@ class GNNBlock(nn.Module):
 
         self.update_src_nodes = update_src_nodes
         self.num_chunks = num_chunks
-        self.fp32_comm_ops = fp32_comm_ops
 
         self.node_mlp = gen_mlp(
             2 * in_channels,
@@ -499,7 +490,7 @@ class GNNBlock(nn.Module):
         else:
             out, edges_new = self.conv(x_in, edge_index, edge_attr, size=size)
 
-        out = reduce_shard_tensor(out, 0, shapes[1], model_comm_group, use_fp32=self.fp32_comm_ops)
+        out = shard_tensor(out, 0, shapes[1], model_comm_group, gather_in_backward=False)
 
         if isinstance(x, Tensor):
             nodes_new = self.node_mlp(torch.cat([x, out], dim=1)) + x

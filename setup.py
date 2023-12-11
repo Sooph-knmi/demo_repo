@@ -30,6 +30,7 @@ setup(
         "torch>=2.1",
         "torch_geometric>=2.4",
         "einops>=0.6.1",
+        "ecml-tools>=0.1.4",
     ],
     extras_require={
         "training": [

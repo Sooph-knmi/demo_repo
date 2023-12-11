@@ -160,6 +160,14 @@ scratch
 outputs/
 .hydra/
 
+?.*
+plots/
+checkpoint/
+*.ckpt
+*.swp
+?
+*.grib
+
 # jobscript
 jobscript-atos-*
 model_small*

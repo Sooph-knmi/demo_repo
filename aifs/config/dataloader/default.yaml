@@ -15,3 +15,28 @@ limit_batches:
   validation: null
   test: 20
   predict: 20
+
+# ============
+# Dataloader definitions
+# These follow the ecml-tools patterns
+# You can make these as complicated for merging as you like
+# See Readme: https://github.com/ecwmf-lab/ecml-tools/
+# ============
+
+training:
+  dataset: ${hardware.paths.data}/${hardware.files.dataset}
+  start: null
+  end: 2017
+  frequency: ${data.frequency}
+
+validation:
+  dataset: ${hardware.paths.data}/${hardware.files.dataset}
+  start: 2018
+  end: 2019
+  frequency: ${data.frequency}
+
+test:
+  dataset: ${hardware.paths.data}/${hardware.files.dataset}
+  start: 2020
+  end: null
+  frequency: ${data.frequency}

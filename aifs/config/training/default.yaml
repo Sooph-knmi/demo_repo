@@ -60,7 +60,7 @@ eda_initial_perturbations: False
 # Round 3. ~70,000 batches @ ~1.5 seconds per batch (12-step rollout)
 # Each batch is an N-step rollout, with batch_size=1
 
-lead_time: 6
+save_top_k: -1
 
 max_epochs: 200
 
@@ -70,6 +70,7 @@ lr:
   min: 1.5e-7
 
 loss_scaling:
+  default: 1
   pl:
     q: 0.6
     t: 6
@@ -83,11 +84,11 @@ loss_scaling:
     10u: 0.1
     10v: 0.1
     2d: 0.1
+    tp: 0.025
+    cp: 0.025
 
 metrics:
   - z_500
   - t_850
   - u_850
   - v_850
-  - 2t
-  - msl

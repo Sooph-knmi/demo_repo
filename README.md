@@ -66,3 +66,20 @@ $> srun commstest-mlux.sh
 # use this to look at how the parameters change in various device configurations
 $> srun steptest-mlux.sh
 ```
+
+## How to test
+We have written tests using the `pytest` functional interface.
+
+They're stored in the tests/ directory. After installing `pytest` (`pip install pytest`) you can simply run
+
+```shell
+$> pytest
+```
+
+or if you just want to run a specific file, run:
+
+```shell
+$> pytest tests/test_<file>.py
+```
+
+Be aware that some tests like the `test_gnn.py` run a singular forward pass, which can be slow on CPU and runs better on GPU.

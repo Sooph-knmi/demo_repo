@@ -112,8 +112,8 @@ def plot_predicted_multilevel_flat_sample(
     lat, lon = latlons[:, 0], latlons[:, 1]
     pc_lon, pc_lat = pc(lon, lat)
 
-    for plot_idx, (variable_idx, variable_name) in enumerate(parameters.items()):
-        xt = x[..., variable_idx].squeeze()
+    for plot_idx, (variable_idx, (variable_name, output_only)) in enumerate(parameters.items()):
+        xt = x[..., variable_idx].squeeze() * int(output_only)
         yt = y_true[..., variable_idx].squeeze()
         yp = y_pred[..., variable_idx].squeeze()
         if n_plots_x > 1:
@@ -158,12 +158,17 @@ def plot_flat_sample(
         Variable name
     """
 
-    scatter_plot(fig, ax[0], lon, lat, input_, title=f"{vname} input")
     scatter_plot(fig, ax[1], lon, lat, truth, title=f"{vname} target")
     scatter_plot(fig, ax[2], lon, lat, pred, title=f"{vname} pred")
     scatter_plot(fig, ax[3], lon, lat, truth - pred, cmap="bwr", title=f"{vname} pred err")
-    scatter_plot(fig, ax[4], lon, lat, pred - input_, cmap="bwr", title=f"{vname} increment [pred - input]")
-    scatter_plot(fig, ax[5], lon, lat, truth - input_, cmap="bwr", title=f"{vname} persist err")
+    if sum(input_) != 0:
+        scatter_plot(fig, ax[0], lon, lat, input_, title=f"{vname} input")
+        scatter_plot(fig, ax[4], lon, lat, pred - input_, cmap="bwr", title=f"{vname} increment [pred - input]")
+        scatter_plot(fig, ax[5], lon, lat, truth - input_, cmap="bwr", title=f"{vname} persist err")
+    else:
+        ax[0].axis("off")
+        ax[4].axis("off")
+        ax[5].axis("off")
 
 
 def scatter_plot(

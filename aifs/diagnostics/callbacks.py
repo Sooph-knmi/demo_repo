@@ -1,9 +1,13 @@
+import json
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
-from typing import Tuple
+from typing import Optional
+from zipfile import ZipFile
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,9 +19,11 @@ from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 
 from aifs.diagnostics.plots import init_plot_settings
 from aifs.diagnostics.plots import plot_ensemble_initial_conditions
+from aifs.diagnostics.plots import plot_graph_features
 from aifs.diagnostics.plots import plot_kcrps
 from aifs.diagnostics.plots import plot_loss
 from aifs.diagnostics.plots import plot_predicted_ensemble
+from aifs.diagnostics.plots import plot_predicted_multilevel_flat_sample
 from aifs.diagnostics.plots import plot_rank_histograms
 from aifs.diagnostics.plots import plot_spread_skill
 from aifs.diagnostics.plots import plot_spread_skill_bins
@@ -37,13 +43,13 @@ class PlotCallback(Callback):
         self.plot_frequency = config.diagnostics.plot.frequency
         init_plot_settings()
 
-    def _output_figure(self, trainer, fig, tag: str = "gnn", exp_log_tag: str = "val_pred_sample") -> None:
+    def _output_figure(self, trainer, fig, epoch: int, tag: str = "gnn", exp_log_tag: str = "val_pred_sample") -> None:
         """Figure output: save to file and/or display in notebook."""
         if self.save_basedir is not None:
             save_path = Path(
                 self.save_basedir,
                 "plots",
-                f"{tag}.png",
+                f"{tag}_epoch{epoch:03d}.png",
             )
 
             save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -53,6 +59,24 @@ class PlotCallback(Callback):
 
                 trainer.logger.experiment.log({exp_log_tag: wandb.Image(fig)})
         plt.close(fig)  # cleanup
+
+
+class AsyncPlotCallback(PlotCallback):
+    """Factory for creating a callback that plots data to Weights and Biases."""
+
+    def __init__(self, config):
+        super().__init__(config)
+
+        self._executor = ThreadPoolExecutor(max_workers=1)
+        self._error: Optional[BaseException] = None
+
+    def teardown(self, trainer, pl_module, stage) -> None:
+        """This method is called to close the threads."""
+        self._executor.shutdown(wait=True)
+
+        # if an error was raised anytime in any of the `executor.submit` calls
+        if self._error:
+            raise self._error
 
 
 class RolloutEval(Callback):
@@ -72,73 +96,41 @@ class RolloutEval(Callback):
             config.diagnostics.eval.rollout,
             config.diagnostics.eval.frequency,
         )
-        self.eval_plot_parameters = config.diagnostics.plot.parameters
         self.rollout = config.diagnostics.eval.rollout
         self.frequency = config.diagnostics.eval.frequency
-        self.loss_type = config.training.loss
-        self.nbins = config.diagnostics.eval.nbins
 
     def _eval(
         self,
         pl_module: pl.LightningModule,
         batch: torch.Tensor,
-        ens_ic: torch.Tensor,
     ) -> None:
         loss = torch.zeros(1, dtype=batch.dtype, device=pl_module.device, requires_grad=False)
+        # NB! the batch is already normalized in-place - see pl_model.validation_step()
         metrics = {}
 
-        assert hasattr(
-            pl_module, "spread_skill"
-        ), "To use this callback, you must define a `spread_skill` attribute of type SpreadSkill in your Forecaster class!"
-
         # start rollout
-        x = ens_ic  # shape == (bs, nens, multistep, latlon, nvar), already transformed (?)
-
+        x = batch[:, 0 : pl_module.multi_step, ..., pl_module.data_indices.data.input.full]  # (bs, multi_step, latlon, nvar)
         assert batch.shape[1] >= self.rollout + pl_module.multi_step, "Batch length not sufficient for requested rollout length!"
 
         with torch.no_grad():
-            rmse = torch.zeros((self.rollout, len(self.eval_plot_parameters)), dtype=batch.dtype, device=pl_module.device)
-            spread = torch.zeros_like(rmse)
-
-            bins_rmse = torch.zeros(
-                (self.rollout, len(self.eval_plot_parameters), self.nbins - 1),
-                dtype=batch.dtype,
-                device=pl_module.device,
-            )
-            bins_spread = torch.zeros_like(bins_rmse)
-
             for rstep in range(self.rollout):
-                y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, nens, latlon, nvar)
-                y = batch[:, pl_module.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
+                y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+                y = batch[
+                    :, pl_module.multi_step + rstep, ..., pl_module.data_indices.data.output.full
+                ]  # target, shape = (bs, latlon, nvar)
+                # y includes the auxiliary variables, so we must leave those out when computing the loss
+                loss += pl_module.loss(y_pred, y)
 
-                loss_rstep, y_pred_group = pl_module.gather_and_compute_loss(
-                    y_pred, y[..., : pl_module.fcdim], validation_mode=True
+                x = pl_module.advance_input(batch, y_pred)
+
+                y_denorm = pl_module.model.normalizer.denormalize(
+                    y, in_place=False, data_index=pl_module.data_indices.data.output.full
                 )
-                loss += loss_rstep
-                x = pl_module.advance_input(x, y, y_pred)
-                assert y_pred_group is not None
-
-                # training metrics
-                for mkey, (low, high) in pl_module.metric_ranges.items():
-                    y_denorm = pl_module.model.normalizer.denormalize(y, in_place=False)
-                    # ensemble mean
-                    y_pred_denorm = pl_module.model.normalizer.denormalize(y_pred_group.mean(dim=1), in_place=False)
-                    metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
-
-                # eval diagnostic metrics
-                for midx, (pidx, _) in enumerate(self.eval_plot_parameters.items()):
-                    y_denorm = pl_module.model.normalizer.denormalize(y, in_place=False)
-                    y_pred_denorm = pl_module.model.normalizer.denormalize(y_pred_group, in_place=False)
-
-                    (
-                        rmse[rstep, midx],
-                        spread[rstep, midx],
-                        bins_rmse[rstep, midx],
-                        bins_spread[rstep, midx],
-                    ) = pl_module.spread_skill.calculate_spread_skill(y_pred_denorm, y_denorm, pidx)
-
-            # update spread-skill metric state
-            _ = pl_module.spread_skill(rmse, spread, bins_rmse, bins_spread)
+                y_pred_denorm = pl_module.model.normalizer.denormalize(
+                    x[:, -1, ...], in_place=False, data_index=pl_module.data_indices.data.output.full
+                )
+                for mkey, indices in pl_module.metric_ranges.items():
+                    metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
 
             # scale loss
             loss *= 1.0 / self.rollout
@@ -146,14 +138,14 @@ class RolloutEval(Callback):
 
     def _log(self, pl_module: pl.LightningModule, loss: torch.Tensor, metrics: Dict, bs: int) -> None:
         pl_module.log(
-            f"val_r{self.rollout}_" + self.loss_type,
+            f"val_r{self.rollout}_wmse",
             loss,
             on_epoch=True,
             on_step=True,
             prog_bar=False,
             logger=pl_module.logger_enabled,
             batch_size=bs,
-            sync_dist=True,
+            sync_dist=False,
             rank_zero_only=True,
         )
         for mname, mvalue in metrics.items():
@@ -165,7 +157,7 @@ class RolloutEval(Callback):
                 prog_bar=False,
                 logger=pl_module.logger_enabled,
                 batch_size=bs,
-                sync_dist=True,
+                sync_dist=False,
                 rank_zero_only=True,
             )
 
@@ -174,13 +166,160 @@ class RolloutEval(Callback):
         trainer: pl.Trainer,
         pl_module: pl.LightningModule,
         outputs: Any,
-        batch: Tuple[torch.Tensor, ...],
+        batch: torch.Tensor,
         batch_idx: int,
     ) -> None:
-        del trainer  # not used
-        # this must happen on ALL devices!
-        if batch_idx % self.frequency == 3:
-            self._eval(pl_module, batch[0], outputs[-1])
+        del trainer, outputs  # not used
+        if batch_idx % self.frequency == 3 and pl_module.global_rank == 0:
+            self._eval(pl_module, batch)
+
+
+class GraphTrainableFeaturesPlot(PlotCallback):
+    """Visualize the trainable features defined at the ERA and H graph nodes, if any.
+
+    TODO: How best to visualize the learned edge embeddings? Offline, perhaps - using code from @Simon's notebook?
+    """
+
+    def __init__(self, config):
+        super().__init__(config)
+
+    def _plot(
+        # self, trainer, latlons:np.ndarray, features:np.ndarray, tag:str, exp_log_tag:str
+        self,
+        trainer,
+        latlons,
+        features,
+        epoch,
+        tag,
+        exp_log_tag,
+    ) -> None:
+        fig = plot_graph_features(latlons, features)
+        self._output_figure(trainer, fig, epoch=epoch, tag=tag, exp_log_tag=exp_log_tag)
+
+    def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        if pl_module.global_rank == 0:
+            model = pl_module.model.module.model if hasattr(pl_module.model, "module") else pl_module.model.model
+            graph = pl_module.graph_data.cpu()
+            epoch = trainer.current_epoch
+
+            if model.era_trainable is not None:
+                ecoords = np.rad2deg(graph[("era", "to", "era")].ecoords_rad.numpy())
+
+                self._plot(
+                    trainer,
+                    ecoords,
+                    model.era_trainable.cpu(),
+                    epoch=epoch,
+                    tag="era_trainable",
+                    exp_log_tag="era_trainable",
+                )
+
+            if model.h_trainable is not None:
+                hcoords = np.rad2deg(graph[("h", "to", "h")].hcoords_rad.numpy())
+                self._plot(trainer, hcoords, model.h_trainable.cpu(), epoch=epoch, tag="h_trainable", exp_log_tag="h_trainable")
+
+
+class PlotLoss(PlotCallback):
+    """Plots the unsqueezed loss over rollouts."""
+
+    def __init__(self, config):
+        super().__init__(config)
+
+    def _plot(
+        # self, y_true: torch.Tensor, y_pred: torch.Tensor, rollout_step: int
+        self,
+        trainer,
+        pl_module,
+        outputs,
+        batch,
+        epoch,
+    ) -> None:
+        for rollout_step in range(pl_module.rollout):
+            y_hat = outputs[1][rollout_step]
+            y_true = batch[:, pl_module.multi_step + rollout_step, :, pl_module.data_indices.data.output.full]
+            loss = pl_module.loss(y_hat, y_true, squash=False).cpu().numpy()
+
+            fig = plot_loss(loss)
+            self._output_figure(
+                trainer,
+                fig,
+                epoch=epoch,
+                tag=f"loss_rstep_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
+                exp_log_tag=f"loss_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
+            )
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
+            self._plot(trainer, pl_module, outputs, batch, epoch=trainer.current_epoch)
+
+
+class PlotSample(PlotCallback):
+    """Plots a denormalized sample: input, target and prediction."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.sample_idx = self.config.diagnostics.plot.sample_idx
+
+    def _plot(
+        # batch_idx: int, rollout_step: int, x: torch.Tensor, y_true: torch.Tensor, y_pred: torch.Tensor,
+        self,
+        trainer,
+        pl_module,
+        outputs,
+        batch,
+        batch_idx,
+        epoch,
+    ) -> None:
+        # Build dictionary of inidicies and parameters to be plotted
+        plot_parameters_dict = {
+            pl_module.data_indices.model.output.name_to_index[name]: (name, name not in self.config.data.diagnostic)
+            for name in self.config.diagnostics.plot.parameters
+        }
+
+        data = (
+            pl_module.model.normalizer.denormalize(
+                batch[
+                    self.sample_idx,
+                    pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1,
+                    ...,
+                    pl_module.data_indices.data.output.full,
+                ],
+                in_place=False,
+                data_index=pl_module.data_indices.data.output.full,
+            )
+            .cpu()
+            .numpy()
+        )
+
+        latlons = np.rad2deg(pl_module.data_latlons.cpu().numpy())
+        for rollout_step in range(pl_module.rollout):
+            fig = plot_predicted_multilevel_flat_sample(
+                plot_parameters_dict,
+                self.config.diagnostics.plot.per_sample,
+                latlons,
+                data[0, ...].squeeze(),
+                data[rollout_step + 1, ...].squeeze(),
+                pl_module.model.normalizer.denormalize(
+                    outputs[1][rollout_step][self.sample_idx, ...],
+                    in_place=False,
+                    data_index=pl_module.data_indices.data.output.full,
+                )
+                .squeeze()
+                .cpu()
+                .numpy(),
+            )
+
+            self._output_figure(
+                trainer,
+                fig,
+                epoch=epoch,
+                tag=f"gnn_pred_val_sample_rstep{rollout_step:02d}_batch{batch_idx:04d}_rank0",
+                exp_log_tag=f"val_pred_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
+            )
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
+            self._plot(trainer, pl_module, outputs, batch, batch_idx, epoch=trainer.current_epoch)
 
 
 class RankHistogramPlot(PlotCallback):
@@ -440,28 +579,35 @@ class InferenceCheckpoint(ModelCheckpoint):
         self.config = config
 
     def _torch_drop_down(self, trainer: pl.Trainer) -> torch.nn.Module:
-        # Get the model from the DataParallel wrapper
+        # Get the model from the DataParallel wrapper, for single and multi-gpu cases
+        assert hasattr(trainer, "model"), "Trainer has no attribute 'model'! Is the Pytorch Lightning version correct?"
         return trainer.model.module.model if hasattr(trainer.model, "module") else trainer.model.model
 
-    def _sanitise_checkpoints(self, model) -> None:
-        # Delete paths from checkpoint
-        for path in model.config.hardware.paths.keys():
-            model.config.hardware.paths[path] = "/"
-        # Delete filenames from checkpoint
-        for file in model.config.hardware.files.keys():
-            model.config.hardware.files[file] = "/"
-        # Disable logging and plotting
-        model.config.diagnostics.plot.enabled = False
-        model.config.diagnostics.log.wandb.enabled = False
-        return model
-
     def _save_checkpoint(self, trainer: pl.Trainer, filepath: str) -> None:
+        if not trainer.is_global_zero:
+            return
+
         # trainer.save_checkpoint(filepath, self.save_weights_only)
 
         model = self._torch_drop_down(trainer)
-        model = self._sanitise_checkpoints(model)
+
+        save_config = model.config
+        model.config = None
+
+        save_metadata = model.metadata
+        model.metadata = None
 
         torch.save(model, filepath)
+
+        with ZipFile(filepath, "a") as zipf:
+            base, _ = os.path.splitext(os.path.basename(filepath))
+            zipf.writestr(
+                f"{base}/ai-models.json",
+                json.dumps(save_metadata, indent=4),
+            )
+
+        model.config = save_config
+        model.metadata = save_metadata
 
         self._last_global_step_saved = trainer.global_step
 
@@ -499,13 +645,12 @@ def get_callbacks(config: DictConfig) -> List:
     )
 
     ckpt_frequency_save_dict = {}
-    for key, freq in config.diagnostics.checkpoint.items():
+    for key, frequency in config.diagnostics.checkpoint.items():
         if key == "every_n_minutes":
             target = "train_time_interval"
-            frequency = timedelta(minutes=freq)
+            frequency = timedelta(minutes=frequency)
         else:
             target = key
-            frequency = freq
         ckpt_frequency_save_dict[target] = (config.hardware.files.checkpoint[key], frequency)
 
     trainer_callbacks = []

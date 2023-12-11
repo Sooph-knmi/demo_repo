@@ -1,4 +1,5 @@
-from typing import Dict
+import warnings
+from typing import Optional
 
 import numpy as np
 import torch
@@ -8,27 +9,11 @@ from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__, debug=True)
 
-# these variables have sensible ranges so we leave them untouched
-DO_NOT_NORMALIZE = [
-    "cos_latitude",
-    "cos_longitude",
-    "sin_latitude",
-    "sin_longitude",
-    "cos_julian_day",
-    "cos_local_time",
-    "sin_julian_day",
-    "sin_local_time",
-    "insolation",
-    "lsm",
-]
-
-MAX_NORMALIZE = ["sdor", "slor", "z"]
-
 
 class InputNormalizer(nn.Module):
     """Normalizes input data to zero mean and unit variance."""
 
-    def __init__(self, zarr_metadata: Dict) -> None:
+    def __init__(self, *, config, statistics: dict, data_indices: dict) -> None:
         """Initialize the normalizer.
 
         Parameters
@@ -37,97 +22,143 @@ class InputNormalizer(nn.Module):
             Zarr metadata dictionary
         """
         super().__init__()
-        self._zarr_metadata = zarr_metadata
 
-        _max_norm_idx = np.array(
-            sorted([self._zarr_metadata["name_to_index"][var] for var in MAX_NORMALIZE]),
-            dtype=np.int32,
-        )
+        default = config.data.normalizer.default
 
-        _max_norm = torch.from_numpy(
-            np.array(
-                [self._zarr_metadata["statistics_by_index"]["maximum"][vidx] for vidx in _max_norm_idx],
-                dtype=np.float32,
-            )
-        )
+        name_to_index = data_indices.data.input.name_to_index
 
-        # for the rest, we map to unit gaussian or leave as-is
-        _std_norm_idx = []
-        _std_norm_mu = []
-        _std_norm_sd = []
+        methods = {
+            variable: method
+            for method, variables in config.data.normalizer.items()
+            if isinstance(variables, list)
+            for variable in variables
+        }
 
-        for vname in list(self._zarr_metadata["name_to_index"]):
-            if vname not in DO_NOT_NORMALIZE and vname not in MAX_NORMALIZE:
-                _std_norm_idx.append(self._zarr_metadata["name_to_index"][vname])
+        minimum = statistics["minimum"]
+        maximum = statistics["maximum"]
+        mean = statistics["mean"]
+        stdev = statistics["stdev"]
 
-        _std_norm_idx = sorted(_std_norm_idx)
+        n = minimum.size
+        assert maximum.size == n, (maximum.size, n)
+        assert mean.size == n, (mean.size, n)
+        assert stdev.size == n, (stdev.size, n)
 
-        for vidx in _std_norm_idx:
-            _std_norm_mu.append(self._zarr_metadata["statistics_by_index"]["mean"][vidx])
-            _std_norm_sd.append(self._zarr_metadata["statistics_by_index"]["stdev"][vidx])
+        assert isinstance(methods, dict)
+        for name, method in methods.items():
+            assert name in name_to_index, f"{name} is not a valid variable name"
+            assert method in [
+                "mean-std",
+                # "robust",
+                "min-max",
+                "max",
+                "none",
+            ], f"{method} is not a valid normalisation method"
 
-        # register all buffers - this will ensure they get copied to the correct device(s)
-        self.register_buffer("_max_norm_idx", torch.from_numpy(_max_norm_idx), persistent=True)
-        self.register_buffer("_max_norm", _max_norm, persistent=True)
-        self.register_buffer(
-            "_std_norm_idx",
-            torch.from_numpy(np.array(_std_norm_idx, dtype=np.int32)),
-            persistent=True,
-        )
-        self.register_buffer(
-            "_std_norm_mu",
-            torch.from_numpy(np.array(_std_norm_mu, dtype=np.float32)),
-            persistent=True,
-        )
-        self.register_buffer(
-            "_std_norm_sd",
-            torch.from_numpy(np.array(_std_norm_sd, dtype=np.float32)),
-            persistent=True,
-        )
+        _norm_add = np.zeros((n,), dtype=np.float32)
+        _norm_mul = np.ones((n,), dtype=np.float32)
 
-    def normalize(self, x: torch.Tensor, in_place: bool = True) -> torch.Tensor:
-        """Normalizes an input tensor x of shape [..., nvars]; normalization done in-place."""
+        for name, i in name_to_index.items():
+            m = methods.get(name, default)
+            if m == "mean-std":
+                LOGGER.debug(f"Normalizing: {name} is mean-std-normalised.")
+                if stdev[i] < (mean[i] * 1e-6):
+                    warnings.warn(f"Normalizing: the field seems to have only one value {mean[i]}")
+                _norm_mul[i] = 1 / stdev[i]
+                _norm_add[i] = -mean[i] / stdev[i]
+
+            elif m == "min-max":
+                LOGGER.debug(f"Normalizing: {name} is min-max-normalised to [0, 1].")
+                x = maximum[i] - minimum[i]
+                if x < 1e-9:
+                    warnings.warn(f"Normalizing: the field {name} seems to have only one value {maximum[i]}.")
+                _norm_mul[i] = 1 / x
+                _norm_add[i] = -minimum[i] / x
+
+            elif m == "max":
+                LOGGER.debug(f"Normalizing: {name} is max-normalised to [0, 1].")
+                _norm_mul[i] = 1 / maximum[i]
+
+            elif m == "none":
+                LOGGER.info(f"Normalizing: {name} is not normalized.")
+
+            else:
+                raise ValueError[f"Unknown normalisation method for {name}: {m}"]
+
+        # register buffer - this will ensure they get copied to the correct device(s)
+        self.register_buffer("_norm_mul", torch.from_numpy(_norm_mul), persistent=True)
+        self.register_buffer("_norm_add", torch.from_numpy(_norm_add), persistent=True)
+        self.register_buffer("_input_idx", data_indices.data.input.full, persistent=True)
+        self.register_buffer("_output_idx", data_indices.data.output.full, persistent=True)
+
+    def normalize(self, x: torch.Tensor, in_place: bool = True, data_index: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Normalizes an input tensor x of shape [..., nvars].
+
+        Normalization done in-place unless specified otherwise.
+
+        The default usecase either assume the full batch tensor or the full input tensor.
+        A dataindex is based on the full data can be supplied to choose which variables to normalise.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Data to normalize
+        in_place : bool, optional
+            Normalize in-place, by default True
+        data_index : Optional[torch.Tensor], optional
+            Normalize only the specified indices, by default None
+
+        Returns
+        -------
+        torch.Tensor
+            _description_
+        """
         if not in_place:
             x = x.clone()
-        x[..., self._max_norm_idx] = x[..., self._max_norm_idx] / self._max_norm
-        x[..., self._std_norm_idx] = (x[..., self._std_norm_idx] - self._std_norm_mu) / self._std_norm_sd
+
+        if data_index is not None:
+            x[..., :] = x[..., :] * self._norm_mul[data_index] + self._norm_add[data_index]
+        elif x.shape[-1] == len(self._input_idx):
+            x[..., :] = x[..., :] * self._norm_mul[self._input_idx] + self._norm_add[self._input_idx]
+        else:
+            x[..., :] = x[..., :] * self._norm_mul + self._norm_add
         return x
 
     def forward(self, x: torch.Tensor, in_place: bool = True) -> torch.Tensor:
         return self.normalize(x, in_place=in_place)
 
-    def denormalize(self, x: torch.Tensor, in_place: bool = True) -> torch.Tensor:
-        """Denormalizes an input tensor x of shape [..., nvars | nvars_pred]; normalization done in-place."""
-        # input and predicted tensors have different shapes
-        # hence, we mask out the indices >= x.shape[-1] - i.e. the variables that are not predicted
+    def denormalize(self, x: torch.Tensor, in_place: bool = True, data_index: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Denormalizes an input tensor x of shape [..., nvars | nvars_pred];
+
+        Denormalization done in-place unless specified otherwise.
+
+        The default usecase either assume the full batch tensor or the full output tensor.
+        A dataindex is based on the full data can be supplied to choose which variables to denormalise.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Data to denormalize
+        in_place : bool, optional
+            Denormalize in-place, by default True
+        data_index : Optional[torch.Tensor], optional
+            Denormalize only the specified indices, by default None
+
+        Returns
+        -------
+        torch.Tensor
+            Denormalized data
+        """
         if not in_place:
             x = x.clone()
-        max_denorm_mask = self._max_norm_idx < x.shape[-1]
-        std_denorm_mask = self._std_norm_idx < x.shape[-1]
 
-        x[..., self._max_norm_idx[max_denorm_mask]] = x[..., self._max_norm_idx[max_denorm_mask]] * self._max_norm[max_denorm_mask]
-        x[..., self._std_norm_idx[std_denorm_mask]] = (
-            x[..., self._std_norm_idx[std_denorm_mask]] * self._std_norm_sd[std_denorm_mask] + self._std_norm_mu[std_denorm_mask]
-        )
+        # Denormalize dynamic or full tensors
+        # input and predicted tensors have different shapes
+        # hence, we mask out the forcing indices
+        if data_index is not None:
+            x[..., :] = (x[..., :] - self._norm_add[data_index]) / self._norm_mul[data_index]
+        elif x.shape[-1] == len(self._output_idx):
+            x[..., :] = (x[..., :] - self._norm_add[self._output_idx]) / self._norm_mul[self._output_idx]
+        else:
+            x[..., :] = (x[..., :] - self._norm_add) / self._norm_mul
         return x
-
-
-if __name__ == "__main__":
-    import zarr
-
-    fname = "/lus/h2resw01/fws4/lb/project/ai-ml/panguweather-o96/panguweather-o96-1979-2015.zarr"
-    ds_wb = zarr.open(fname, mode="r")
-    normalizer = InputNormalizer(ds_wb.attrs["climetlab"])
-    X = torch.rand(4, 40320, 99, dtype=torch.float32) * 2.0
-
-    X_ = X.clone()
-    LOGGER.debug("X.sum().sqrt() = %e", X.sum().sqrt())
-    X_norm = normalizer(X_)
-    LOGGER.debug("X_norm.sum().sqrt() = %e", X_norm.sum().sqrt())
-    assert not torch.allclose(X, X_norm)
-
-    X_denorm = normalizer.denormalize(X_norm.clone())
-    LOGGER.debug("X_denorm.sum().sqrt() = %e", X_denorm.sum().sqrt())
-    # we don't get back the original X _exactly_, but should be close enough
-    LOGGER.debug("max |X - X_denorm| = %e", torch.max(torch.abs(X - X_denorm)))
-    assert torch.allclose(X, X_denorm, rtol=1e-3, atol=5e-2)
