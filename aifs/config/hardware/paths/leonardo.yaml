@@ -1,0 +1,9 @@
+data: /leonardo/home/userexternal/fpinault/ai-ml/datasets/stable/
+output: ${oc.env:WORK}/output/${oc.env:USER}
+logs:
+  base: ${hardware.paths.output}/logs
+  wandb: ${hardware.paths.logs.base}
+  tensorboard: ${hardware.paths.logs.base}/tensorboard
+checkpoints: ${hardware.paths.output}/checkpoint
+plots: ${hardware.paths.output}/plots
+graph: ${oc.env:WORK}/AIFS_graphs/
