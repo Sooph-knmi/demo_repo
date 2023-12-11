@@ -10,7 +10,7 @@ repos:
     -   id: debug-statements # Check for debugger imports and py37+ breakpoint()
     -   id: end-of-file-fixer # Ensure files end in a newline
     -   id: trailing-whitespace # Trailing whitespace checker
-    -   id: no-commit-to-branch -b master -b main -b ens-score # Prevent committing to main / master / ens-score
+    -   id: no-commit-to-branch # Prevent committing to main / master
 -   repo: https://github.com/asottile/reorder-python-imports # Reorder imports
     rev: v3.10.0
     hooks:
