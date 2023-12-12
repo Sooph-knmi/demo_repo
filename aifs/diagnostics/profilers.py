@@ -1,6 +1,7 @@
 import csv
 import os
 import re
+from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import Optional
@@ -8,7 +9,6 @@ from typing import Optional
 import memray
 import numpy as np
 import pandas as pd
-import pynvml
 import pytorch_lightning as pl
 from memray import FileFormat
 from memray import FileReader
@@ -24,6 +24,7 @@ import wandb
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
+
 
 PROFILER_ACTIONS = [
     r"\[Strategy]\w+\.batch_to_device",
@@ -126,8 +127,10 @@ class BenchmarkProfiler(Profiler):
         super().__init__(config)
 
         self.config = config
-        self.dirpath = self.config.hardware.paths.logs.tensorboard
-        self.benchmark_filename = os.path.join(self.dirpath, "aifs-benchmark-profiler.csv")
+        self.dirpath = Path(self.config.hardware.paths.logs.base, "profiler")
+        self.dirpath.mkdir(parents=True, exist_ok=True)
+
+        self.benchmark_filename = Path(self.dirpath, "aifs-benchmark-profiler.csv")
 
         self._create_profilers()
 
@@ -138,31 +141,18 @@ class BenchmarkProfiler(Profiler):
             writer = csv.writer(f)
             writer.writerow(fields)
 
-    def _get_gpu_id(self, pid: int):
-        pynvml.nvmlInit()
-        gpu = []
-        for dev_id in range(pynvml.nvmlDeviceGetCount()):
-            handle = pynvml.nvmlDeviceGetHandleByIndex(dev_id)
-            for proc in pynvml.nvmlDeviceGetComputeRunningProcesses(handle):
-                if proc.pid == pid:
-                    gpu.append(dev_id)
-        return ",".join(map(str, gpu))
-
     def _create_profilers(self) -> None:
         self.time_profiler = SimpleProfiler(
             dirpath=self.dirpath,
         )
         self.pid = os.getpid()
-        self.memfile_name = f"aifs-benchmark-mem-profiler_{self.pid}.bin"
 
-        self.memfile_path = os.path.join(self.dirpath, self.memfile_name)
-        self.memory_profiler = memray.Tracker(self.memfile_path, file_format=FileFormat.AGGREGATED_ALLOCATIONS)
+        self.memfile_name = Path(self.dirpath, f"aifs-benchmark-mem-profiler_{self.pid}.bin")
+        self.memory_profiler = memray.Tracker(self.memfile_name, file_format=FileFormat.AGGREGATED_ALLOCATIONS)
         self._create_output_file()
 
     def start(self, action_name: str) -> None:
         self.time_profiler.start(action_name)
-        if action_name == "run_training_epoch":
-            self.gpus = self._get_gpu_id(self.pid)
 
     def stop(self, action_name: str) -> None:
         self.time_profiler.stop(action_name)
@@ -192,9 +182,9 @@ class BenchmarkProfiler(Profiler):
         return time_df
 
     def _generate_memray_df(self):
-        print(self.memfile_path)
+        print(self.memfile_name)
         self.memory_profiler.__exit__(None, None, None)
-        memfile_tracking = FileReader(self.memfile_path)
+        memfile_tracking = FileReader(self.memfile_name)
         memory_allocations = list(memfile_tracking.get_high_watermark_allocation_records())
         table = TableReporter.from_snapshot(memory_allocations, memory_records=[], native_traces=False)
         df = pd.DataFrame(table.data)
@@ -252,7 +242,6 @@ class BenchmarkProfiler(Profiler):
         cleaned_memray_df = self._trim_memray_df(memray_df)
 
         cleaned_memray_df["pid"] = self.pid
-        cleaned_memray_df["gpus"] = self.gpus
 
         cleaned_memray_df.to_csv(self.benchmark_filename, mode="a", index=False, header=False)
 
@@ -267,7 +256,6 @@ class BenchmarkProfiler(Profiler):
                         "n_allocations": x["n_allocations"].sum(),
                         "size (MiB)": x["size (MiB)"].mean(),
                         "pid": len(set(x["pid"])),
-                        "gpus": list(set(x["gpus"])),
                     }
                 )
             )
@@ -276,7 +264,7 @@ class BenchmarkProfiler(Profiler):
         )
 
     def __del__(self) -> None:
-        os.remove(self.memfile_path)
+        os.remove(self.memfile_name)
 
 
 class ProfilerProgressBar(TQDMProgressBar):
@@ -317,11 +305,11 @@ class ProfilerProgressBar(TQDMProgressBar):
         batch_size_val = config.dataloader.batch_size.validation
 
         training_rates_array = np.array(self.training_rates)
-        speed_metrics["training_avg_speed"] = training_rates_array.mean()
-        speed_metrics["training_avg_speed_per_sample"] = training_rates_array.mean() / batch_size_tr
+        speed_metrics["training_avg_throughput"] = training_rates_array.mean()
+        speed_metrics["training_avg_throughput_per_sample"] = training_rates_array.mean() / batch_size_tr
 
         validation_rates_array = np.array(self.validation_rates)
-        speed_metrics["validation_avg_speed"] = validation_rates_array.mean()
-        speed_metrics["validation_avg_speed_per_sample"] = validation_rates_array.mean() / batch_size_val
+        speed_metrics["validation_avg_throughput"] = validation_rates_array.mean()
+        speed_metrics["validation_avg_throughput_per_sample"] = validation_rates_array.mean() / batch_size_val
 
         return speed_metrics

@@ -88,13 +88,20 @@ class AIFSProfiler(AIFSTrainer):
         speed_metrics_dict["avg_training_dataloader_throughput_per_sample"] = (
             speed_metrics_dict["avg_training_dataloader_throughput"] / self.config.dataloader.batch_size.training
         )
+
+        speed_metrics_dict["avg_validation_dataloader_throughput"] = np.array(
+            self.profiler.time_profiler.recorded_durations["[_EvaluationLoop].val_next"]
+        ).mean()
+        speed_metrics_dict["avg_validation_dataloader_throughput_per_sample"] = (
+            speed_metrics_dict["avg_validation_dataloader_throughput"] / self.config.dataloader.batch_size.validation
+        )
+
         return self.to_df(speed_metrics_dict)
 
     @cached_property
     def wandb_profile(self):
         """Get system metrics from W&B."""
         if not self.config.diagnostics.log.wandb.offline:
-            # print("RUN DICT", self.wandb_logger._wandb_init)
             self.run_dict = self.wandb_logger._wandb_init
             run_path = f"{self.run_dict['entity']}/{self.run_dict['project']}/{self.run_dict['id']}"
             wandb_memory_metrics_dict = summarize_wandb_system_metrics(run_path)

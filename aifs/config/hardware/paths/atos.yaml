@@ -1,9 +1,9 @@
 data: /home/mlx/ai-ml/datasets/stable/
 output: ${oc.env:HPCPERM}/aifs/${data.resolution}/
 logs:
-  base: ${hardware.paths.output}/logs
+  base: ${hardware.paths.output}logs/
   wandb: ${hardware.paths.logs.base}
-  tensorboard: ${hardware.paths.logs.base}/tensorboard
-checkpoints: ${hardware.paths.output}/checkpoint
-plots: ${hardware.paths.output}/plots
+  tensorboard: ${hardware.paths.logs.base}tensorboard/
+checkpoints: ${hardware.paths.output}checkpoint/
+plots: ${hardware.paths.output}plots/
 graph: /home/mlx/data/graphs/
