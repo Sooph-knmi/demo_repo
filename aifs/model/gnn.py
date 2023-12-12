@@ -108,6 +108,7 @@ class GraphMSG(nn.Module):
             hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
             heads=config.model.encoder.heads,
+            dropout=config.model.processor.dropout,
             mlp_hidden_ratio=config.model.encoder.mlp_hidden_ratio,
             edge_dim=self.e2h_edge_attr.shape[1] + self.e2h_trainable_size,
             activation=self.activation,
@@ -124,6 +125,7 @@ class GraphMSG(nn.Module):
                 edge_dim=self.h2h_edge_attr.shape[1] + self.h2h_trainable_size,
                 chunks=config.model.processor.chunks,
                 heads=config.model.processor.heads,
+                dropout=config.model.processor.dropout,
                 mlp_hidden_ratio=config.model.processor.mlp_hidden_ratio,
                 activation=self.activation,
             )
@@ -137,6 +139,7 @@ class GraphMSG(nn.Module):
                 window_size=config.model.processor.window_size,
                 chunks=config.model.processor.chunks,
                 heads=config.model.processor.heads,
+                dropout=config.model.processor.dropout,
                 mlp_hidden_ratio=config.model.processor.mlp_hidden_ratio,
                 activation=self.activation,
             )
@@ -150,6 +153,7 @@ class GraphMSG(nn.Module):
             hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
             heads=config.model.decoder.heads,
+            dropout=config.model.processor.dropout,
             mlp_hidden_ratio=config.model.decoder.mlp_hidden_ratio,
             edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
             backward_mapper=True,

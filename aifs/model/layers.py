@@ -34,6 +34,7 @@ def gen_mlp(
     in_features: int,
     hidden_dim: int,
     out_features: int,
+    dropout: float,
     n_extra_layers: int = 0,
     activation: str = "SiLU",
     start_with_layer_norm=True,
@@ -61,6 +62,8 @@ def gen_mlp(
         Whether to apply a final activation function to last layer, by default True
     final_layer_norm : bool, optional
         Whether to apply layer norm after activation, by default False
+    dropout : float
+        dropout probability during training
     checkpoints : bool, optional
         Whether to provide checkpoints, by default False
 
@@ -83,14 +86,17 @@ def gen_mlp(
     mlp1 = nn.Sequential()
     if start_with_layer_norm:
         mlp1 = nn.Sequential(nn.LayerNorm(in_features))
-    mlp1.append(nn.Sequential(nn.Linear(in_features, hidden_dim), act_func()))
+    mlp1.append(nn.Sequential(nn.Linear(in_features, hidden_dim), act_func(), nn.Dropout(dropout)))
     for _ in range(n_extra_layers):
         mlp1.append(nn.Linear(hidden_dim, hidden_dim))
         mlp1.append(act_func())
+        mlp1.append(nn.Dropout(dropout))
     mlp1.append(nn.Linear(hidden_dim, out_features))
 
     if final_activation:
         mlp1.append(act_func())
+
+    mlp1.append(nn.Dropout(dropout))
 
     if final_layer_norm:
         mlp1.append(AutocastLayerNorm(out_features))
@@ -121,6 +127,7 @@ class GNNProcessor(nn.Module):
         hidden_dim: int,
         hidden_layers: int,
         edge_dim: int,
+        dropout: float = 0.0,
         chunks: int = 2,
         mlp_extra_layers: int = 0,
         heads: int = 16,
@@ -142,6 +149,8 @@ class GNNProcessor(nn.Module):
             Number of hidden layers
         edge_dim : int
             Input features of edge MLP
+        dropout: float, default 0.
+            dropout probability for mlp
         chunks : int, optional
             Number of chunks, by default 2
         mlp_extra_layers : int, optional
@@ -173,6 +182,7 @@ class GNNProcessor(nn.Module):
                     hidden_layers=chunk_size,
                     mlp_extra_layers=mlp_extra_layers,
                     heads=heads,
+                    dropout=dropout,
                     mlp_hidden_ratio=mlp_hidden_ratio,
                     activation=activation,
                     edge_dim=edge_dim,
@@ -220,6 +230,7 @@ class GNNProcessorChunk(nn.Module):
         out_channels: int,
         hidden_dim: int,
         hidden_layers: int,
+        dropout: float,
         mlp_extra_layers: int = 0,
         heads: int = 16,
         mlp_hidden_ratio: int = 4,
@@ -238,6 +249,8 @@ class GNNProcessorChunk(nn.Module):
             Extra layers in MLP, by default 0
         heads: int
             Number of heads to use, default 16
+        dropout: float, default 0.
+            dropout probability for mlp
         mlp_hidden_ratio: int
             ratio of mlp hidden dimension to embedding dimension, default 4
         activation : str, optional
@@ -268,6 +281,8 @@ class GNNProcessorChunk(nn.Module):
                     edge_dim=edge_dim,
                     mlp_extra_layers=mlp_extra_layers,
                     activation=activation,
+                    dropout=dropout,
+                    dropout_proj=dropout,
                 )
                 for _ in range(self.hidden_layers)
             ]
@@ -312,6 +327,7 @@ class GNNMapper(nn.Module):
         heads: int = 16,
         mlp_hidden_ratio: int = 4,
         activation: str = "SiLU",
+        dropout: float = 0.0,
         cpu_offload: bool = False,
         backward_mapper: bool = False,
         out_channels_dst: Optional[int] = None,
@@ -334,6 +350,8 @@ class GNNMapper(nn.Module):
             Number of heads to use, default 16
         mlp_hidden_ratio: int
             ratio of mlp hidden dimension to embedding dimension, default 4
+        dropout: float, default 0.
+            dropout probability for mlp
         activation : str, optional
             Activation function, by default "SiLU"
         cpu_offload : bool, optional
@@ -356,6 +374,8 @@ class GNNMapper(nn.Module):
             hidden_dim,
             heads=heads,
             edge_dim=edge_dim,
+            dropout=dropout,
+            dropout_proj=dropout,
             mlp_extra_layers=mlp_extra_layers,
             activation=activation,
             update_src_nodes=update_src_nodes,
@@ -430,6 +450,8 @@ class GNNBlock(nn.Module):
         bias: bool = True,
         mlp_extra_layers: int = 0,
         activation: str = "SiLU",
+        dropout: float = 0.0,
+        dropout_proj: float = 0.0,
         update_src_nodes: bool = False,
         ptype: str = "processor",
         **kwargs,
@@ -452,6 +474,10 @@ class GNNBlock(nn.Module):
             Extra layers in MLP, by default 0
         activation : str, optional
             Activation function, by default "SiLU"
+        dropout: float, default 0.
+            dropout probability for mlp
+        dropout_proj: float, default 0.
+            dropout probability for projection
         update_src_nodes: bool, by default True
             Update src if src and dst nodes are given
         ptype : str, by default "processor",
@@ -478,11 +504,13 @@ class GNNBlock(nn.Module):
         )
 
         self.proj = nn.Linear(out_channels, out_channels)
+        self.drop_proj = nn.Dropout(dropout_proj)
 
         self.node_dst_mlp = gen_mlp(
             out_channels,
             hidden_dim,
             out_channels,
+            dropout=dropout,
             n_extra_layers=mlp_extra_layers,
             activation=activation,
             start_with_layer_norm=True,
@@ -498,6 +526,7 @@ class GNNBlock(nn.Module):
                 out_channels,
                 hidden_dim,
                 out_channels,
+                dropout=dropout,
                 n_extra_layers=mlp_extra_layers,
                 activation=activation,
                 start_with_layer_norm=True,
@@ -576,7 +605,7 @@ class GNNBlock(nn.Module):
         query, key, value, edges = self.shard_qkve_heads(query, key, value, edges, shapes, batch_size, model_comm_group)
         out = self.conv(query=query, key=key, value=value, edge_index=edge_index, edge_attr=edges, size=size)
         out = self.shard_output_seq(out, shapes, batch_size, model_comm_group)
-        out = self.proj(out + x_r)
+        out = self.drop_proj(self.proj(out + x_r))
 
         if isinstance(x_skip, Tensor):
             out = out + x_skip
@@ -655,6 +684,7 @@ class TransformerProcessor(nn.Module):
         heads: int = 16,
         mlp_hidden_ratio: int = 4,
         activation: str = "GELU",
+        dropout: float = 0.0,
         chunks: int = 2,
     ) -> None:
         """Initialize TransformerProcessor.
@@ -677,6 +707,8 @@ class TransformerProcessor(nn.Module):
             ratio of mlp hidden dimension to embedding dimension, default 4
         activation : str, optional
             Activation function, by default "GELU"
+        dropout: float, default 0.
+            dropout probability for mlp
         """
         super().__init__()
 
@@ -701,6 +733,7 @@ class TransformerProcessor(nn.Module):
                     hidden_layers=chunk_size,
                     window_size=window_size,
                     activation=activation,
+                    dropout=dropout,
                 )
                 for i, _ in enumerate(range(self.hidden_layers))
             ]
@@ -729,6 +762,7 @@ class TransformerProcessorChunk(nn.Module):
         heads: int = 16,
         mlp_hidden_ratio: int = 4,
         activation: str = "GELU",
+        dropout: float = 0.0,
     ) -> None:
         """Initialize TransformerProcessor.
 
@@ -744,6 +778,8 @@ class TransformerProcessorChunk(nn.Module):
             ratio of mlp hidden dimension to embedding dimension, default 4
         activation : str, optional
             Activation function, by default "GELU"
+        dropout: float, default 0.
+            dropout probability for mlp
         """
         super().__init__()
 
@@ -761,6 +797,8 @@ class TransformerProcessorChunk(nn.Module):
                     num_heads=heads,
                     activation=activation,
                     window_size=window_size,
+                    dropout=dropout,
+                    dropout_proj=dropout,
                 )
                 for _ in range(self.hidden_layers)
             ]
@@ -787,7 +825,9 @@ class TransformerProcessorChunk(nn.Module):
 
 
 class TransformerLayer(nn.Module):
-    def __init__(self, channels, hidden_dim, num_heads, activation, window_size: int):
+    def __init__(
+        self, channels: int, hidden_dim: int, num_heads: int, activation: str, window_size: int, dropout: float, dropout_proj: float
+    ):
         """
         Attention Block ...
         """
@@ -805,18 +845,19 @@ class TransformerLayer(nn.Module):
             num_heads=num_heads, embed_dimension=channels, window_size=window_size, bias=False, is_causal=False, dropout=0.0
         )
         self.proj = nn.Linear(channels, channels, bias=True)
+        self.drop_proj = nn.Dropout(dropout_proj)
 
         self.mlp = nn.Sequential(
-            nn.Linear(channels, hidden_dim),
-            act_func(),
-            nn.Linear(hidden_dim, channels),
+            nn.Linear(channels, hidden_dim), act_func(), nn.Dropout(dropout), nn.Linear(hidden_dim, channels), nn.Dropout(dropout)
         )
         self.lnorm2 = nn.LayerNorm(channels)
 
     def forward(self, x: Tensor, shapes: list, batch_size: int, model_comm_group: ProcessGroup) -> Tensor:
         x1 = x
         x = self.lnorm1(x)
-        x = self.proj(self.mhsa(x, shapes, batch_size, model_comm_group=model_comm_group)) + x1
+        x = self.mhsa(x, shapes, batch_size, model_comm_group=model_comm_group)
+        x = self.proj(x)
+        x = self.drop_proj(x) + x1
         x = self.mlp(self.lnorm2(x)) + x
 
         return x
@@ -830,7 +871,7 @@ class MultiHeadSelfAttention(nn.Module):
         bias: bool = False,
         is_causal: bool = False,
         window_size: int = None,
-        dropout: float = 0.0,
+        dropout: float = 0.0,  # do not use in sharded model
     ):
         super().__init__()
 
@@ -892,7 +933,9 @@ class MultiHeadSelfAttention(nn.Module):
             lambda t: einops.rearrange(t, "b h n c -> b n h c"), (query, key, value)
         )  # xops.memory_efficient_attention
         # out = self.atten(query, key, value) # xops.memory_efficient_attention
-        out = self.atten(query, key, value, causal=False, window_size=self.window_size)  # flash attention
+        out = self.atten(
+            query, key, value, causal=False, window_size=self.window_size, dropout_p=self.dropout if self.training else 0.0
+        )  # flash attention
         out = einops.rearrange(out, "b n h c -> b h n c")
 
         # flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False, window_size=(-1, -1))

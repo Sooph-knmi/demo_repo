@@ -13,14 +13,17 @@ processor:
   heads: 16
   mlp_hidden_ratio: 4
   window_size: 512
+  dropout: 0.0
 
 encoder:
   heads: 16
   mlp_hidden_ratio: 4
+  dropout: 0.0
 
 decoder:
   heads: 16
   mlp_hidden_ratio: 4
+  dropout: 0.0
 
 trainable_parameters:
   era: 8
