@@ -6,6 +6,7 @@ import einops
 import numpy as np
 import torch
 from torch import nn
+from torch import Tensor
 from torch.distributed.distributed_c10d import ProcessGroup
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
@@ -27,8 +28,10 @@ class GraphMSG(nn.Module):
 
     def __init__(
         self,
+        *,
         config: DotConfig,
-        graph_data: HeteroData = None,
+        data_indices: dict,
+        graph_data: HeteroData,
     ) -> None:
         """Initializes the graph neural network.
 
@@ -36,27 +39,36 @@ class GraphMSG(nn.Module):
         ----------
         config : DictConfig
             Job configuration
-        graph_data : HeteroData, optional
-            Graph definition, by default None
+        graph_data : HeteroData
+            Graph definition
         """
         super().__init__()
 
         self._graph_data = graph_data
 
-        self.in_channels = config.data.num_features - config.data.num_aux_features
+        # Calculate shapes and indices
+        self.num_input_channels = len(data_indices.model.input)
+        self.num_output_channels = len(data_indices.model.output)
+        self._internal_input_idx = data_indices.model.input.prognostic
+        self._internal_output_idx = data_indices.model.output.prognostic
+
+        assert len(self._internal_output_idx) == len(data_indices.model.output.full) - len(data_indices.model.output.diagnostic), (
+            f"Mismatch between the internal data indices ({len(self._internal_output_idx)}) and the output indices excluding "
+            f"diagnostic variables ({len(data_indices.model.output.full)-len(data_indices.model.output.diagnostic)})",
+        )
+        assert len(self._internal_input_idx) == len(
+            self._internal_output_idx
+        ), f"Model indices must match {self._internal_input_idx} != {self._internal_output_idx}"
+
         self.multi_step = config.training.multistep_input
-        self.aux_in_channels = config.data.num_aux_features
-
-        LOGGER.debug("self.in_channels + self.aux_channels == %d", self.in_channels + self.aux_in_channels)
-
         self.activation = config.model.activation
 
         # Create Graph edges
         self._create_edges()
 
         # Define Sizes of different tensors
-        self._era_size = self._graph_data[("era", "to", "era")].ecoords_rad.shape[0]
-        self._h_size = self._graph_data[("h", "to", "h")].hcoords_rad.shape[0]
+        self._data_grid_size = self._graph_data[("era", "to", "era")].ecoords_rad.shape[0]
+        self._hidden_grid_size = self._graph_data[("h", "to", "h")].hcoords_rad.shape[0]
 
         self.era_trainable_size = config.model.trainable_parameters.era
         self.h_trainable_size = config.model.trainable_parameters.hidden
@@ -68,9 +80,9 @@ class GraphMSG(nn.Module):
         self._create_trainable_attr()
 
         # Register edge increments
-        self._register_edge_inc("e2h", self._era_size, self._h_size)
-        self._register_edge_inc("h2e", self._h_size, self._era_size)
-        self._register_edge_inc("h2h", self._h_size, self._h_size)
+        self._register_edge_inc("e2h", self._data_grid_size, self._hidden_grid_size)
+        self._register_edge_inc("h2e", self._hidden_grid_size, self._data_grid_size)
+        self._register_edge_inc("h2h", self._hidden_grid_size, self._hidden_grid_size)
 
         # Register lat/lon
         self._register_latlon("era")
@@ -81,9 +93,7 @@ class GraphMSG(nn.Module):
 
         # Encoder from ERA -> H
         self.forward_mapper = GNNMapper(
-            in_channels_src=self.multi_step * (self.in_channels + self.aux_in_channels)
-            + self.era_latlons.shape[1]
-            + self.era_trainable_size,
+            in_channels_src=self.multi_step * self.num_input_channels + self.era_latlons.shape[1] + self.era_trainable_size,
             in_channels_dst=self.h_latlons.shape[1] + self.h_trainable_size,
             hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
@@ -106,7 +116,7 @@ class GraphMSG(nn.Module):
         self.backward_mapper = GNNMapper(
             in_channels_src=self.num_channels,
             in_channels_dst=self.num_channels,
-            out_channels_dst=self.in_channels,
+            out_channels_dst=self.num_output_channels,
             hidden_dim=self.num_channels,
             mlp_extra_layers=mlp_extra_layers,
             edge_dim=self.h2e_edge_attr.shape[1] + self.h2e_trainable_size,
@@ -127,8 +137,8 @@ class GraphMSG(nn.Module):
             f"{name}_latlons",
             torch.cat(
                 [
-                    torch.as_tensor(np.sin(self._graph_data[(name, "to", name)][f"{name[:1]}coords_rad"])),
-                    torch.as_tensor(np.cos(self._graph_data[(name, "to", name)][f"{name[:1]}coords_rad"])),
+                    torch.sin(self._graph_data[(name, "to", name)][f"{name[:1]}coords_rad"]),
+                    torch.cos(self._graph_data[(name, "to", name)][f"{name[:1]}coords_rad"]),
                 ],
                 dim=-1,
             ),
@@ -160,8 +170,8 @@ class GraphMSG(nn.Module):
 
     def _create_trainable_attr(self) -> None:
         """Create all trainable attributes."""
-        self.era_trainable = self._create_trainable_tensor(tensor_size=self._era_size, trainable_size=self.era_trainable_size)
-        self.h_trainable = self._create_trainable_tensor(tensor_size=self._h_size, trainable_size=self.h_trainable_size)
+        self.era_trainable = self._create_trainable_tensor(tensor_size=self._data_grid_size, trainable_size=self.era_trainable_size)
+        self.h_trainable = self._create_trainable_tensor(tensor_size=self._hidden_grid_size, trainable_size=self.h_trainable_size)
         self.e2h_trainable = self._create_trainable_tensor(graph=("era", "h"), trainable_size=self.e2h_trainable_size)
         self.h2e_trainable = self._create_trainable_tensor(graph=("h", "era"), trainable_size=self.h2e_trainable_size)
         self.h2h_trainable = self._create_trainable_tensor(graph=("h", "h"), trainable_size=self.h2h_trainable_size)
@@ -199,19 +209,19 @@ class GraphMSG(nn.Module):
             else None
         )
 
-    def _fuse_trainable_tensors(self, edge: torch.Tensor, trainable: Optional[torch.Tensor]) -> torch.Tensor:
+    def _fuse_trainable_tensors(self, edge: Tensor, trainable: Optional[Tensor]) -> Tensor:
         """Fuse edge and trainable tensors.
 
         Parameters
         ----------
-        edge : torch.Tensor
+        edge : Tensor
             Edge tensor
-        trainable : Optional[torch.Tensor]
+        trainable : Optional[Tensor]
             Tensor with trainable edges
 
         Returns
         -------
-        torch.Tensor
+        Tensor
             Fused tensors for latent space
         """
         latent = [einops.repeat(edge, "e f -> (repeat e) f", repeat=self.batch_size)]
@@ -222,7 +232,7 @@ class GraphMSG(nn.Module):
             dim=-1,  # feature dimension
         )
 
-    def _expand_edges(self, edge_index: Adj, edge_inc: torch.Tensor) -> Adj:
+    def _expand_edges(self, edge_index: Adj, edge_inc: Tensor) -> Adj:
         """Expand edge index correct number of times while adding the proper number to
         the edge index.
 
@@ -230,12 +240,12 @@ class GraphMSG(nn.Module):
         ----------
         edge_index : Adj
             Edge index to start
-        edge_inc : torch.Tensor
+        edge_inc : Tensor
             Edge increment to use
 
         Returns
         -------
-        torch.Tensor
+        Tensor
             Edge Index
         """
         edge_index = torch.cat(
@@ -248,10 +258,10 @@ class GraphMSG(nn.Module):
     def _run_mapper(
         self,
         mapper: nn.Module,
-        data: Tuple[torch.Tensor],
+        data: Tuple[Tensor],
         edge_index: Adj,
-        edge_inc: torch.Tensor,
-        edge_attr: torch.Tensor,
+        edge_inc: Tensor,
+        edge_attr: Tensor,
         shape_nodes: Tuple[List, List],
         size: Size,
         model_comm_group: ProcessGroup,
@@ -263,16 +273,16 @@ class GraphMSG(nn.Module):
         ----------
         mapper : nn.Module
             Which processor to use
-        data : Tuple[torch.Tensor]
+        data : Tuple[Tensor]
             Tuple of data to pass in
         edge_index : int
             Edge index to start
         edge_inc : int
             Edge increment to use
-        edge_attr : torch.Tensor
+        edge_attr : Tensor
             Trainable edge attribute tensor
         shape_nodes: Tuple[List, List]
-            Shapes of input fileds the task holds when running with multiple GPUs
+            Shapes of input fields the task holds when running with multiple GPUs
         size: Size
             Number of source and target nodes of bipartite graph
         model_comm_group : ProcessGroup
@@ -297,7 +307,7 @@ class GraphMSG(nn.Module):
             use_reentrant=use_reentrant,
         )
 
-    def forward(self, x: torch.Tensor, model_comm_group: Optional[ProcessGroup] = None) -> torch.Tensor:
+    def forward(self, x: Tensor, model_comm_group: Optional[ProcessGroup] = None) -> Tensor:
         self.batch_size = x.shape[0]
 
         # add ERA positional info (lat/lon)
@@ -311,9 +321,10 @@ class GraphMSG(nn.Module):
         edge_h_to_h_latent = self._fuse_trainable_tensors(self.h2h_edge_attr, self.h2h_trainable)
         edge_h_to_e_latent = self._fuse_trainable_tensors(self.h2e_edge_attr, self.h2e_trainable)
 
-        # size for mappers:
+        # size for mappers and processor:
         size_fwd = (x_era_latent.shape[0], x_h_latent.shape[0])
         size_bwd = (x_h_latent.shape[0], x_era_latent.shape[0])
+        size_proc = x_h_latent.shape[0]
 
         # shapes of node shards:
         shape_x_fwd = get_shape_shards(x_era_latent, 0, model_comm_group)
@@ -338,6 +349,7 @@ class GraphMSG(nn.Module):
             edge_index=self._expand_edges(self.h2h_edge_index, self._h2h_edge_inc),
             edge_attr=edge_h_to_h_latent,
             shape_nodes=shape_h_proc,
+            size=size_proc,
             model_comm_group=model_comm_group,
         )
 
@@ -355,7 +367,8 @@ class GraphMSG(nn.Module):
             model_comm_group=model_comm_group,
         )
 
-        x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=self.batch_size)
+        x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=self.batch_size).to(dtype=x.dtype).clone()
 
-        # residual connection (just for the predicted variables)
-        return x_out + x[:, -1, :, : self.in_channels]
+        # residual connection (just for the prognostic variables)
+        x_out[..., self._internal_output_idx] += x[:, -1, :, self._internal_input_idx]
+        return x_out

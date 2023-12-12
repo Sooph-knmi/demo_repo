@@ -1,7 +1,7 @@
 import math
 import os
+from collections import defaultdict
 from pathlib import Path
-from typing import Dict
 from typing import Mapping
 from typing import Tuple
 
@@ -19,6 +19,7 @@ from aifs.model.losses import grad_scaler
 from aifs.model.losses import WeightedMSELoss
 from aifs.model.model import AIFSModelGNN
 from aifs.utils.config import DotConfig
+from aifs.utils.jsonify import map_config_to_primitives
 from aifs.utils.logger import get_code_logger
 
 LOGGER = get_code_logger(__name__)
@@ -29,67 +30,52 @@ class GraphForecaster(pl.LightningModule):
 
     def __init__(
         self,
-        metadata: Dict,
+        *,
         config: DictConfig,
+        statistics: dict,
+        data_indices: dict,
+        metadata: dict,
     ) -> None:
         """Initialize graph neural network forecaster.
 
         Parameters
         ----------
-        metadata : Dict
-            Zarr metadata
         config : DictConfig
             Job configuration
+        statistics : dict
+            Statistics of the training data
+        data_indices : dict
+            Indices of the training data,
+        metadata : dict
+            Provenance information
         """
         super().__init__()
 
-        self.fcdim = config.data.num_features - config.data.num_aux_features
-        num_levels = len(config.data.pl.levels)
-
-        self.graph_data = torch.load(Path(config.hardware.paths.graph, config.hardware.files.graph))
+        self.graph_data = torch.load(Path(config.hardware.paths.graph, config.hardware.files.graph), map_location=self.device)
 
         self.model = AIFSModelGNN(
+            statistics=statistics,
+            data_indices=data_indices,
             metadata=metadata,
             graph_data=self.graph_data,
-            config=DotConfig(OmegaConf.to_container(config, resolve=True)),
+            config=DotConfig(map_config_to_primitives(OmegaConf.to_container(config, resolve=True))),
         )
+
+        self.data_indices = data_indices
 
         self.save_hyperparameters()
 
-        self.era_latlons = self.graph_data[("era", "to", "era")].ecoords_rad
-        self.era_weights = self.graph_data[("era", "to", "era")].area_weights
+        self.data_latlons = self.graph_data[("era", "to", "era")].ecoords_rad
+        self.area_weights = self.graph_data[("era", "to", "era")].area_weights
 
         self.logger_enabled = config.diagnostics.log.wandb.enabled
 
-        loss_scaling = np.array([], dtype=np.float32)
-        for pl_name in config.data.pl.parameters:
-            if pl_name in config.training.loss_scaling.pl:
-                scl = config.training.loss_scaling.pl[pl_name]
-            else:
-                scl = 1
-                LOGGER.debug("Parameter %s was not scaled.", pl_name)
-            loss_scaling = np.append(loss_scaling, [scl] * pressure_level(config.data.pl.levels))
-        for sfc_name in config.data.sfc.parameters:
-            if sfc_name in config.training.loss_scaling.sfc:
-                scl = config.training.loss_scaling.sfc[sfc_name]
-            else:
-                scl = 1
-                LOGGER.debug("Parameter %s was not scaled.", sfc_name)
-            loss_scaling = np.append(loss_scaling, [scl])
-        assert len(loss_scaling) == self.fcdim
-        loss_scaling = torch.from_numpy(loss_scaling)
+        self.metric_ranges, loss_scaling = self.metrics_loss_scaling(config, data_indices)
+        self.loss = WeightedMSELoss(area_weights=self.area_weights, data_variances=loss_scaling)
+        self.metrics = WeightedMSELoss(area_weights=self.area_weights)
 
-        self.loss = WeightedMSELoss(area_weights=self.era_weights, data_variances=loss_scaling)
         if config.training.loss_gradient_scaling:
             self.loss.register_full_backward_hook(grad_scaler, prepend=False)
-
-        self.metric_ranges = {}
-        for i, key in enumerate(config.data.pl.parameters):
-            self.metric_ranges[key] = [i * num_levels, (i + 1) * num_levels]
-        for key in config.training.metrics:
-            idx = metadata["name_to_index"][key]
-            self.metric_ranges[key] = [idx, idx + 1]
-        self.metrics = WeightedMSELoss(area_weights=self.era_weights)
 
         self.multi_step = config.training.multistep_input
         self.lr = (
@@ -124,16 +110,48 @@ class GraphForecaster(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x, self.model_comm_group)
 
+    @staticmethod
+    def metrics_loss_scaling(config: DictConfig, data_indices):
+        metric_ranges = defaultdict(list)
+        loss_scaling = np.ones((len(data_indices.data.output.full),), dtype=np.float32) * config.training.loss_scaling.default
+        for key, idx in data_indices.model.output.name_to_index.items():
+            # Split pressure levels on "_" separator
+            split = key.split("_")
+            if len(split) > 1:
+                # Create grouped metrics for pressure levels (e.g. Q, T, U, V, etc.) for logger
+                metric_ranges[f"pl_{split[0]}"].append(idx)
+                # Create pressure levels in loss scaling vector
+                if split[0] in config.training.loss_scaling.pl:
+                    loss_scaling[idx] = config.training.loss_scaling.pl[split[0]] * pressure_level(int(split[1]))
+                else:
+                    LOGGER.debug("Parameter %s was not scaled.", key)
+            else:
+                metric_ranges[f"sfc_{key}"].append(idx)
+                # Create surface variables in loss scaling vector
+                if key in config.training.loss_scaling.sfc:
+                    loss_scaling[idx] = config.training.loss_scaling.sfc[key]
+                else:
+                    LOGGER.debug("Parameter %s was not scaled.", key)
+            # Create specific metrics from hydra to log in logger
+            if key in config.training.metrics:
+                metric_ranges[key] = [idx]
+        loss_scaling = torch.from_numpy(loss_scaling)
+        return metric_ranges, loss_scaling
+
     def set_model_comm_group(self, model_comm_group) -> None:
         LOGGER.debug("set_model_comm_group: %s", model_comm_group)
         self.model_comm_group = model_comm_group
 
-    def advance_input(self, x: torch.Tensor, y: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
-        x = x.roll(-1, dims=1)
-        # autoregressive predictions - we re-init the "variable" part of x
-        x[:, self.multi_step - 1, :, : self.fcdim] = y_pred
+    def advance_input(self, batch: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
+        x = batch[:, 0 : self.multi_step, ...].roll(-1, dims=1)
+
+        x[:, self.multi_step - 1, :, self.data_indices.model.input.prognostic] = y_pred[
+            ..., self.data_indices.model.output.prognostic
+        ]
         # get new "constants" needed for time-varying fields
-        x[:, self.multi_step - 1, :, self.fcdim :] = y[..., self.fcdim :]
+        x[:, self.multi_step - 1, :, self.data_indices.model.input.forcing] = batch[
+            :, self.multi_step, ..., self.data_indices.data.input.forcing
+        ]
         return x
 
     def _step(
@@ -152,22 +170,22 @@ class GraphForecaster(pl.LightningModule):
         y_preds = []
         for rstep in range(self.rollout):
             # if rstep > 0: torch.cuda.empty_cache() # uncomment if rollout fails with OOM
-            y_pred = self(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+            y_pred = self(x[..., self.data_indices.data.input.full])  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
 
-            y = batch[:, self.multi_step + rstep, ...]  # target, shape = (bs, latlon, nvar)
+            y = batch[:, self.multi_step + rstep, ..., self.data_indices.data.output.full]
             # y includes the auxiliary variables, so we must leave those out when computing the loss
-            loss += checkpoint(self.loss, y_pred, y[..., : self.fcdim], use_reentrant=False)
+            loss += checkpoint(self.loss, y_pred, y, use_reentrant=False)
 
-            x = self.advance_input(x, y, y_pred)
+            x = self.advance_input(batch, y_pred)
 
             if validation_mode:
-                for mkey, (low, high) in self.metric_ranges.items():
-                    y_denorm = self.model.normalizer.denormalize(y, in_place=False)
-                    y_hat_denorm = self.model.normalizer.denormalize(x[:, -1, ...], in_place=False)
-                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_hat_denorm[..., low:high], y_denorm[..., low:high])
+                y_denorm = self.model.normalizer.denormalize(y, in_place=False)
+                y_pred_denorm = self.model.normalizer.denormalize(y_pred, in_place=False)
+                for mkey, indices in self.metric_ranges.items():
+                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
 
                 if self.enable_plot:
-                    y_preds.append(y_pred)
+                    y_preds.append(y_pred.detach())
 
         # scale loss
         loss *= 1.0 / self.rollout

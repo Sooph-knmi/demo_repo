@@ -17,7 +17,7 @@ defaults:
 #   num_gpus_per_node: 1
 hardware:
   files:
-    graph: graph_mappings_normed_edge_attrs_2023062700_${data.resolution}_h_0_1_2_3_4.pt
+    graph: graph_mappings_normed_edge_attrs_ordered_desc_lat_lon_20231122093910_${data.resolution}_h_0_1_2_3_4.pt
     training: panguweather-${data.resolution}-1979-2015-6h.zarr
   paths:
     training: /lus/h2resw01/fws4/lb/project/ai-ml/panguweather-${data.resolution}

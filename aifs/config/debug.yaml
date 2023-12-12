@@ -23,7 +23,7 @@ diagnostics:
       offline: True
 hardware:
   files:
-    graph: graph_mappings_normed_edge_attrs1_${data.resolution}_h_0_1_2_3_4.pt
+    graph: graph_mappings_normed_edge_attrs_ordered_desc_lat_lon_20231122093910_${data.resolution}_h_0_1_2_3_4.pt
 model:
   num_channels: 16
 dataloader:
