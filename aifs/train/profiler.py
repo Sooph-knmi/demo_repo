@@ -169,11 +169,11 @@ class AIFSProfiler(AIFSTrainer):
 @hydra.main(version_base=None, config_path="../config", config_name="debug")
 def main(config: DictConfig):
     print("running AIFS profiler")
-    print(config)
     trainer_aifs = AIFSProfiler(config)
     with trainer_aifs.profiler.memory_profiler:
         trainer_aifs.train()
 
     trainer_aifs.report()
-    if (config.diagnostics.log.wandb.enabled) or (not config.diagnostics.log.wandb.offline):
+
+    if (config.diagnostics.log.wandb.enabled) and (not config.diagnostics.log.wandb.offline):
         trainer_aifs.to_wandb()
