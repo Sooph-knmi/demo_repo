@@ -642,6 +642,7 @@ def get_callbacks(config: DictConfig) -> List:
         # save after every validation epoch, if we've improved
         save_on_train_epoch_end=False,
         enable_version_counter=False,
+        save_top_k=-1
     )
 
     ckpt_frequency_save_dict = {}
