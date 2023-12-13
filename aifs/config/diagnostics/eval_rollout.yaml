@@ -28,7 +28,6 @@ debug:
 # activate the pytorch profiler (disable this in production)
 # remember to also activate the tensorboard logger (below)
 profiler: False
-benchmark_profiler: True
 
 checkpoint:
   every_n_minutes: 30 # Approximate, as this is checked at the end of training steps
