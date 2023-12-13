@@ -32,7 +32,7 @@ class AIFSProfiler(AIFSTrainer):
     def __init__(self, config: DictConfig):
         super().__init__(config)
 
-        if self.config.diagnostics.log.wandb.enabled:
+        if (not self.config.diagnostics.log.wandb.enabled) or (self.config.diagnostics.log.wandb.offline):
             warnings.warn("Warning: W&B logging is deactivated so no system report would be provided")
 
     def print_report(self, title: str, dataframe: pd.DataFrame, color="white", emoji=""):
@@ -43,7 +43,7 @@ class AIFSProfiler(AIFSTrainer):
         console.print("[bold magenta] Benchmark Profiler Summary [/bold magenta]!", ":book:")
 
     def print_metadata(self):
-        console.print(f"[bold blue] SLURM NODE(s) {os.environ['SLURM_JOB_ID']} [/bold blue]!")
+        console.print(f"[bold blue] SLURM NODE(s) {os.environ['HOST']} [/bold blue]!")
         console.print(f"[bold blue] SLURM JOB ID {os.environ['SLURM_JOB_ID']} [/bold blue]!")
         console.print(f"[bold blue] TIMESTAMP {datetime.now().strftime('%d/%m/%Y %H:%M:%S')} [/bold blue]!")
 
