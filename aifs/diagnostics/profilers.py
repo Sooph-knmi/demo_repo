@@ -86,8 +86,10 @@ def summarize_gpu_metrics(df: pd.DataFrame) -> Dict[str, float]:
         if gpu_metric == "memoryAllocatedBytes":
             metrics_per_gpu = metrics_per_gpu * 1e-9
         average_metric[gpu_metric_name] = metrics_per_gpu.median()
-        metrics_per_gpu.index = ["   " + index for index in metrics_per_gpu.index]
-        average_metric.update(dict(metrics_per_gpu))
+        # Just add metrics per gpu to the report if we have more than 1 GPU
+        if metrics_per_gpu.shape[0] > 1:
+            metrics_per_gpu.index = ["   " + index for index in metrics_per_gpu.index]
+            average_metric.update(dict(metrics_per_gpu))
     return average_metric
 
 

@@ -72,7 +72,6 @@ class AIFSProfiler(AIFSTrainer):
 
         Get speed metrics from Progress Bar for training and validation.
         """
-        # TODO: Select and rename relevant metrics
         # Find the first ProfilerProgressBar callback.
         for callback in self.callbacks:
             if isinstance(callback, ProfilerProgressBar):
@@ -82,16 +81,16 @@ class AIFSProfiler(AIFSTrainer):
             raise ValueError("No ProfilerProgressBar callback found.")
 
         # Calculate per_sample metrics
-        speed_metrics_dict["avg_training_dataloader_throughput"] = np.array(
-            self.profiler.time_profiler.recorded_durations["[_TrainingEpochLoop].train_dataloader_next"]
-        ).mean()
+        speed_metrics_dict["avg_training_dataloader_throughput"] = (
+            1 / np.array(self.profiler.time_profiler.recorded_durations["[_TrainingEpochLoop].train_dataloader_next"]).mean()
+        )
         speed_metrics_dict["avg_training_dataloader_throughput_per_sample"] = (
             speed_metrics_dict["avg_training_dataloader_throughput"] / self.config.dataloader.batch_size.training
         )
 
-        speed_metrics_dict["avg_validation_dataloader_throughput"] = np.array(
-            self.profiler.time_profiler.recorded_durations["[_EvaluationLoop].val_next"]
-        ).mean()
+        speed_metrics_dict["avg_validation_dataloader_throughput"] = (
+            1 / np.array(self.profiler.time_profiler.recorded_durations["[_EvaluationLoop].val_next"]).mean()
+        )
         speed_metrics_dict["avg_validation_dataloader_throughput_per_sample"] = (
             speed_metrics_dict["avg_validation_dataloader_throughput"] / self.config.dataloader.batch_size.validation
         )
@@ -120,6 +119,8 @@ class AIFSProfiler(AIFSTrainer):
     @rank_zero_only
     def report(self) -> str:
         """Print report to console."""
+
+        # warnings.warn("Warning: W&B logging is deactivated so no system report would be provided")
 
         print("printing Profiler report")
         if (not self.config.diagnostics.log.wandb.enabled) or (self.config.diagnostics.log.wandb.offline):
@@ -173,7 +174,7 @@ class AIFSProfiler(AIFSTrainer):
         self.wandb_logger.experiment.finish()
 
 
-@hydra.main(version_base=None, config_path="../config", config_name="debug")
+@hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(config: DictConfig):
     print("running AIFS profiler")
     trainer_aifs = AIFSProfiler(config)
