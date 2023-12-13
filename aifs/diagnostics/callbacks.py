@@ -387,7 +387,8 @@ def get_callbacks(config: DictConfig) -> List:
         # save after every validation epoch, if we've improved
         save_on_train_epoch_end=False,
         enable_version_counter=False,
-        save_top_k=-1
+        # if save_top_k == k, best k models saved; if save_top_k == -1, all models are saved
+        save_top_k=config.diagnostics.checkpoint.num_models_saved
     )
 
     ckpt_frequency_save_dict = {}

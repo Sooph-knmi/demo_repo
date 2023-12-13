@@ -33,6 +33,9 @@ checkpoint:
   every_n_minutes: 30 # Approximate, as this is checked at the end of training steps
   every_n_epochs: 1
   every_n_train_steps: null # Does not scale with rollout
+  # Save the best 5 model weights in the training. 
+  # If set to -1, all checkpoints are kept ensuring runs can be continued/forked at any point in the training process
+  num_models_saved: -5 
 
 log:
   wandb:
