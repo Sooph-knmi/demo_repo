@@ -392,7 +392,7 @@ def get_callbacks(config: DictConfig) -> List:
     )
 
     ckpt_frequency_save_dict = {}
-    for key, frequency in config.diagnostics.checkpoint.items():
+    for key, frequency in config.diagnostics.checkpoint.save_frequency.items():
         if key == "every_n_minutes":
             target = "train_time_interval"
             frequency = timedelta(minutes=frequency)
