@@ -63,6 +63,7 @@ GPU_METRICS_DICT = {
 
 
 def get_wandb_metrics(run_id_path: str) -> (pd.DataFrame, dict):
+    """Fetches system metrics and metadata from a W&B run."""
     run = wandb.Api().run(run_id_path)
     system_metrics = run.history(stream="events")
     metadata_dict = run.metadata
@@ -71,11 +72,12 @@ def get_wandb_metrics(run_id_path: str) -> (pd.DataFrame, dict):
 
 
 def summarize_gpu_metrics(df: pd.DataFrame) -> Dict[str, float]:
-    """
-    gpu.{gpu_index}.memory - GPU memory utilization in percent for each GPU
-    gpu.{gpu_index}.memoryAllocated - GPU memory allocated as a percentage of the total available memory for each GPU
-    gpu.{gpu_index}.memoryAllocatedBytes - GPU memory allocated in bytes for each GPU
-    gpu.{gpu_index}.gpu - GPU utilization in percent for each GPU
+    """Given the System Metrics DataFrame, summarized the GPU metrics.
+
+    - gpu.{gpu_index}.memory - GPU memory utilization in percent for each GPU
+    - gpu.{gpu_index}.memoryAllocated - GPU memory allocated as a percentage of the total available memory for each GPU
+    - gpu.{gpu_index}.memoryAllocatedBytes - GPU memory allocated in bytes for each GPU
+    - gpu.{gpu_index}.gpu - GPU utilization in percent for each GPU
     """
     average_metric = {}
     col_names = df.columns
@@ -94,12 +96,14 @@ def summarize_gpu_metrics(df: pd.DataFrame) -> Dict[str, float]:
 
 
 def summarize_wandb_system_metrics(run_id_path: str) -> Dict[str, float]:
-    """
-    cpu.{}.cpu_percent - CPU usage of the system on a per-core basis.
-    system.memory - Represents the total system memory usage as a percentage of the total available memory.
-    system.cpu - Percentage of CPU usage by the process, normalized by the number of available CPUs
-    system.disk.\\.usageGB - (Represents the total system disk usage in gigabytes (GB))
-    system.proc.memory.percent - Indicates the memory usage of the process as a percentage of the total available memory
+    """Summarizes the System metrics from a W&B run.
+
+    Some of the metrics included are:
+      - cpu.{}.cpu_percent - CPU usage of the system on a per-core basis.
+      - system.memory - Represents the total system memory usage as a percentage of the total available memory.
+      - system.cpu - Percentage of CPU usage by the process, normalized by the number of available CPUs
+      - system.disk.\\.usageGB - (Represents the total system disk usage in gigabytes (GB))
+      - system.proc.memory.percent - Indicates the memory usage of the process as a percentage of the total available memory
 
     More information about W&B system metrics can be found here:
     https://docs.wandb.ai/guides/app/features/system-metrics
@@ -125,6 +129,20 @@ def summarize_wandb_system_metrics(run_id_path: str) -> Dict[str, float]:
 
 
 class BenchmarkProfiler(Profiler):
+    """Custom PyTorch Lightning profiler for benchmarking.
+
+    Args:
+        config: Configuration object.
+
+    Attributes:
+        dirpath (Path): Path to the profiler directory.
+        benchmark_filename (Path): Path to the benchmark profiler file.
+        time_profiler (SimpleProfiler): Simple profiler for time measurements.
+        pid (int): Process ID.
+        memfile_name (Path): Path to the memory profiler file.
+        memory_profiler (memray.Tracker): Memory profiler.
+    """
+
     def __init__(self, config):
         super().__init__(config)
 
@@ -270,17 +288,35 @@ class BenchmarkProfiler(Profiler):
 
 
 class ProfilerProgressBar(TQDMProgressBar):
+    """Custom PyTorch Lightning progress bar with additional functionality for
+    profiling.
+
+    Attributes:
+        validation_rates (List[float]): List to store validation rates (it/s).
+        training_rates (List[float]): List to store training rates (it/s).
+    """
+
     def __init__(self, config):
         super().__init__()
         self.validation_rates = []
         self.training_rates = []
 
     def _extract_rate(self, pbar) -> float:
+        """Extracts the iteration rate from the progress bar.
+
+        Parameters:
+            pbar: The progress bar.
+
+        Returns:
+            float: The iteration rate.
+        """
         return (pbar.format_dict["n"] - pbar.format_dict["initial"]) / pbar.format_dict["elapsed"]
 
     def on_train_batch_end(
         self, trainer: "pl.Trainer", pl_module: "pl.LightningModule", outputs: STEP_OUTPUT, batch: Any, batch_idx: int
     ) -> None:
+        """After the end of the training batch, extracts the rate from the progress bar
+        and adds it to the list of 'training_rates'."""
         batch_idx + 1
         super().on_train_batch_end(trainer, pl_module, outputs, batch, batch_idx)
         if self.train_progress_bar.format_dict["n"] != 0:
@@ -295,12 +331,22 @@ class ProfilerProgressBar(TQDMProgressBar):
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:
+        """After the end of the validation batch, extracts the rate from the progress
+        bar and adds it to the list of 'validation_rates'."""
         super().on_validation_batch_end(trainer, pl_module, outputs, batch, batch_idx, dataloader_idx)
         if self.val_progress_bar.format_dict["n"] != 0:
             self.validation_rates.append(self._extract_rate(self.val_progress_bar))
 
     @rank_zero_only
-    def summarize_metrics(self, config):
+    def summarize_metrics(self, config) -> Dict[str, float]:
+        """Summarizes and returns speed metrics based on training and validation rates.
+
+        Parameters:
+            config (Config): The configuration object.
+
+        Returns:
+            dict: A dictionary containing speed metrics.
+        """
         speed_metrics = {}
 
         batch_size_tr = config.dataloader.batch_size.training

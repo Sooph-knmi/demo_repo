@@ -1,4 +1,6 @@
+import os
 import warnings
+from datetime import datetime
 from functools import cached_property
 from typing import Dict
 from typing import List
@@ -20,7 +22,6 @@ from aifs.diagnostics.profilers import summarize_wandb_system_metrics
 from aifs.train.train import AIFSTrainer
 from aifs.utils.logger import get_code_logger
 
-
 LOGGER = get_code_logger(__name__)
 console = Console(record=True, width=200)
 
@@ -41,6 +42,11 @@ class AIFSProfiler(AIFSTrainer):
     def print_title(self):
         console.print("[bold magenta] Benchmark Profiler Summary [/bold magenta]!", ":book:")
 
+    def print_metadata(self):
+        console.print(f"[bold blue] SLURM NODE(s) {os.environ['SLURM_JOB_ID']} [/bold blue]!")
+        console.print(f"[bold blue] SLURM JOB ID {os.environ['SLURM_JOB_ID']} [/bold blue]!")
+        console.print(f"[bold blue] TIMESTAMP {datetime.now().strftime('%d/%m/%Y %H:%M:%S')} [/bold blue]!")
+
     @rank_zero_only
     def print_benchmark_profiler_report(
         self,
@@ -50,6 +56,7 @@ class AIFSProfiler(AIFSTrainer):
         wandb_memory_metrics_df: Optional[pd.DataFrame] = None,
     ) -> None:
         self.print_title()
+        self.print_metadata()
         self.print_report("Time Profiling", time_metrics_df, color="green", emoji="alarm_clock")
         self.print_report("Speed Profiling", speed_metrics_df, color="yellow", emoji="racing_car")
         self.print_report("Memory Profiling", memory_metrics_df, color="purple", emoji="floppy_disk")
@@ -120,9 +127,15 @@ class AIFSProfiler(AIFSTrainer):
     def report(self) -> str:
         """Print report to console."""
 
-        # warnings.warn("Warning: W&B logging is deactivated so no system report would be provided")
+        warnings.warn(
+            "INFO: Time Report metrics represent single-node metrics (rank-0 process) (not multi-node aggregated metrics)"
+        )
+        warnings.warn(
+            "INFO: Speed Report metrics represent single-node metrics (rank-0 process) (not multi-node aggregated metrics)"
+        )
 
-        print("printing Profiler report")
+        warnings.warn("INFO: Memory Report metrics represent metrics aggregated across all modes")
+
         if (not self.config.diagnostics.log.wandb.enabled) or (self.config.diagnostics.log.wandb.offline):
             self.print_benchmark_profiler_report(
                 speed_metrics_df=self.speed_profile,
@@ -131,6 +144,8 @@ class AIFSProfiler(AIFSTrainer):
             )
         else:
             self._close_logger()
+            warnings.warn("INFO: System report is provided from W&B system metrics which are single-node metrics (rank-0 process)")
+
             self.print_benchmark_profiler_report(
                 speed_metrics_df=self.speed_profile,
                 time_metrics_df=self.time_profile,
@@ -171,12 +186,12 @@ class AIFSProfiler(AIFSTrainer):
         return BenchmarkProfiler(self.config)
 
     def _close_logger(self) -> None:
+        # We need to close the W&B logger to be able to read the System Metrics
         self.wandb_logger.experiment.finish()
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(config: DictConfig):
-    print("running AIFS profiler")
     trainer_aifs = AIFSProfiler(config)
     with trainer_aifs.profiler.memory_profiler:
         trainer_aifs.train()
