@@ -155,13 +155,16 @@ class BenchmarkProfiler(Profiler):
         self._create_profilers()
 
     @rank_zero_only
-    def _create_output_file(self):
-        fields = ["category", "n_allocations", "size (MiB)", "function", "group", "pid", "gpus"]
+    def _create_output_file(self) -> None:
+        """Creates the output file to aggregate the results from the memory
+        profiling."""
+        fields = ["category", "size (MiB)", "function", "group", "pid"]
         with open(self.benchmark_filename, "w") as f:
             writer = csv.writer(f)
             writer.writerow(fields)
 
     def _create_profilers(self) -> None:
+        """Creates profilers for time and memory measurements."""
         self.time_profiler = SimpleProfiler(
             dirpath=self.dirpath,
         )
@@ -172,12 +175,22 @@ class BenchmarkProfiler(Profiler):
         self._create_output_file()
 
     def start(self, action_name: str) -> None:
+        """Starts recording time for a specific action.
+
+        Args:
+            action_name (str): Name of the action.
+        """
         self.time_profiler.start(action_name)
 
     def stop(self, action_name: str) -> None:
+        """Stops recording time for a specific action.
+
+        Args:
+            action_name (str): Name of the action.
+        """
         self.time_profiler.stop(action_name)
 
-    def _trim_report(self, recorded_actions: dict) -> Dict[str, float]:
+    def _trim_time_report(self, recorded_actions: dict) -> Dict[str, float]:
         all_actions_names = recorded_actions.keys()
         trimmed_actions_names = []
         for action in all_actions_names:
@@ -190,7 +203,15 @@ class BenchmarkProfiler(Profiler):
         return cleaned_recorded_actions
 
     def get_time_profiler_df(self, precision: int = 5) -> pd.DataFrame:
-        self.time_profiler.recorded_durations = self._trim_report(recorded_actions=self.time_profiler.recorded_durations)
+        """Retrieves a DataFrame with time profiling information.
+
+        Args:
+            precision (int): Precision for rounding (default is 5).
+
+        Returns:
+            pd.DataFrame: DataFrame with time profiling information.
+        """
+        self.time_profiler.recorded_durations = self._trim_time_report(recorded_actions=self.time_profiler.recorded_durations)
         time_df = pd.DataFrame(self.time_profiler.recorded_durations.items())
         time_df[2] = time_df[1].apply(lambda x: len(x))
         time_df[3] = time_df[1].apply(lambda x: np.mean(x))
@@ -201,8 +222,9 @@ class BenchmarkProfiler(Profiler):
         time_df = time_df.round(precision)
         return time_df
 
-    def _generate_memray_df(self):
-        print(self.memfile_name)
+    def _generate_memray_df(self) -> pd.DataFrame:
+        """For each node/process we convert the tracking results to a dataframe just
+        keeping the  high watermark allocations."""
         self.memory_profiler.__exit__(None, None, None)
         memfile_tracking = FileReader(self.memfile_name)
         memory_allocations = list(memfile_tracking.get_high_watermark_allocation_records())
@@ -212,6 +234,17 @@ class BenchmarkProfiler(Profiler):
         return df
 
     def _aggregate_per_category(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Aggregates memory profiling information per category.
+
+        Each stack_trace tracked by memray is separated into parts
+        - first part points to the path of the library - referred as category
+        - second part is the exact name of the function of this script
+
+        Since we can have traces coming from the same script but referring
+        to multiple functions in that script, we aggregate those and in the
+        'function' entry we just keep the function that has a higher memory
+        consumption.
+        """
         pattern = r"^(.*?) at (.*?)\.py"
         new_cols = df.loc[:, "stack_trace"].str.extract(pattern)
         df = df.assign(function=new_cols[0], category=new_cols[1])
@@ -219,7 +252,6 @@ class BenchmarkProfiler(Profiler):
         df_agg = df.groupby("category").apply(
             lambda x: pd.Series(
                 {
-                    "n_allocations": x["n_allocations"].sum(),
                     "size (MiB)": x["size (MiB)"].sum(),
                     "function": x.loc[x["size (MiB)"].idxmax()]["function"],
                 }
@@ -228,10 +260,23 @@ class BenchmarkProfiler(Profiler):
         df_agg.reset_index(inplace=True)
         return df_agg
 
-    def _trim_memray_df(self, memray_df: pd.DataFrame, precision: int = 5) -> pd.DataFrame:
+    def _trim_memray_df(self, memray_df: pd.DataFrame, precision: int = 5, n_items: int = 10) -> pd.DataFrame:
+        """Trims and processes the memray DataFrame. Since Memray tracks memory
+        allocations across.
+
+        all the script, we group those allocations in two categories:
+            - aifs-operations: coming from functions included in this repository
+            - general-operations: coming from functions from other python libraries
+
+        Args:
+            memray_df (pd.DataFrame): Input DataFrame from memray.
+            precision (int): Precision for rounding (default is 5).
+            n_items (int): Number of top memory-consuming items to include (default is 10).
+        """
         cleaned_memray_df = memray_df.drop("tid", axis=1)
         cleaned_memray_df = cleaned_memray_df.drop("allocator", axis=1)
 
+        # For readibility, we cut the paths to just display the relevant package info
         module_path = aifs.__path__[0].replace("aifs-mono/aifs", "")
         env_path = pl.__path__[0].replace("pytorch_lightning", "")
         base_env_path = pl.__path__[0].replace("/site-packages/pytorch_lightning", "")
@@ -244,7 +289,7 @@ class BenchmarkProfiler(Profiler):
         cleaned_memray_df.sort_values("size (MiB)", ascending=False, inplace=True)
         cleaned_memray_df = cleaned_memray_df.drop("size", axis=1)
 
-        top_most_memory_consuming_df = cleaned_memray_df[~cleaned_memray_df["stack_trace"].str.contains("aifs")].head(10)
+        top_most_memory_consuming_df = cleaned_memray_df[~cleaned_memray_df["stack_trace"].str.contains("aifs")].head(n_items)
         top_most_memory_consuming_df = self._aggregate_per_category(top_most_memory_consuming_df)
 
         aifs_memray = cleaned_memray_df[cleaned_memray_df["stack_trace"].str.contains("aifs")]
@@ -258,6 +303,8 @@ class BenchmarkProfiler(Profiler):
         return merged_memory_df
 
     def teardown(self, stage: Optional[str]):
+        """Before closing the profiler, performs the cleanup operations and writes
+        memray data to the common benchmark file."""
         memray_df = self._generate_memray_df()
         cleaned_memray_df = self._trim_memray_df(memray_df)
 
@@ -266,14 +313,19 @@ class BenchmarkProfiler(Profiler):
         cleaned_memray_df.to_csv(self.benchmark_filename, mode="a", index=False, header=False)
 
     @rank_zero_only
-    def get_memory_profiler_df(self):
+    def get_memory_profiler_df(self) -> pd.DataFrame:
+        """Retrieves the memory profiler data as a DataFrame.
+
+        Aggregates the results coming from multiple nodes/processes
+        Returns:
+            pd.DataFrame: Memory profiler data.
+        """
         mem_df = pd.read_csv(self.benchmark_filename)
         return (
             mem_df.groupby(["category", "group", "function"])
             .apply(
                 lambda x: pd.Series(
                     {
-                        "n_allocations": x["n_allocations"].sum(),
                         "size (MiB)": x["size (MiB)"].mean(),
                         "pid": len(set(x["pid"])),
                     }
