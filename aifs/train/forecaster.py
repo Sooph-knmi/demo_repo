@@ -2,7 +2,6 @@ import math
 import os
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict
 from typing import List
 from typing import Optional
 from typing import Tuple
@@ -24,10 +23,10 @@ from aifs.distributed.helpers import gather_tensor
 from aifs.losses.energy import EnergyScore
 from aifs.losses.kcrps import KernelCRPS
 from aifs.losses.patched_energy import PatchedEnergyScore
+from aifs.losses.wmse import grad_scaler
 from aifs.losses.wmse import WeightedMSELoss
 from aifs.metrics.ranks import RankHistogram
 from aifs.metrics.spread import SpreadSkill
-from aifs.model.losses import grad_scaler
 from aifs.model.model import AIFSModelGNN
 from aifs.utils.config import DotConfig
 from aifs.utils.jsonify import map_config_to_primitives
@@ -83,8 +82,8 @@ class GraphForecaster(pl.LightningModule):
 
         self.logger_enabled = config.diagnostics.log.wandb.enabled
 
-        self.metric_ranges, loss_scaling = self.metrics_loss_scaling(config, data_indices)
-        self.loss = WeightedMSELoss(area_weights=self.area_weights, data_variances=loss_scaling)
+        self.metric_ranges, self.loss_scaling = self.metrics_loss_scaling(config, data_indices)
+        # self.loss = WeightedMSELoss(area_weights=self.area_weights, data_variances=self.loss_scaling)
         self.metrics = WeightedMSELoss(area_weights=self.area_weights)
 
         if config.training.loss_gradient_scaling:
@@ -122,9 +121,6 @@ class GraphForecaster(pl.LightningModule):
 
         # Loss function
         self._initialize_loss(config)
-
-        # Validation metrics
-        self._initialize_metrics(metadata, config)
 
         # Rank histogram
         self.ranks = RankHistogram(nens=self.nens_per_group, nvar=self.fcdim)
@@ -212,27 +208,6 @@ class GraphForecaster(pl.LightningModule):
         return gather_matrix
 
     def _initialize_loss(self, config: DictConfig) -> None:
-        loss_scaling = np.array([], dtype=np.float32)
-
-        for pl_name in config.data.pl.parameters:
-            if pl_name in config.training.loss_scaling.pl:
-                scl = config.training.loss_scaling.pl[pl_name]
-            else:
-                scl = 1
-                LOGGER.debug("Parameter %s was not scaled.", pl_name)
-            loss_scaling = np.append(loss_scaling, [scl] * pressure_level(config.data.pl.levels))
-
-        for sfc_name in config.data.sfc.parameters:
-            if sfc_name in config.training.loss_scaling.sfc:
-                scl = config.training.loss_scaling.sfc[sfc_name]
-            else:
-                scl = 1
-                LOGGER.debug("Parameter %s was not scaled.", sfc_name)
-            loss_scaling = np.append(loss_scaling, [scl])
-
-        assert len(loss_scaling) == self.fcdim
-        loss_scaling = torch.from_numpy(loss_scaling).to(dtype=self.dtype, device=self.device)
-
         self.loss_type = config.training.loss
         assert self.loss_type in [
             "kcrps",
@@ -240,26 +215,15 @@ class GraphForecaster(pl.LightningModule):
             "patched_energy",
         ], f"Invalid loss type {self.loss_type}! Check your config ..."
 
-        self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=loss_scaling)
+        self.kcrps = KernelCRPS(area_weights=self.era_weights, loss_scaling=self.loss_scaling)
 
         if self.loss_type == "energy":
-            self.energy_score = EnergyScore(area_weights=self.era_weights, loss_scaling=loss_scaling)
+            self.energy_score = EnergyScore(area_weights=self.era_weights, loss_scaling=self.loss_scaling)
         elif self.loss_type == "patched_energy":
             patches_ = torch.from_numpy(
                 np.load(Path(config.hardware.paths.patches, config.hardware.files.patches))  # .astype(np.float32)
             ).to(dtype=self.dtype, device=self.device)
-            self.energy_score = PatchedEnergyScore(area_weights=self.era_weights, patches=patches_, loss_scaling=loss_scaling)
-
-    def _initialize_metrics(self, metadata: Dict, config: DictConfig) -> None:
-        num_levels = len(config.data.pl.levels)
-        self.metric_ranges = {}
-        for i, key in enumerate(config.data.pl.parameters):
-            self.metric_ranges[key] = [i * num_levels, (i + 1) * num_levels]
-        for key in config.training.metrics:
-            idx = metadata["name_to_index"][key]
-            self.metric_ranges[key] = [idx, idx + 1]
-        # Validation metric(s)
-        self.metrics = WeightedMSELoss(area_weights=self.era_weights)
+            self.energy_score = PatchedEnergyScore(area_weights=self.era_weights, patches=patches_, loss_scaling=self.loss_scaling)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x, self.model_comm_group)

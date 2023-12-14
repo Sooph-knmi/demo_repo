@@ -26,9 +26,9 @@ class NativeGridDataset(IterableDataset):
         data_reader: Callable,
         rollout: int = 1,
         multistep: int = 1,
-        comm_group_rank: int = 0,
-        comm_group_id: int = 0,
-        comm_num_groups: int = 1,
+        model_comm_group_rank: int = 0,
+        model_comm_group_id: int = 0,
+        model_comm_num_groups: int = 1,
         shuffle: bool = True,
     ) -> None:
         """Initialize (part of) the dataset state.
@@ -41,11 +41,11 @@ class NativeGridDataset(IterableDataset):
             length of rollout window, by default 12
         multistep : int, optional
             collate (t-1, ... t - multistep) into the input state vector, by default 1
-        comm_group_rank : int, optional
+        model_comm_group_rank : int, optional
             process rank in the torch.distributed group (important when running on multiple GPUs), by default 0
-        comm_group_id: int, optional
+        model_comm_group_id: int, optional
             device group ID, default 0
-        comm_num_groups : int, optional
+        model_comm_num_groups : int, optional
             total number of device groups, by default 1
         shuffle : bool, optional
             Shuffle batches, by default True
@@ -64,9 +64,9 @@ class NativeGridDataset(IterableDataset):
         self.n_samples_per_epoch_per_worker: int = 0
 
         # DDP-relevant info
-        self.comm_group_rank = comm_group_rank
-        self.comm_num_groups = comm_num_groups
-        self.comm_group_id = comm_group_id
+        self.model_comm_group_rank = model_comm_group_rank
+        self.model_comm_num_groups = model_comm_num_groups
+        self.model_comm_group_id = model_comm_group_id
         self.global_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
         # additional state vars (lazy init)

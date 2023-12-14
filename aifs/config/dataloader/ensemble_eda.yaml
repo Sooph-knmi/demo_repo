@@ -1,0 +1,51 @@
+prefetch_factor: 2
+
+num_workers:
+  training: 6
+  validation: 6
+batch_size:
+  training: 1
+  validation: 1
+  test: 4
+  predict: 4
+# runs only N training batches [N = integer | null]
+# if null then we run through all the batches
+limit_batches:
+  training: null
+  validation: null
+  test: 20
+  predict: 20
+
+# ============
+# Dataloader definitions
+# These follow the ecml-tools patterns
+# You can make these as complicated for merging as you like
+# See Readme: https://github.com/ecwmf-lab/ecml-tools/
+# ============
+
+training:
+  ensemble:
+    - dataset: ${hardware.paths.data}/${hardware.files.dataset}
+      frequency: ${data.frequency}
+    - dataset: ${hardware.paths.data}/aifs-ea-an-enda-0001-mars-o96-1979-2022-3h-v4.zarr
+      frequency: ${data.frequency}
+  start: null
+  end: 2017
+
+validation:
+  ensemble:
+    - dataset: ${hardware.paths.data}/${hardware.files.dataset}
+      frequency: ${data.frequency}
+    - dataset: ${hardware.paths.data}/aifs-ea-an-enda-0001-mars-o96-1979-2022-3h-v4.zarr
+      frequency: ${data.frequency}
+  start: 2018
+  end: 2019
+
+test:
+  ensemble:
+    - dataset: ${hardware.paths.data}/${hardware.files.dataset}
+      frequency: ${data.frequency}
+    - dataset: ${hardware.paths.data}/aifs-ea-an-enda-0001-mars-o96-1979-2022-3h-v4.zarr
+      frequency: ${data.frequency}
+  start: 2020
+  end: null

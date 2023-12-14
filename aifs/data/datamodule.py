@@ -61,14 +61,6 @@ class ECMLDataModule(pl.LightningDataModule):
             else self.config.training.rollout.start
         )
 
-        # Set the training end date if not specified
-        if self.config.dataloader.training.end is None:
-            LOGGER.info(
-                "No end date specified for training data, setting default before validation start date %s.",
-                self.config.dataloader.validation.start - 1,
-            )
-            self.config.dataloader.training.end = self.config.dataloader.validation.start - 1
-
     def _check_resolution(self, resolution) -> None:
         assert (
             self.config.data.resolution.lower() == resolution.lower()
