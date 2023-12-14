@@ -43,7 +43,7 @@ setup(
             "zarr>=2.14.2",
             "pre-commit>=3.3.3",
         ],
-        "profile": ["pandas>=1.3.2", "rich>=13.6.0", "tabulate>=0.9.0", "memray>=1.10.0", "pynvml>=11.4.1"],
+        "profile": ["pandas>=1.3.2", "rich>=13.6.0", "tabulate>=0.9.0", "memray>=1.10.0"],
         "graph": [
             "networkx>=3.1",
             "h3>=3.7.6",
