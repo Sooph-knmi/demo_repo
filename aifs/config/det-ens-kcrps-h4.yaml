@@ -49,7 +49,7 @@ training:
 
 diagnostics:
   eval:
-    enabled: True
+    enabled: False
     rollout: 2
     frequency: 5
   plot:

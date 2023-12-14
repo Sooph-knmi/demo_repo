@@ -24,8 +24,8 @@ export HYDRA_FULL_ERROR=1
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
 # Name and notes optional
-export WANDB_NAME="ens 4"
-export WANDB_NOTES="ens 4"
+export WANDB_NAME="ens 4 double batch lr"
+export WANDB_NOTES="ens 4 double batch lr"
 
 # generic settings
 CONDA_ENV=aifs_dev

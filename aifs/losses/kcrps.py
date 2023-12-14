@@ -55,10 +55,16 @@ class KernelCRPS(nn.Module):
         kcrps_ = self._kernel_crps(y_pred, y_target, fair=self.fair)
         if hasattr(self, "scale"):
             kcrps_ = kcrps_ * self.scale[:, None]
-        kcrps_ = kcrps_ * self.weights
-        # divide by (weighted point count) * (batch size)
-        npoints = torch.sum(self.weights)
-        if squash:
-            return kcrps_.sum() / (npoints * bs_)
-        # sum only across the batch dimension; enable this to generate per-variable CRPS "maps"
-        return kcrps_.sum(dim=0) / bs_
+        if y_pred.shape[-1] == 1 and squash:
+            kcrps_ = kcrps_.mean(dim=1)
+            kcrps_ = kcrps_ * self.weights.expand_as(kcrps_)
+            kcrps_ /= torch.sum(self.weights.expand_as(kcrps_))
+            return kcrps_.sum()
+        else:
+            kcrps_ = kcrps_ * self.weights
+            # divide by (weighted point count) * (batch size)
+            npoints = torch.sum(self.weights)
+            if squash:
+                return kcrps_.sum() / (npoints * bs_)
+            # sum only across the batch dimension; enable this to generate per-variable CRPS "maps"
+            return kcrps_.sum(dim=0) / bs_
