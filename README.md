@@ -27,6 +27,11 @@ Graph shenanigans (like running the graph generation notebooks) need to have som
 pip install .[graph]
 ```
 
+And the profiler uses some additional libraries for parsing the output.
+```
+pip install .[profile]
+```
+
 ## Pre-commit Etiquette
 
 We are using pre-commit hooks. You can find the config in `.pre-commit-config.yaml`, which automatically format new code and check with tools like `black` and `flake8`.
@@ -66,3 +71,18 @@ $> pytest tests/test_<file>.py
 ```
 
 Be aware that some tests like the `test_gnn.py` run a singular forward pass, which can be slow on CPU and runs better on GPU.
+
+## How to Profile
+
+We wrote a special profiler that uses Pytorch, Lightning, and memray to measure the performance of the code in it's current training state. Run
+
+```shell
+$> aifs-profile
+```
+
+This starts a short training run and creates different information:
+
+- Time Profile: Duration of different operations
+- Speed Profile: Throughput of dataloader and model
+- Memory Profile: Memory of the "worst offenders"
+- System Utilization: Overall system utilization (needs W&B online)
