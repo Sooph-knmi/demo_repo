@@ -75,7 +75,7 @@ class AIFSProfiler(AIFSTrainer):
 
     @cached_property
     def speed_profile(self):
-        """Speed profiler.
+        """Speed profiler Report.
 
         Get speed metrics from Progress Bar for training and validation.
         """
@@ -106,7 +106,7 @@ class AIFSProfiler(AIFSTrainer):
 
     @cached_property
     def wandb_profile(self):
-        """Get system metrics from W&B."""
+        """W&B System Profiler Report."""
         if not self.config.diagnostics.log.wandb.offline:
             self.run_dict = self.wandb_logger._wandb_init
             run_path = f"{self.run_dict['entity']}/{self.run_dict['project']}/{self.run_dict['id']}"
@@ -116,11 +116,12 @@ class AIFSProfiler(AIFSTrainer):
 
     @cached_property
     def memory_profile(self):
+        """Memory Profiler Report."""
         return self.profiler.get_memory_profiler_df()
 
     @cached_property
     def time_profile(self):
-        """Time Profiler."""
+        """Time Profiler Report."""
         return self.profiler.get_time_profiler_df()
 
     @rank_zero_only
@@ -134,7 +135,7 @@ class AIFSProfiler(AIFSTrainer):
             "INFO: Speed Report metrics represent single-node metrics (rank-0 process) (not multi-node aggregated metrics)"
         )
 
-        warnings.warn("INFO: Memory Report metrics represent metrics aggregated across all modes")
+        warnings.warn("INFO: Memory Report metrics represent metrics aggregated across all nodes")
 
         if (not self.config.diagnostics.log.wandb.enabled) or (self.config.diagnostics.log.wandb.offline):
             self.print_benchmark_profiler_report(
