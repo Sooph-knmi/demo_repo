@@ -139,7 +139,8 @@ class AIFSTrainer:
 
     @cached_property
     def profiler(self) -> Optional[PyTorchProfiler]:
-        """Returns a pytorch profiler object, if profiling is enabled."""
+        """Returns a pytorch profiler object, if profiling is enabled, otherwise
+        None."""
         if self.config.diagnostics.profiler:
             assert (
                 self.config.diagnostics.log.tensorboard.enabled

@@ -16,8 +16,6 @@ defaults:
 # hardware:
 #   num_gpus_per_node: 1
 diagnostics:
-  plot:
-    enabled: False
   log:
     wandb:
       offline: True
@@ -25,10 +23,10 @@ hardware:
   files:
     graph: graph_mappings_normed_edge_attrs_ordered_desc_lat_lon_20231122093910_${data.resolution}_h_0_1_2_3_4.pt
 model:
-  num_channels: 16
+  num_channels: 128
 dataloader:
   limit_batches:
-    training: 5
-    validation: 5
+    training: 100
+    validation: 100
 training:
-  max_epochs: 1
+  max_epochs: 3
