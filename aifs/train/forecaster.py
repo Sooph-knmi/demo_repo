@@ -179,17 +179,25 @@ class GraphForecaster(pl.LightningModule):
             x = self.advance_input(batch, y_pred)
 
             if validation_mode:
-                y_denorm = self.model.normalizer.denormalize(y, in_place=False)
-                y_pred_denorm = self.model.normalizer.denormalize(y_pred, in_place=False)
-                for mkey, indices in self.metric_ranges.items():
-                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
-
-                if self.enable_plot:
-                    y_preds.append(y_pred.detach())
+                metrics_next, y_preds_next = self.calculate_val_metrics(y_pred, y, rstep, enable_plot=self.enable_plot)
+                metrics.update(metrics_next)
+                y_preds.extend(y_preds_next)
 
         # scale loss
         loss *= 1.0 / self.rollout
         return loss, metrics, y_preds
+
+    def calculate_val_metrics(self, y_pred, y, rstep, enable_plot=False):
+        metrics = {}
+        y_preds = []
+        y_denorm = self.model.normalizer.denormalize(y, in_place=False)
+        y_pred_denorm = self.model.normalizer.denormalize(y_pred, in_place=False)
+        for mkey, indices in self.metric_ranges.items():
+            metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
+
+        if enable_plot:
+            y_preds.append(y_pred)
+        return metrics, y_preds
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         train_loss, _, _ = self._step(batch, batch_idx)

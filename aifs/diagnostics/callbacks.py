@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -34,9 +35,11 @@ class PlotCallback(Callback):
         self.config = config
         self.save_basedir = config.hardware.paths.plots
         self.plot_frequency = config.diagnostics.plot.frequency
+        self.normalizer = None
+        self.latlons = None
         init_plot_settings()
 
-    def _output_figure(self, trainer, fig, epoch: int, tag: str = "gnn", exp_log_tag: str = "val_pred_sample") -> None:
+    def _output_figure(self, logger, fig, epoch: int, tag: str = "gnn", exp_log_tag: str = "val_pred_sample") -> None:
         """Figure output: save to file and/or display in notebook."""
         if self.save_basedir is not None:
             save_path = Path(
@@ -50,7 +53,7 @@ class PlotCallback(Callback):
             if self.config.diagnostics.log.wandb.enabled:
                 import wandb
 
-                trainer.logger.experiment.log({exp_log_tag: wandb.Image(fig)})
+                logger.experiment.log({exp_log_tag: wandb.Image(fig)})
         plt.close(fig)  # cleanup
 
 
@@ -66,10 +69,32 @@ class AsyncPlotCallback(PlotCallback):
     def teardown(self, trainer, pl_module, stage) -> None:
         """This method is called to close the threads."""
         self._executor.shutdown(wait=True)
+        self.check_error()
 
+    def check_error(self):
         # if an error was raised anytime in any of the `executor.submit` calls
         if self._error:
             raise self._error
+
+    def _plot(
+        *args,
+        **kwargs,
+    ) -> None:
+        NotImplementedError
+
+    def _async_plot(
+        self,
+        trainer,
+        *args,
+        **kwargs,
+    ) -> None:
+        """This method is called to execute the plot function but ensuring we catch any
+        errors."""
+        try:
+            if trainer.is_global_zero:
+                self._plot(trainer, *args, **kwargs)
+        except BaseException as ex:
+            self._error = ex
 
 
 class RolloutEval(Callback):
@@ -106,24 +131,18 @@ class RolloutEval(Callback):
         assert batch.shape[1] >= self.rollout + pl_module.multi_step, "Batch length not sufficient for requested rollout length!"
 
         with torch.no_grad():
-            for rstep in range(self.rollout):
-                y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+            for rollout_step in range(self.rollout):
+                y_pred = pl_module(x)  # prediction at rollout step rollout_step, shape = (bs, latlon, nvar)
                 y = batch[
-                    :, pl_module.multi_step + rstep, ..., pl_module.data_indices.data.output.full
+                    :, pl_module.multi_step + rollout_step, ..., pl_module.data_indices.data.output.full
                 ]  # target, shape = (bs, latlon, nvar)
                 # y includes the auxiliary variables, so we must leave those out when computing the loss
                 loss += pl_module.loss(y_pred, y)
 
                 x = pl_module.advance_input(batch, y_pred)
 
-                y_denorm = pl_module.model.normalizer.denormalize(
-                    y, in_place=False, data_index=pl_module.data_indices.data.output.full
-                )
-                y_pred_denorm = pl_module.model.normalizer.denormalize(
-                    x[:, -1, ...], in_place=False, data_index=pl_module.data_indices.data.output.full
-                )
-                for mkey, indices in pl_module.metric_ranges.items():
-                    metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
+                metrics_next, _ = pl_module.calculate_val_metrics(y_pred, y, rollout_step)
+                metrics.update(metrics_next)
 
             # scale loss
             loss *= 1.0 / self.rollout
@@ -167,7 +186,7 @@ class RolloutEval(Callback):
             self._eval(pl_module, batch)
 
 
-class GraphTrainableFeaturesPlot(PlotCallback):
+class GraphTrainableFeaturesPlot(AsyncPlotCallback):
     """Visualize the trainable features defined at the ERA and H graph nodes, if any.
 
     TODO: How best to visualize the learned edge embeddings? Offline, perhaps - using code from @Simon's notebook?
@@ -187,7 +206,7 @@ class GraphTrainableFeaturesPlot(PlotCallback):
         exp_log_tag,
     ) -> None:
         fig = plot_graph_features(latlons, features)
-        self._output_figure(trainer, fig, epoch=epoch, tag=tag, exp_log_tag=exp_log_tag)
+        self._output_figure(trainer.logger, fig, epoch=epoch, tag=tag, exp_log_tag=exp_log_tag)
 
     def on_validation_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         if pl_module.global_rank == 0:
@@ -198,7 +217,8 @@ class GraphTrainableFeaturesPlot(PlotCallback):
             if model.era_trainable is not None:
                 ecoords = np.rad2deg(graph[("era", "to", "era")].ecoords_rad.numpy())
 
-                self._plot(
+                self._executor.submit(
+                    self._async_plot,
                     trainer,
                     ecoords,
                     model.era_trainable.cpu(),
@@ -209,10 +229,21 @@ class GraphTrainableFeaturesPlot(PlotCallback):
 
             if model.h_trainable is not None:
                 hcoords = np.rad2deg(graph[("h", "to", "h")].hcoords_rad.numpy())
-                self._plot(trainer, hcoords, model.h_trainable.cpu(), epoch=epoch, tag="h_trainable", exp_log_tag="h_trainable")
+
+                self._executor.submit(
+                    self._async_plot,
+                    trainer,
+                    hcoords,
+                    model.h_trainable.cpu(),
+                    epoch=epoch,
+                    tag="h_trainable",
+                    exp_log_tag="h_trainable",
+                )
+
+        self.check_error()
 
 
-class PlotLoss(PlotCallback):
+class PlotLoss(AsyncPlotCallback):
     """Plots the unsqueezed loss over rollouts."""
 
     def __init__(self, config):
@@ -227,6 +258,8 @@ class PlotLoss(PlotCallback):
         batch,
         epoch,
     ) -> None:
+        logger = trainer.logger
+        del trainer
         for rollout_step in range(pl_module.rollout):
             y_hat = outputs[1][rollout_step]
             y_true = batch[:, pl_module.multi_step + rollout_step, :, pl_module.data_indices.data.output.full]
@@ -234,7 +267,7 @@ class PlotLoss(PlotCallback):
 
             fig = plot_loss(loss)
             self._output_figure(
-                trainer,
+                logger,
                 fig,
                 epoch=epoch,
                 tag=f"loss_rstep_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
@@ -243,10 +276,12 @@ class PlotLoss(PlotCallback):
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
-            self._plot(trainer, pl_module, outputs, batch, epoch=trainer.current_epoch)
+            self._async_plot(trainer, pl_module, outputs, batch, epoch=trainer.current_epoch)
+
+        self.check_error()
 
 
-class PlotSample(PlotCallback):
+class PlotSample(AsyncPlotCallback):
     """Plots a denormalized sample: input, target and prediction."""
 
     def __init__(self, config):
@@ -263,56 +298,59 @@ class PlotSample(PlotCallback):
         batch_idx,
         epoch,
     ) -> None:
+        logger = trainer.logger
+
         # Build dictionary of inidicies and parameters to be plotted
         plot_parameters_dict = {
             pl_module.data_indices.model.output.name_to_index[name]: (name, name not in self.config.data.diagnostic)
             for name in self.config.diagnostics.plot.parameters
         }
 
-        data = (
-            pl_module.model.normalizer.denormalize(
-                batch[
-                    self.sample_idx,
-                    pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1,
-                    ...,
-                    pl_module.data_indices.data.output.full,
-                ],
-                in_place=False,
-                data_index=pl_module.data_indices.data.output.full,
-            )
-            .cpu()
-            .numpy()
-        )
+        # When running in Async mode, it might happen that in the last epoch these tensors
+        # have been moved to the cpu (and then the denormalising would fail as the 'input_tensor' would be on CUDA
+        # but internal ones would be on the cpu), The lines below allow to address this problem
+        if self.normalizer is None:
+            # Copy to be used across all the training cycle
+            self.normalizer = copy.deepcopy(pl_module.model.normalizer).cpu()
+        if self.latlons is None:
+            self.latlons = np.rad2deg(pl_module.data_latlons.clone().cpu().numpy())
+        local_rank = pl_module.local_rank
 
-        latlons = np.rad2deg(pl_module.data_latlons.cpu().numpy())
+        input_tensor = batch[
+            self.sample_idx,
+            pl_module.multi_step - 1 : pl_module.multi_step + pl_module.rollout + 1,
+            ...,
+            pl_module.data_indices.data.output.full,
+        ].cpu()
+        data = self.normalizer.denormalize(input_tensor).numpy()
+
+        output_tensor = self.normalizer.denormalize(
+            torch.cat(tuple(x[self.sample_idx : self.sample_idx + 1, ...].cpu() for x in outputs[1])), in_place=False
+        ).numpy()
+
         for rollout_step in range(pl_module.rollout):
             fig = plot_predicted_multilevel_flat_sample(
                 plot_parameters_dict,
                 self.config.diagnostics.plot.per_sample,
-                latlons,
+                self.latlons,
                 data[0, ...].squeeze(),
                 data[rollout_step + 1, ...].squeeze(),
-                pl_module.model.normalizer.denormalize(
-                    outputs[1][rollout_step][self.sample_idx, ...],
-                    in_place=False,
-                    data_index=pl_module.data_indices.data.output.full,
-                )
-                .squeeze()
-                .cpu()
-                .numpy(),
+                output_tensor[rollout_step, ...],
             )
 
             self._output_figure(
-                trainer,
+                logger,
                 fig,
                 epoch=epoch,
                 tag=f"gnn_pred_val_sample_rstep{rollout_step:02d}_batch{batch_idx:04d}_rank0",
-                exp_log_tag=f"val_pred_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
+                exp_log_tag=f"val_pred_sample_rstep{rollout_step:02d}_rank{local_rank:01d}",
             )
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
-            self._plot(trainer, pl_module, outputs, batch, batch_idx, epoch=trainer.current_epoch)
+            self._executor.submit(self._async_plot, trainer, pl_module, outputs, batch, batch_idx, epoch=trainer.current_epoch)
+
+        self.check_error()
 
 
 class InferenceCheckpoint(ModelCheckpoint):
@@ -387,6 +425,8 @@ def get_callbacks(config: DictConfig) -> List:
         # save after every validation epoch, if we've improved
         save_on_train_epoch_end=False,
         enable_version_counter=False,
+        # if save_top_k == k, best k models saved; if save_top_k == -1, all models are saved
+        save_top_k=config.diagnostics.checkpoint.num_models_saved
     )
 
     ckpt_frequency_save_dict = {}

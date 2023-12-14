@@ -30,12 +30,16 @@ training:
   start: null
   end: 2020
   frequency: ${data.frequency}
+  drop:
+    - sd
 
 validation:
   dataset: ${hardware.paths.data}/${hardware.files.dataset}
   start: 2021
   end: 2021
   frequency: ${data.frequency}
+  drop:
+    - sd
 
 test:
   dataset: ${hardware.paths.data}/${hardware.files.dataset}
