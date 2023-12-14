@@ -52,6 +52,11 @@ PROFILER_ACTIONS = [
     r"\[LightningModule]\w+\.configure_sharded_model",
     r"\[LightningModule]\w+\.setup",
     r"\[LightningModule]\w+\.prepare_data",
+    r"\[Callback\]ModelCheckpoint*",
+    r"\[Callback\]InferenceCheckpoint*",
+    r"\[Callback\]PlotLoss.*",
+    r"\[Callback\]PlotSample.*",
+    r"\[Callback\]GraphTrainableFeaturesPlot.*",
 ]
 
 GPU_METRICS_DICT = {
@@ -192,13 +197,16 @@ class BenchmarkProfiler(Profiler):
 
     def _trim_time_report(self, recorded_actions: dict) -> Dict[str, float]:
         all_actions_names = recorded_actions.keys()
-        trimmed_actions_names = []
-        for action in all_actions_names:
-            if "Callback" not in action:
-                for pattern in PROFILER_ACTIONS:
-                    filtered_list = list(filter(re.compile(pattern).match, all_actions_names))
-                    if filtered_list:
-                        trimmed_actions_names.append(filtered_list[0])
+        df = pd.DataFrame({"Strings": all_actions_names})
+        combined_pattern = "|".join(PROFILER_ACTIONS)
+        filtered_df = df[df["Strings"].str.contains(combined_pattern, regex=True, na=False)]
+
+        def replace_function(value):
+            # Replace 'apple' with 'fruit'
+            value = re.sub(r"\{.*?\}", "", value)  # Remove anything between brackets
+            return value
+
+        trimmed_actions_names = filtered_df["Strings"].apply(replace_function).tolist()
         cleaned_recorded_actions = {key: recorded_actions[key] for key in trimmed_actions_names}
         return cleaned_recorded_actions
 
@@ -217,9 +225,26 @@ class BenchmarkProfiler(Profiler):
         time_df[3] = time_df[1].apply(lambda x: np.mean(x))
         time_df[1] = time_df[1].apply(lambda x: sum(x))
         time_df.columns = ["name", "total_time", "n_calls", "avg_time"]
+        time_df = time_df.dropna()
         pattern = r"\[(.*?)\]|(.*)"
         time_df["category"] = time_df["name"].str.extract(pattern, expand=False)[0].fillna(time_df["name"])
+        time_df.to_csv("test_df.csv")
+        pattern = re.compile(r"\[Callback\](.*?)\.")
+        # Apply the regular expression to the column
+        callbacks_subcategories = "Callback_" + time_df[time_df["category"] == "Callback"]["name"].str.extract(pattern)
+        indexer = time_df[time_df["category"] == "Callback"].index
+        time_df.loc[indexer, "category"] = callbacks_subcategories[0].tolist()
+
+        # Check if 'Callback' is present in the 'category' column
+        time_df["is_callback"] = time_df["category"].str.contains("Callback", case=False)
+        # Group by the 'is_callback' column and apply groupby operation only on rows with 'Callback' in 'category'
+        grouped_data = time_df[time_df["is_callback"]].groupby("category").sum().reset_index()
+        grouped_data["name"] = grouped_data["category"]
+
+        time_df = pd.concat([time_df[time_df["is_callback"] is False], grouped_data])
+        time_df = time_df.drop("is_callback", axis=1)
         time_df = time_df.round(precision)
+        time_df = time_df.sort_values(by="category", ascending=False)
         return time_df
 
     def _generate_memray_df(self) -> pd.DataFrame:
