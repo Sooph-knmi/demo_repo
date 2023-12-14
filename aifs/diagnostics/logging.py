@@ -55,8 +55,8 @@ def get_wandb_logger(config: DictConfig, model: pl.LightningModule):
     from pytorch_lightning.loggers.wandb import WandbLogger
 
     logger = WandbLogger(
-        project="aifs-fc",
-        entity="ecmwf-ml",
+        project="aifs-s2s",
+        entity="stietsche",
         id=config.training.run_id,
         save_dir=config.hardware.paths.logs.wandb,
         offline=config.diagnostics.log.wandb.offline,
