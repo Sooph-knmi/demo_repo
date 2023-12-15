@@ -98,6 +98,8 @@ class RolloutEval(Callback):
         )
         self.rollout = config.diagnostics.eval.rollout
         self.frequency = config.diagnostics.eval.frequency
+        self.loss_type = config.training.loss
+        self.nbins = config.diagnostics.eval.nbins
 
     def _eval(
         self,
@@ -115,22 +117,40 @@ class RolloutEval(Callback):
         with torch.no_grad():
             for rstep in range(self.rollout):
                 y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
-                y = batch[
-                    :, pl_module.multi_step + rstep, ..., pl_module.data_indices.data.output.full
-                ]  # target, shape = (bs, latlon, nvar)
+                forcing_rolled = batch[:, self.multi_step + rstep, ..., self.data_indices.data.input.forcing]
+                # target, shape = (bs, latlon, nvar)
+                
                 # y includes the auxiliary variables, so we must leave those out when computing the loss
-                loss += pl_module.loss(y_pred, y)
-
-                x = pl_module.advance_input(batch, y_pred)
-
-                y_denorm = pl_module.model.normalizer.denormalize(
-                    y, in_place=False, data_index=pl_module.data_indices.data.output.full
+                loss_rstep, y_pred_group = pl_module.gather_and_compute_loss(
+                    y_pred, forcing_rolled[..., : pl_module.fcdim], validation_mode=True
                 )
-                y_pred_denorm = pl_module.model.normalizer.denormalize(
-                    x[:, -1, ...], in_place=False, data_index=pl_module.data_indices.data.output.full
-                )
-                for mkey, indices in pl_module.metric_ranges.items():
-                    metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
+                loss += loss_rstep
+
+                x = pl_module.advance_input(x, y_pred, forcing_rolled)
+
+                assert y_pred_group is not None
+
+                # training metrics
+                for mkey, (low, high) in pl_module.metric_ranges.items():
+                    y_denorm = pl_module.model.normalizer.denormalize(y, in_place=False)
+                    # ensemble mean
+                    y_pred_denorm = pl_module.model.normalizer.denormalize(y_pred_group.mean(dim=1), in_place=False)
+                    metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
+
+                # eval diagnostic metrics
+                for midx, (pidx, _) in enumerate(self.eval_plot_parameters.items()):
+                    y_denorm = pl_module.model.normalizer.denormalize(y, in_place=False)
+                    y_pred_denorm = pl_module.model.normalizer.denormalize(y_pred_group, in_place=False)
+
+                    (
+                        rmse[rstep, midx],
+                        spread[rstep, midx],
+                        bins_rmse[rstep, midx],
+                        bins_spread[rstep, midx],
+                    ) = pl_module.spread_skill.calculate_spread_skill(y_pred_denorm, y_denorm, pidx)
+
+            # update spread-skill metric state
+            _ = pl_module.spread_skill(rmse, spread, bins_rmse, bins_spread)
 
             # scale loss
             loss *= 1.0 / self.rollout
@@ -138,14 +158,14 @@ class RolloutEval(Callback):
 
     def _log(self, pl_module: pl.LightningModule, loss: torch.Tensor, metrics: Dict, bs: int) -> None:
         pl_module.log(
-            f"val_r{self.rollout}_wmse",
+            f"val_r{self.rollout}_" + self.loss_type,
             loss,
             on_epoch=True,
             on_step=True,
             prog_bar=False,
             logger=pl_module.logger_enabled,
             batch_size=bs,
-            sync_dist=False,
+            sync_dist=True,
             rank_zero_only=True,
         )
         for mname, mvalue in metrics.items():
@@ -157,7 +177,7 @@ class RolloutEval(Callback):
                 prog_bar=False,
                 logger=pl_module.logger_enabled,
                 batch_size=bs,
-                sync_dist=False,
+                sync_dist=True,
                 rank_zero_only=True,
             )
 
