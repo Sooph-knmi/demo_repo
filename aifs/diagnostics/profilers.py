@@ -52,11 +52,8 @@ PROFILER_ACTIONS = [
     r"\[LightningModule]\w+\.configure_sharded_model",
     r"\[LightningModule]\w+\.setup",
     r"\[LightningModule]\w+\.prepare_data",
-    r"\[Callback\]ModelCheckpoint*",
-    r"\[Callback\]InferenceCheckpoint*",
-    r"\[Callback\]PlotLoss.*",
-    r"\[Callback\]PlotSample.*",
-    r"\[Callback\]GraphTrainableFeaturesPlot.*",
+    r"\[Callback\](.*Plot*)",
+    r"\[Callback\](.*Checkpoint*)",
 ]
 
 GPU_METRICS_DICT = {
@@ -92,7 +89,7 @@ def summarize_gpu_metrics(df: pd.DataFrame) -> Dict[str, float]:
         metrics_per_gpu = df[sub_gpu_cols].mean(axis=0)
         if gpu_metric == "memoryAllocatedBytes":
             metrics_per_gpu = metrics_per_gpu * 1e-9
-        average_metric[gpu_metric_name] = metrics_per_gpu.median()
+        average_metric[gpu_metric_name] = metrics_per_gpu.mean()
         # Just add metrics per gpu to the report if we have more than 1 GPU
         if metrics_per_gpu.shape[0] > 1:
             metrics_per_gpu.index = ["   " + index for index in metrics_per_gpu.index]
@@ -200,13 +197,7 @@ class BenchmarkProfiler(Profiler):
         df = pd.DataFrame({"Strings": all_actions_names})
         combined_pattern = "|".join(PROFILER_ACTIONS)
         filtered_df = df[df["Strings"].str.contains(combined_pattern, regex=True, na=False)]
-
-        def replace_function(value):
-            # Replace 'apple' with 'fruit'
-            value = re.sub(r"\{.*?\}", "", value)  # Remove anything between brackets
-            return value
-
-        trimmed_actions_names = filtered_df["Strings"].apply(replace_function).tolist()
+        trimmed_actions_names = filtered_df["Strings"].tolist()
         cleaned_recorded_actions = {key: recorded_actions[key] for key in trimmed_actions_names}
         return cleaned_recorded_actions
 
@@ -225,20 +216,35 @@ class BenchmarkProfiler(Profiler):
         time_df[3] = time_df[1].apply(lambda x: np.mean(x))
         time_df[1] = time_df[1].apply(lambda x: sum(x))
         time_df.columns = ["name", "total_time", "n_calls", "avg_time"]
-        time_df = time_df.dropna()
+
+        def replace_function(value):
+            # Replace 'apple' with 'fruit'
+            value = re.sub(r"\{.*?\}", "", value)  # Remove anything between brackets
+            return value
+
+        time_df["name"] = time_df["name"].apply(replace_function)
+
+        # time_df = time_df.dropna() # THIS IS REMOVING THE CHECKPOINTS THAT SO FAR ARE ALL 0
+
         pattern = r"\[(.*?)\]|(.*)"
         time_df["category"] = time_df["name"].str.extract(pattern, expand=False)[0].fillna(time_df["name"])
-        time_df.to_csv("test_df.csv")
+
         pattern = re.compile(r"\[Callback\](.*?)\.")
         # Apply the regular expression to the column
-        callbacks_subcategories = "Callback_" + time_df[time_df["category"] == "Callback"]["name"].str.extract(pattern)
+        callbacks_subcategories = "*Callback_" + time_df[time_df["category"] == "Callback"]["name"].str.extract(pattern)
         indexer = time_df[time_df["category"] == "Callback"].index
         time_df.loc[indexer, "category"] = callbacks_subcategories[0].tolist()
 
         # Check if 'Callback' is present in the 'category' column
         time_df["is_callback"] = time_df["category"].str.contains("Callback", case=False)
+
         # Group by the 'is_callback' column and apply groupby operation only on rows with 'Callback' in 'category'
-        grouped_data = time_df[time_df["is_callback"]].groupby("category").sum().reset_index()
+        grouped_data = (
+            time_df[time_df["is_callback"]]
+            .groupby("category")
+            .agg({"n_calls": np.sum, "avg_time": np.sum, "total_time": np.sum})
+            .reset_index()
+        )
         grouped_data["name"] = grouped_data["category"]
 
         time_df = pd.concat([time_df[time_df["is_callback"] is False], grouped_data])
@@ -361,6 +367,7 @@ class BenchmarkProfiler(Profiler):
         )
 
     def __del__(self) -> None:
+        self.teardown(stage=self._stage)
         os.remove(self.memfile_name)
 
 

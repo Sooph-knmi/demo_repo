@@ -57,9 +57,21 @@ class AIFSProfiler(AIFSTrainer):
     ) -> None:
         self.print_title()
         self.print_metadata()
+
+        warnings.warn(
+            "INFO: Time Report metrics represent single-node metrics (rank-0 process) (not multi-node aggregated metrics)"
+        )
+        warnings.warn("INFO: Metrics with a * symbol, represent the value after aggregating all steps")
         self.print_report("Time Profiling", time_metrics_df, color="green", emoji="alarm_clock")
+
+        warnings.warn(
+            "INFO: Speed Report metrics represent single-node metrics (rank-0 process) (not multi-node aggregated metrics)"
+        )
         self.print_report("Speed Profiling", speed_metrics_df, color="yellow", emoji="racing_car")
+
+        warnings.warn("INFO: Memory Report metrics represent metrics aggregated across all nodes")
         self.print_report("Memory Profiling", memory_metrics_df, color="purple", emoji="floppy_disk")
+
         if wandb_memory_metrics_df is not None:
             self.print_report("Wandb Memory Profiling", wandb_memory_metrics_df, color="purple", emoji="desktop_computer")
 
@@ -127,15 +139,6 @@ class AIFSProfiler(AIFSTrainer):
     @rank_zero_only
     def report(self) -> str:
         """Print report to console."""
-
-        warnings.warn(
-            "INFO: Time Report metrics represent single-node metrics (rank-0 process) (not multi-node aggregated metrics)"
-        )
-        warnings.warn(
-            "INFO: Speed Report metrics represent single-node metrics (rank-0 process) (not multi-node aggregated metrics)"
-        )
-
-        warnings.warn("INFO: Memory Report metrics represent metrics aggregated across all nodes")
 
         if (not self.config.diagnostics.log.wandb.enabled) or (self.config.diagnostics.log.wandb.offline):
             self.print_benchmark_profiler_report(
