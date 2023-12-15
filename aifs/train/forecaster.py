@@ -309,16 +309,16 @@ class GraphForecaster(pl.LightningModule):
         # an explicit cast is needed when running in mixed precision (i.e. with y_pred_ens.dtype == torch.(b)float16)
         return loss_inc, y_pred_ens.to(dtype=y.dtype) if validation_mode else None
 
-    def advance_input(self, batch: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
-        x = batch[:, :, 0 : self.multi_step, ...].roll(-1, dims=2)  # TODO: Is this correct in dim 2?
+    def advance_input(self, x: torch.Tensor, y_pred: torch.Tensor, forcing_rolled: torch.Tensor) -> torch.Tensor:
+        x = x.roll(-1, dims=1)
 
-        x[:, :, self.multi_step - 1, :, self.data_indices.model.input.prognostic] = y_pred[
+        # Get prognostic variables
+        x[:, self.multi_step - 1, :, self.data_indices.model.input.prognostic] = y_pred[
             ..., self.data_indices.model.output.prognostic
         ]
+
         # get new "constants" needed for time-varying fields
-        x[:, :, self.multi_step - 1, :, self.data_indices.model.input.forcing] = batch[
-            :, :, self.multi_step, ..., self.data_indices.data.input.forcing
-        ]
+        x[:, self.multi_step - 1, :, self.data_indices.model.input.forcing] = forcing_rolled
         return x
 
     def _generate_ens_inicond(self, batch: Tuple[torch.Tensor, ...]) -> torch.Tensor:
@@ -396,13 +396,17 @@ class GraphForecaster(pl.LightningModule):
             x.shape[2] == self.multi_step
         ), f"Shape mismatch in x! Expected ({self.nens_per_device}, {self.multi_step}), got ({x.shape[1]}, {x.shape[2]})!"
 
+        # start rollout
+        # x = batch[:, :, 0 : self.multi_step, ..., self.data_indices.data.input.full]  # (bs, multi_step, latlon, nvar)
+
         metrics = {}
 
         y_preds: List[torch.Tensor] = []
         kcrps_preds: List[torch.Tensor] = []
         for rstep in range(self.rollout):
+            # prediction at rollout step rstep, shape = (bs, latlon, nvar)
             # if rstep > 0: torch.cuda.empty_cache() # uncomment if rollout fails with OOM
-            y_pred = self(x[..., self.data_indices.data.input.full])  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+            y_pred = self(x)
 
             y = batch[:, self.multi_step + rstep, ..., self.data_indices.data.output.full]
             # y includes the auxiliary variables, so we must leave those out when computing the loss
@@ -410,7 +414,8 @@ class GraphForecaster(pl.LightningModule):
             loss_rstep, y_pred_group = self.gather_and_compute_loss(y_pred, y, validation_mode=validation_mode)
             loss += loss_rstep
 
-            x = self.advance_input(batch, y_pred)
+            forcing_rolled = batch[:, :, self.multi_step + rstep, ..., self.data_indices.data.input.forcing]
+            x = self.advance_input(x, y_pred, forcing_rolled)
 
             if validation_mode:
                 assert y_pred_group is not None, "Logic error! Incorrect return args from gather_and_compute_loss()"

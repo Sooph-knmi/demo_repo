@@ -26,9 +26,9 @@ class NativeGridDataset(IterableDataset):
         data_reader: Callable,
         rollout: int = 1,
         multistep: int = 1,
-        model_comm_group_rank: int = 0,
-        model_comm_group_id: int = 0,
-        model_comm_num_groups: int = 1,
+        comm_group_rank: int = 0,
+        comm_group_id: int = 0,
+        comm_num_groups: int = 1,
         shuffle: bool = True,
     ) -> None:
         """Initialize (part of) the dataset state.
@@ -41,11 +41,11 @@ class NativeGridDataset(IterableDataset):
             length of rollout window, by default 12
         multistep : int, optional
             collate (t-1, ... t - multistep) into the input state vector, by default 1
-        model_comm_group_rank : int, optional
+        comm_group_rank : int, optional
             process rank in the torch.distributed group (important when running on multiple GPUs), by default 0
-        model_comm_group_id: int, optional
+        comm_group_id: int, optional
             device group ID, default 0
-        model_comm_num_groups : int, optional
+        comm_num_groups : int, optional
             total number of device groups, by default 1
         shuffle : bool, optional
             Shuffle batches, by default True
@@ -64,15 +64,17 @@ class NativeGridDataset(IterableDataset):
         self.n_samples_per_epoch_per_worker: int = 0
 
         # DDP-relevant info
-        self.model_comm_group_rank = model_comm_group_rank
-        self.model_comm_num_groups = model_comm_num_groups
-        self.model_comm_group_id = model_comm_group_id
+        self.comm_group_rank = comm_group_rank
+        self.comm_num_groups = comm_num_groups
+        self.comm_group_id = comm_group_id
         self.global_rank = int(os.environ.get("SLURM_PROCID", "0"))
 
         # additional state vars (lazy init)
         self.n_samples_per_worker = 0
         self.chunk_index_range: Optional[np.ndarray] = None
         self.shuffle = shuffle
+        self._seed: Optional[int] = None
+        self._worker_id: Optional[int] = None
 
         # Data dimensions
         self.multi_step = multistep
@@ -83,18 +85,17 @@ class NativeGridDataset(IterableDataset):
     @cached_property
     def rng(self) -> np.random.Generator:
         """Return the random number generator."""
-        return np.random.default_rng(seed=self.seed)
+        assert self._seed is not None
+        torch.manual_seed(self._seed)
+        random.seed(self._seed)
+        return np.random.default_rng(seed=self._seed)
 
     @cached_property
     def seed(self) -> int:
         """Return the random seed."""
-        # each worker must have a different seed for its random number generator,
-        # otherwise all the workers will output exactly the same data
-        if "PL_SEED_WORKERS" in os.environ:
-            self.seed_worker_random_gen(self.worker_id, self.rank)
-            return np.random.randint(low=0, high=2**30)
-
-        return torch.initial_seed()
+        assert self._worker_id is not None
+        self._seed = self.BASE_SEED * (self.comm_group_id + 1) - self._worker_id
+        return self._seed
 
     @cached_property
     def statistics(self) -> dict:
@@ -134,15 +135,15 @@ class NativeGridDataset(IterableDataset):
         worker_id : int
             Worker ID
         """
-        self.worker_id = worker_id
+        self._worker_id = worker_id
 
         # Total number of valid ICs is dataset length minus rollout minus additional multistep inputs
         len_corrected = len(self.data) - (self.rollout + (self.multi_step - 1))
 
         # Divide this equally across shards (one shard per group!)
-        shard_size = len_corrected // self.model_comm_num_groups
-        shard_start = self.model_comm_group_id * shard_size + (self.multi_step - 1)
-        shard_end = min((self.model_comm_group_id + 1) * shard_size, len(self.data) - self.rollout)
+        shard_size = len_corrected // self.comm_num_groups
+        shard_start = self.comm_group_id * shard_size + (self.multi_step - 1)
+        shard_end = min((self.comm_group_id + 1) * shard_size, len(self.data) - self.rollout)
 
         shard_len = shard_end - shard_start
         self.n_samples_per_worker = shard_len // n_workers
@@ -162,21 +163,6 @@ class NativeGridDataset(IterableDataset):
 
         self.chunk_index_range = np.arange(low, high, dtype=np.uint32)
 
-        # each worker must have a different seed for its random number generator,
-        # otherwise all the workers will output exactly the same data
-        # if "PL_SEED_WORKERS" in os.environ:
-        #     self.seed_worker_random_gen(worker_id, self.model_comm_group_rank)
-        #     seed = np.random.randint(low=0, high=2**30)
-        # else:
-        #     seed = torch.initial_seed()
-        # seed = self.BASE_SEED * self.model_comm_group_id + self.model_comm_group_rank
-
-        # self.seed_worker_random_gen(worker_id, self.model_comm_group_rank)
-        seed = self.BASE_SEED * (self.comm_group_id + 1) - worker_id  # np.random.randint(low=0, high=2**30)
-        torch.manual_seed(seed)
-        random.seed(seed)
-        self.rng = np.random.default_rng(seed=seed)
-
         LOGGER.debug(
             "Worker %d (pid %d, global_rank %d, comm group %d, group_rank %d) using seed %d",
             worker_id,
@@ -184,40 +170,8 @@ class NativeGridDataset(IterableDataset):
             self.global_rank,
             self.comm_group_id,
             self.comm_group_rank,
-            seed,
+            self.seed,
         )
-
-    def seed_worker_random_gen(self, worker_id: int, rank: Optional[int] = None) -> None:
-        # taken from https://github.com/Lightning-AI/lightning/blob/master/src/lightning/fabric/utilities/seed.py
-        # https://github.com/Lightning-AI/lightning/blob/master/LICENSE
-        """The worker_init_fn that Lightning automatically adds to your dataloader if you previously set the seed with
-        ``seed_everything(seed, workers=True)``.
-
-        See also the PyTorch documentation on
-        `randomness in DataLoaders <https://pytorch.org/docs/stable/notes/randomness.html#dataloader>`_.
-        """
-        # implementation notes: https://github.com/pytorch/pytorch/issues/5059#issuecomment-817392562
-        model_comm_group_rank = rank if rank is not None else 0
-        # process_seed = torch.initial_seed()
-        # back out the base seed so we can use all the bits
-        base_seed = self.BASE_SEED * (self.comm_group_id + 1) - worker_id
-        LOGGER.debug(
-            "Initializing random number generators of group_rank %d worker %d group %d global_rank %d with base seed %d",
-            model_comm_group_rank,
-            worker_id,
-            self.comm_group_id,
-            self.global_rank,
-            base_seed,
-        )
-        ss = np.random.SeedSequence([base_seed, worker_id, model_comm_group_rank])
-        # use 128 bits (4 x 32-bit words)
-        np.random.seed(ss.generate_state(4))
-        # Spawn distinct SeedSequences for the PyTorch PRNG and the stdlib random module
-        torch_ss, stdlib_ss = ss.spawn(2)
-        torch.manual_seed(torch_ss.generate_state(1, dtype=np.uint64)[0])
-        # use 128 bits expressed as an integer
-        stdlib_seed = (stdlib_ss.generate_state(2, dtype=np.uint64).astype(object) * [1 << 64, 1]).sum()
-        random.seed(stdlib_seed)
 
     def __iter__(self):
         """Return an iterator over the dataset.
@@ -253,7 +207,8 @@ class NativeGridDataset(IterableDataset):
             x = x[:, 0, :, :]
             sample = (torch.from_numpy(x),)
             if self.ensemble_size > 1:
-                x_eda = x[:, 1:, :, :]
+                # TODO: the ensemble IC generation logic belongs in new a preprocessor class
+                x_eda = x[start:i, 1:, :, :]
                 sample = (torch.from_numpy(x), torch.from_numpy(x_eda))
 
             yield sample

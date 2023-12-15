@@ -119,7 +119,7 @@ class RolloutEval(Callback):
                 y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
                 forcing_rolled = batch[:, self.multi_step + rstep, ..., self.data_indices.data.input.forcing]
                 # target, shape = (bs, latlon, nvar)
-                
+
                 # y includes the auxiliary variables, so we must leave those out when computing the loss
                 loss_rstep, y_pred_group = pl_module.gather_and_compute_loss(
                     y_pred, forcing_rolled[..., : pl_module.fcdim], validation_mode=True
@@ -662,7 +662,7 @@ def get_callbacks(config: DictConfig) -> List:
         # save after every validation epoch, if we've improved
         save_on_train_epoch_end=False,
         enable_version_counter=False,
-        save_top_k=-1
+        save_top_k=-1,
     )
 
     ckpt_frequency_save_dict = {}
