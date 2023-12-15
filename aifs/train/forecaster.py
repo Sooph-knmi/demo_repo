@@ -123,7 +123,7 @@ class GraphForecaster(pl.LightningModule):
         self._initialize_loss(config)
 
         # Rank histogram (accumulates statistics for _all_ output variables, both prognostic and diagnostic)
-        self.ranks = RankHistogram(nens=self.nens_per_group, nvar=self.data_indices.model.output.full)
+        self.ranks = RankHistogram(nens=self.nens_per_group, nvar=len(self.data_indices.model.output.full))
 
         # Spread-skill metric (eval-mode only - see the RolloutEval callback)
         self.spread_skill = SpreadSkill(
@@ -329,26 +329,30 @@ class GraphForecaster(pl.LightningModule):
 
         # get new "constants" needed for time-varying fields
         x[:, self.multi_step - 1, :, self.data_indices.model.input.forcing] = forcing_rolled
+
         return x
 
     def _generate_ensemble_initial_conditions(self, batch: Tuple[torch.Tensor, ...]) -> torch.Tensor:
         """Generate initial conditions for the ensemble based on the EDA perturbations.
+        If no EDA perturbations are given, we simply stack the deterministic ERA5
+        analysis nens_per_device times along the ensemble dimension.
 
         Inputs:
             batch: 1- or 2-tuple of tensors with
                 batch[0]: unperturbed IC (ERA5 analysis), shape = (bs, rollout, latlon, input.full)
-                batch[1]: ERA5 EDA (10-member) ensemble, shape = (bs, mstep, latlon, input.full, nens_eda)
+                batch[1], optional: ERA5 EDA (10-member) ensemble, shape = (bs, mstep, 10, latlon, input.full)
         Returns:
-            Ensemble IC, shape (bs, nens_per_device, mstep, latlon, nvar)
+            Ensemble IC, shape (bs, mstep, nens_per_device, latlon, input.full)
         """
 
         if len(batch) == 1:
-            LOGGER.debug("batch[0].device = %s, dtype = %s", batch[0].device, batch[0].dtype)
             # no EDA available, just stack the analysis IC nens_per_device times
+            LOGGER.debug("batch[0].device = %s, dtype = %s, shape = %s", batch[0].device, batch[0].dtype, batch[0].shape)
             x_ = batch[0][:, 0 : self.multi_step, ...]  # (bs, multistep, latlon, nvar)
             return torch.stack([x_] * self.nens_per_device, dim=1)  # shape == (bs, nens, multistep, latlon, nvar)
 
         x, x_eda = batch
+        LOGGER.debug("Shapes: x = %s, x_eda = %s", list(x.shape), list(x_eda.shape))
         assert self.nens_per_group <= x_eda.shape[-1], (
             f"Requested number of ensemble members per GPU group {self.nens_per_group} "
             + f"is larger than that of the EDA ensemble {x_eda.shape[-1]}. "
@@ -356,25 +360,18 @@ class GraphForecaster(pl.LightningModule):
         )
 
         # create perturbations
-        x_pert = x_eda - x_eda.mean(dim=-1, keepdim=True)
-        x_pert = einops.rearrange(x_pert, "bs ms latlon v e -> bs e ms latlon v")
+        x_pert = x_eda - x_eda.mean(dim=2, keepdim=True)  # TODO: avoid using a magic number for the ensemble dimension
+        x_pert = x_pert[..., self.data_indices.data.input.full]
+        x_pert = einops.rearrange(x_pert, "bs ms e latlon v -> bs e ms latlon v")
         start, end = self.ens_comm_group_id * self.nens_per_device, (self.ens_comm_group_id + 1) * self.nens_per_device
-        LOGGER.debug(
-            "Rank %d in (ensemble, model) group (%d, %d) got range [%d, %d) from a total of %d (maybe non-unique) ensemble members",
-            self.global_rank,
-            self.ens_comm_group_id,
-            self.model_comm_group_id,
-            start,
-            end,
-            self.nens_per_device * self.ens_comm_group_size,
-        )
 
-        # perturb an ICs and clip humidity field where necessary
+        # recenter analysis IC and clamp humidity field where necessary
         x_ic = torch.stack(
-            [x[:, 0 : self.multi_step, ...]] * self.nens_per_device, dim=1
+            [x[:, 0 : self.multi_step, :, self.data_indices.data.input.full]] * self.nens_per_device, dim=1
         )  # shape == (bs, nens_per_device, multistep, latlon, nvar)
-        x_ic[..., : self.data_indices.data.input.full] += x_pert[:, start:end, ...]
-        # q (and other positive variables) needs special treatment
+        x_ic += x_pert[:, start:end, ...]
+
+        # humidity (q) - and other nonzero fields - need special treatment
         x_ic[..., self._q_indices] = torch.clamp(x_ic[..., self._q_indices], min=0.0, max=None)
 
         return x_ic
@@ -399,15 +396,13 @@ class GraphForecaster(pl.LightningModule):
             torch.linalg.norm(batch).cpu(),
         )
         batch = self.model.normalizer(batch)  # normalized in-place
-        x = self.model.normalizer(x_ic)  # (bs, nens, multistep, latlon, nvar)
+        x = self.model.normalizer(x_ic)  # shape = (bs, nens_per_device, multistep, latlon, input.full)
 
+        LOGGER.debug("Shapes: x.shape = %s", list(x.shape))
         assert len(x.shape) == 5, f"Expected a 5-dimensional tensor and got {len(x.shape)} dimensions, shape {x.shape}!"
         assert (x.shape[1] == self.nens_per_device) and (
             x.shape[2] == self.multi_step
         ), f"Shape mismatch in x! Expected ({self.nens_per_device}, {self.multi_step}), got ({x.shape[1]}, {x.shape[2]})!"
-
-        # start rollout
-        # x = batch[:, :, 0 : self.multi_step, ..., self.data_indices.data.input.full]  # (bs, multi_step, latlon, nvar)
 
         metrics = {}
 
@@ -425,15 +420,22 @@ class GraphForecaster(pl.LightningModule):
             loss += loss_rstep
 
             forcing_rolled = batch[:, :, self.multi_step + rstep, ..., self.data_indices.data.input.forcing]
+
+            LOGGER.debug(
+                "Shapes: forcing_rolled.shape = %s, batch.shape = %s, x.shape = %s",
+                list(forcing_rolled.shape),
+                list(batch.shape),
+                list(x.shape),
+            )
+
             x = self.advance_input(x, y_pred, forcing_rolled)
 
             if validation_mode:
-                assert y_pred_group is not None, "Logic error! Incorrect return args from gather_and_compute_loss()"
+                assert y_pred_group is not None
                 # rank histograms - update metric state
                 _ = self.ranks(y[..., self.data_indices.data.output.full], y_pred_group)
                 # pointwise KCRPS
                 pkcrps = self._compute_kcrps(y_pred_group, y[..., self.data_indices.data.output.full], squash=False)
-
                 LOGGER.debug("pkcrps.dtype = %s, y_pred_group.dtype = %s, y.dtype = %s", pkcrps.dtype, y_pred_group.dtype, y.dtype)
                 # WMSE ensemble mean metrics
                 y_denorm = self.model.normalizer.denormalize(y, in_place=False)
@@ -442,7 +444,7 @@ class GraphForecaster(pl.LightningModule):
                     metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
 
                 if self.enable_plot:
-                    y_preds.append(y_pred_group.detach())
+                    y_preds.append(y_pred_group)
                     kcrps_preds.append(pkcrps)
 
         # scale loss

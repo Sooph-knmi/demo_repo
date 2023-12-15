@@ -17,8 +17,8 @@ export HYDRA_FULL_ERROR=1
 export OC_CAUSE=1
 # export NCCL_DEBUG=TRACE
 # export TORCH_CPP_LOG_LEVEL=INFO
-# export TORCH_DISTRIBUTED_DEBUG=DETAIL
-# export CUDA_LAUNCH_BLOCKING=1
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+export CUDA_LAUNCH_BLOCKING=1
 
 # on your cluster you might need these:
 # set the network interface

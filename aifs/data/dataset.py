@@ -204,12 +204,15 @@ class NativeGridDataset(IterableDataset):
             x = self.data[start:end]
             x = rearrange(x, self.build_einops_dim_order)
 
-            x = x[:, 0, :, :]
-            sample = (torch.from_numpy(x),)
+            LOGGER.debug("Shapes: x.shape = %s", list(x.shape))
+
+            x_an = x[:, 0, :, :]
+            sample = (torch.from_numpy(x_an),)
             if self.ensemble_size > 1:
                 # TODO: the ensemble IC generation logic belongs in new a preprocessor class
-                x_eda = x[start:i, 1:, :, :]
-                sample = (torch.from_numpy(x), torch.from_numpy(x_eda))
+                x_eda = x[: self.multi_step, 1:, :, :]
+                LOGGER.debug("Sample shapes: x_an.shape = %s, x_eda.shape = %s", list(x_an.shape), list(x_eda.shape))
+                sample = (torch.from_numpy(x_an), torch.from_numpy(x_eda))
 
             yield sample
 

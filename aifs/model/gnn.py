@@ -22,7 +22,7 @@ from aifs.model.layers import GNNProcessor
 from aifs.utils.config import DotConfig
 from aifs.utils.logger import get_code_logger
 
-LOGGER = get_code_logger(__name__, debug=False)
+LOGGER = get_code_logger(__name__, debug=True)
 
 
 class GraphMSG(nn.Module):
@@ -222,30 +222,32 @@ class GraphMSG(nn.Module):
             else None
         )
 
-    def _fuse_trainable_tensors(self, edge_or_node_tensor: Tensor, trainable: Optional[Tensor]) -> Tensor:
-        """Fuse edge and trainable tensors.
+    def _fuse_trainable_tensors(self, edge_or_node_tensor: Tensor, batch_size: int, trainable: Optional[Tensor] = None) -> Tensor:
+        """Fuse edge / node tensors, trainable tensors and (optionally) noise tensors.
 
         Parameters
         ----------
-        edge : Tensor
-            Edge tensor
+        edge_or_node_tensor : Tensor
+            Edge or node tensor
+        batch_size: int
+            Batch size
         trainable : Optional[Tensor]
-            Tensor with trainable edges
+            Tensor with trainable node or edge features
 
         Returns
         -------
         Tensor
             Fused tensors for latent space
         """
-        latent = [einops.repeat(edge_or_node_tensor, "e f -> (repeat e) f", repeat=self.batch_size)]
+        latent = [einops.repeat(edge_or_node_tensor, "e f -> (repeat e) f", repeat=batch_size)]
         if trainable is not None:
-            latent.append(einops.repeat(trainable, "e f -> (repeat e) f", repeat=self.batch_size))
+            latent.append(einops.repeat(trainable, "e f -> (repeat e) f", repeat=batch_size))
         return torch.cat(
             latent,
             dim=-1,  # feature dimension
         )
 
-    def _expand_edges(self, edge_index: Adj, edge_inc: Tensor) -> Adj:
+    def _expand_edges(self, edge_index: Adj, edge_inc: Tensor, batch_size: int) -> Adj:
         """Expand edge index correct number of times while adding the proper number to
         the edge index.
 
@@ -255,6 +257,8 @@ class GraphMSG(nn.Module):
             Edge index to start
         edge_inc : Tensor
             Edge increment to use
+        batch_size : int
+            Batch size.
 
         Returns
         -------
@@ -262,7 +266,7 @@ class GraphMSG(nn.Module):
             Edge Index
         """
         edge_index = torch.cat(
-            [edge_index + i * edge_inc for i in range(self.batch_size)],
+            [edge_index + i * edge_inc for i in range(batch_size)],
             dim=1,
         )
 
@@ -276,6 +280,7 @@ class GraphMSG(nn.Module):
         edge_inc: Tensor,
         edge_attr: Tensor,
         shape_nodes: Tuple[List, List],
+        batch_size: int,
         size: Size,
         model_comm_group: ProcessGroup,
         use_reentrant: bool = False,
@@ -296,6 +301,8 @@ class GraphMSG(nn.Module):
             Trainable edge attribute tensor
         shape_nodes: Tuple[List, List]
             Shapes of input fields the task holds when running with multiple GPUs
+        batch_size: int
+            Batch size (includes the ensemble dimension, if any).
         size: Size
             Number of source and target nodes of bipartite graph
         model_comm_group : ProcessGroup
@@ -312,7 +319,7 @@ class GraphMSG(nn.Module):
         return checkpoint(
             mapper,
             data,
-            edge_index=self._expand_edges(edge_index, edge_inc),
+            edge_index=self._expand_edges(edge_index, edge_inc, batch_size),
             edge_attr=edge_attr,
             shape_nodes=shape_nodes,
             size=size,
@@ -377,7 +384,7 @@ class GraphMSG(nn.Module):
             Output tensor
         """
         batch_size, ensemble_size = x.shape[0], x.shape[1]
-        self.batch_size = batch_size * ensemble_size  # merge the batch and ensemble dimensions
+        bse = batch_size * ensemble_size  # merge the batch and ensemble dimensions
 
         if self.dropout_h2h > 0:
             isolated_nodes_h2h = True
@@ -401,21 +408,21 @@ class GraphMSG(nn.Module):
             h2h_attr = self.h2h_edge_attr
             h2h_trainable = self.h2h_trainable
 
+        LOGGER.debug("Shapes: x.shape = %s, bse = %d", list(x.shape), bse)
+
         # add ERA positional info (lat/lon)
         x_era_latent = torch.cat(
             (
                 einops.rearrange(x, "bs e m n f -> (bs e n) (m f)"),
-                self._fuse_trainable_tensors(self.era_latlons, self.batch_size, self.era_trainable),
+                self._fuse_trainable_tensors(self.era_latlons, bse, self.era_trainable),
             ),
             dim=-1,  # feature dimension
         )
 
-        x_h_latent = self._fuse_trainable_tensors(self.h_latlons, self.batch_size, self.h_trainable)
-        edge_e_to_h_latent = self._fuse_trainable_tensors(self.e2h_edge_attr, self.batch_size, self.e2h_trainable)
-        edge_h_to_h_latent = self._fuse_trainable_tensors(h2h_attr, self.batch_size, h2h_trainable)
-        edge_h_to_e_latent = self._fuse_trainable_tensors(self.h2e_edge_attr, self.batch_size, self.h2e_trainable)
-
-        LOGGER.debug("x_h_latent.shape = %s", x_h_latent.shape)
+        x_h_latent = self._fuse_trainable_tensors(self.h_latlons, bse, self.h_trainable)
+        edge_e_to_h_latent = self._fuse_trainable_tensors(self.e2h_edge_attr, bse, self.e2h_trainable)
+        edge_h_to_h_latent = self._fuse_trainable_tensors(h2h_attr, bse, h2h_trainable)
+        edge_h_to_e_latent = self._fuse_trainable_tensors(self.h2e_edge_attr, bse, self.h2e_trainable)
 
         # size for mappers and processor:
         size_fwd = (x_era_latent.shape[0], x_h_latent.shape[0])
@@ -431,6 +438,17 @@ class GraphMSG(nn.Module):
         shape_x_bwd = change_channels_in_shape(shape_x_fwd, self.num_channels)
 
         LOGGER.debug("shape_h_fwd = %s, shape_h_proc = %s, shape_h_bwd = %s", shape_h_fwd, shape_h_proc, shape_h_bwd)
+        LOGGER.debug(
+            "Mappper shapes: x_era_latent.shape = %s, x_h_latent.shape = %s", list(x_era_latent.shape), list(x_h_latent.shape)
+        )
+        LOGGER.debug(
+            "Mapper: multi_step=%d, num_input_channels=%d, era_latlons.shape[1]=%d, era_trainable_size=%d, input channels src=%d",
+            self.multi_step,
+            self.num_input_channels,
+            self.era_latlons.shape[1],
+            self.era_trainable_size,
+            self.multi_step * self.num_input_channels + self.era_latlons.shape[1] + self.era_trainable_size,
+        )
 
         x_era_latent, x_latent = self._run_mapper(
             self.forward_mapper,
@@ -439,6 +457,7 @@ class GraphMSG(nn.Module):
             self._e2h_edge_inc,
             edge_e_to_h_latent,
             shape_nodes=(shape_x_fwd, shape_h_fwd),
+            batch_size=bse,
             size=size_fwd,
             model_comm_group=model_comm_group,
         )
@@ -449,12 +468,12 @@ class GraphMSG(nn.Module):
         noise_shape = (*x_latent.shape[:-1], self.proc_noise_channels)
         z = torch.randn(noise_shape).type_as(x_latent) if inject_noise else torch.zeros(noise_shape).type_as(x_latent)
         z.requires_grad = False
-        LOGGER.debug("z.shape = %s, z.norm: %.9e", z.shape, torch.linalg.norm(z))
+        LOGGER.debug("Noise z.shape = %s, z.norm: %.9e", z.shape, torch.linalg.norm(z))
 
         x_latent_proc = self.h_processor(
             # concat noise tensor to the latent features
             x=torch.cat([x_latent, z], dim=-1),
-            edge_index=self._expand_edges(edge_index_h2h_edge, self._h2h_edge_inc),
+            edge_index=self._expand_edges(edge_index_h2h_edge, self._h2h_edge_inc, bse),
             edge_attr=edge_h_to_h_latent,
             shape_nodes=shape_h_proc,
             size=size_proc,
@@ -471,13 +490,80 @@ class GraphMSG(nn.Module):
             self._h2e_edge_inc,
             edge_h_to_e_latent,
             shape_nodes=(shape_h_bwd, shape_x_bwd),
+            batch_size=bse,
             size=size_bwd,
             model_comm_group=model_comm_group,
         )
 
-        x_out = einops.rearrange(x_out, "(bse n) f -> bse n f", bse=self.batch_size)
+        x_out = einops.rearrange(x_out, "(bse n) f -> bse n f", bse=bse)
         x_out = einops.rearrange(x_out, "(bs e) n f -> bs e n f", bs=batch_size).to(dtype=x.dtype).clone()
 
-        # residual connection (just for the predicted variables)
+        # residual connection (just for the prognostic and diagnostic output variables)
         x_out[..., self._internal_output_idx] += x[..., -1, :, self._internal_input_idx]
         return x_out
+
+
+if __name__ == "__main__":
+    from pathlib import Path
+    from hydra import compose, initialize
+    from torch_geometric import seed_everything
+    from aifs.data.datamodule import ECMLDataModule
+
+    from timeit import default_timer as timer
+
+    initialize(config_path="../config", job_name="test_msg")
+    cfg_ = compose(
+        config_name="ens-kcrps-h4",
+        overrides=[
+            "hardware.num_gpus_per_ensemble=1",
+        ],
+    )
+
+    seed_everything(1234)
+
+    def count_parameters(model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    LOGGER.debug("Running on device: %s ...", device)
+
+    datamodule = ECMLDataModule(cfg_)
+
+    gdata = torch.load(Path(cfg_.hardware.paths.graph, cfg_.hardware.files.graph))
+    gnn_ = GraphMSG(config=cfg_, data_indices=datamodule.data_indices, graph_data=gdata).to(device)
+
+    x_input = torch.randn(
+        cfg_.dataloader.batch_size.training,
+        cfg_.training.ensemble_size_per_device,
+        cfg_.training.multistep_input,
+        40320,  # TODO: remove magic number
+        len(datamodule.data_indices.data.input.full),
+    ).to(device)
+
+    LOGGER.debug("Input shape: %s", x_input.shape)
+    start = timer()
+
+    # with profile(activities=[ProfilerActivity.CUDA], record_shapes=True, profile_memory=True, with_stack=True) as prof:
+
+    y_pred = gnn_(x_input)
+    LOGGER.debug("Output shape: %s", y_pred.shape)
+    LOGGER.debug("Model parameter count: %d M", count_parameters(gnn_) / 1.0e6)
+
+    loss = y_pred.sum()
+    LOGGER.debug("Running backward on a dummy loss ...")
+    loss.backward()
+
+    end = timer()
+    LOGGER.debug("Ran backward. All good!")
+
+    # LOGGER.debug(prof.key_averages().table(sort_by="cuda_time_total", row_limit=50))
+
+    LOGGER.debug("Runtime %.1f s", (end - start))
+
+    for pname, pval in gnn_.named_parameters():
+        if pval.grad is None:
+            print(pname)
+
+    if torch.cuda.is_available():
+        LOGGER.debug("max memory allocated:  %5.1f MB", torch.cuda.max_memory_allocated(torch.device(0)) / (1000.0 * 1024))
+        LOGGER.debug("max memory reserved:   %5.1f MB", torch.cuda.max_memory_reserved(torch.device(0)) / (1000.0 * 1024))

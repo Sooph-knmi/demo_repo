@@ -200,9 +200,11 @@ def grad_test(rank, world_size):
     )
     graph_data = torch.load(Path(cfg_.hardware.paths.graph, cfg_.hardware.files.graph))
 
+    data_indices = None  # TODO: fixme!
+
     # need to use torch.double for some communication operations
     # otherwise the gradients won't match up to the desired tolerances
-    gnn = GraphMSG(cfg_, graph_data, fp32_comm_ops=False).to(dtype=_TEST_DTYPE, device=rank)
+    gnn = GraphMSG(cfg_, data_indices=data_indices, graph_data=graph_data).to(dtype=_TEST_DTYPE, device=rank)
     _ERA_SIZE = gnn._era_size
 
     # DDP model wrapper
