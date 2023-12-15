@@ -160,7 +160,7 @@ class BenchmarkProfiler(Profiler):
     def _create_output_file(self) -> None:
         """Creates the output file to aggregate the results from the memory
         profiling."""
-        fields = ["category", "size (MiB)", "function", "group", "pid", "allocator"]
+        fields = ["category", "size (MiB)", "function", "group", "pid"]
         with open(self.benchmark_filename, "w") as f:
             writer = csv.writer(f)
             writer.writerow(fields)
@@ -245,7 +245,7 @@ class BenchmarkProfiler(Profiler):
         )
         grouped_data["name"] = grouped_data["category"]
 
-        time_df = pd.concat([time_df[time_df["is_callback"] is False], grouped_data])
+        time_df = pd.concat([time_df[~time_df["is_callback"]], grouped_data])
         time_df = time_df.drop("is_callback", axis=1)
         time_df = time_df.round(precision)
         time_df = time_df.sort_values(by="category", ascending=False)
@@ -283,7 +283,6 @@ class BenchmarkProfiler(Profiler):
                 {
                     "size (MiB)": x["size (MiB)"].sum(),
                     "function": x.loc[x["size (MiB)"].idxmax()]["function"],
-                    "allocator": x.loc[x["size (MiB)"].idxmax()]["allocator"],
                 }
             )
         )
@@ -304,7 +303,7 @@ class BenchmarkProfiler(Profiler):
             n_items (int): Number of top memory-consuming items to include (default is 10).
         """
         cleaned_memray_df = memray_df.drop("tid", axis=1)
-        # cleaned_memray_df = cleaned_memray_df.drop("allocator", axis=1)
+        cleaned_memray_df = cleaned_memray_df.drop("allocator", axis=1)
 
         # For readibility, we cut the paths to just display the relevant package info
         module_path = aifs.__path__[0].replace("aifs-mono/aifs", "")
@@ -339,7 +338,6 @@ class BenchmarkProfiler(Profiler):
         cleaned_memray_df = self._trim_memray_df(memray_df)
 
         cleaned_memray_df["pid"] = self.pid
-
         cleaned_memray_df.to_csv(self.benchmark_filename, mode="a", index=False, header=False)
 
     @rank_zero_only
