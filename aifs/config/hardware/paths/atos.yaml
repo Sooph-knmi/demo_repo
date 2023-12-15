@@ -6,4 +6,5 @@ logs:
   tensorboard: ${hardware.paths.logs.base}tensorboard/
 checkpoints: ${hardware.paths.output}checkpoint/
 plots: ${hardware.paths.output}plots/
+profiler: ${hardware.paths.output}profiler/
 graph: /home/mlx/data/graphs/

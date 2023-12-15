@@ -149,7 +149,7 @@ class BenchmarkProfiler(Profiler):
         super().__init__(config)
 
         self.config = config
-        self.dirpath = Path(self.config.hardware.paths.logs.base, "profiler")
+        self.dirpath = Path(self.config.hardware.paths.profiler)
         self.dirpath.mkdir(parents=True, exist_ok=True)
 
         self.benchmark_filename = Path(self.dirpath, "aifs-benchmark-profiler.csv")
@@ -173,7 +173,6 @@ class BenchmarkProfiler(Profiler):
         self.pid = os.getpid()
 
         self.memfile_name = Path(self.dirpath, f"aifs-benchmark-mem-profiler_{self.pid}.bin")
-        print("memray file", self.memfile_name)
         self.memory_profiler = memray.Tracker(self.memfile_name, file_format=FileFormat.AGGREGATED_ALLOCATIONS)
         self._create_output_file()
 

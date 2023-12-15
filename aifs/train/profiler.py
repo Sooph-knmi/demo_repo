@@ -2,6 +2,7 @@ import os
 import warnings
 from datetime import datetime
 from functools import cached_property
+from pathlib import Path
 from typing import Dict
 from typing import List
 from typing import Optional
@@ -188,6 +189,11 @@ class AIFSProfiler(AIFSTrainer):
     @cached_property
     def profiler(self) -> BenchmarkProfiler:
         return BenchmarkProfiler(self.config)
+
+    def update_paths(self) -> None:
+        """Update the paths in the configuration."""
+        super().update_paths
+        self.config.hardware.paths.profiler = Path(self.config.hardware.paths.profiler, self.run_id)
 
     def _close_logger(self) -> None:
         # We need to close the W&B logger to be able to read the System Metrics
