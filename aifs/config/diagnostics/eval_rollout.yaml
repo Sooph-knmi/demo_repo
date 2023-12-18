@@ -1,5 +1,5 @@
 eval:
-  enabled: False
+  enabled: True
   # use this to evaluate the model over longer rollouts, every so many validation batches
   rollout: 12
   frequency: 5

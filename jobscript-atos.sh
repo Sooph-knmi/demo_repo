@@ -3,8 +3,8 @@
 #SBATCH --account=ecaifs
 #SBATCH --qos=ng
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=4
+#SBATCH --ntasks-per-node=2
+#SBATCH --gpus-per-node=2
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
 #SBATCH --time=00:15:00
@@ -14,6 +14,7 @@
 # export NCCL_DEBUG=INFO
 # export PYTHONFAULTHANDLER=1
 export HYDRA_FULL_ERROR=1
+export OC_CAUSE=1
 # export NCCL_DEBUG=TRACE
 # export TORCH_CPP_LOG_LEVEL=INFO
 # export TORCH_DISTRIBUTED_DEBUG=DETAIL

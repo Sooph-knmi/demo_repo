@@ -1,7 +1,7 @@
 defaults:
   - hardware: atos_slurm
   - data: zarr
-  - dataloader: default
+  - dataloader: ensemble_eda
   - model: gnn
   - training: default
   - diagnostics: eval_rollout
@@ -28,8 +28,8 @@ dataloader:
     training: 4
     validation: 4
   limit_batches:
-    training: 4000
-    validation: null  # minimum 4 for evaluation to work
+    training: 200
+    validation: 50  # minimum 4 for evaluation to work
 
 training:
   lr:
@@ -51,9 +51,9 @@ diagnostics:
     frequency: 5
   plot:
     parameters:
-      23: t_850
-      36: u_850
-      49: v_850
-      72: z_500
+      - t_850
+      - u_850
+      - v_850
+      - z_500
   logging:
     interval: 50

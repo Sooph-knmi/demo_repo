@@ -60,12 +60,12 @@ class AIFSTrainer:
         """
         return self.datamodule.data_indices
 
-    @cached_property
-    def initial_seed(self) -> int:
-        """Initial seed for the RNG."""
-        initial_seed = pl.seed_everything(self.config.training.initial_seed, workers=True)
-        LOGGER.debug("Running with initial seed: %d", initial_seed)
-        return initial_seed
+    # @cached_property
+    # def initial_seed(self) -> int:
+    #     """Initial seed for the RNG."""
+    #     initial_seed = pl.seed_everything(self.config.training.initial_seed, workers=True)
+    #     LOGGER.debug("Running with initial seed: %d", initial_seed)
+    #     return initial_seed
 
     @cached_property
     def model(self) -> GraphForecaster:
@@ -129,7 +129,7 @@ class AIFSTrainer:
             {
                 "version": "1.0",
                 "config": self.config,
-                "seed": self.initial_seed,
+                # "seed": self.initial_seed,
                 "run_id": self.run_id,
                 "dataset": self.datamodule.metadata,
                 "data_indices": self.datamodule.data_indices,

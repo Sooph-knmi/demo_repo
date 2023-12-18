@@ -122,8 +122,8 @@ class GraphForecaster(pl.LightningModule):
         # Loss function
         self._initialize_loss(config)
 
-        # Rank histogram
-        self.ranks = RankHistogram(nens=self.nens_per_group, nvar=self.fcdim)
+        # Rank histogram (accumulates statistics for _all_ output variables, both prognostic and diagnostic)
+        self.ranks = RankHistogram(nens=self.nens_per_group, nvar=self.data_indices.model.output.full)
 
         # Spread-skill metric (eval-mode only - see the RolloutEval callback)
         self.spread_skill = SpreadSkill(
@@ -177,6 +177,8 @@ class GraphForecaster(pl.LightningModule):
         )
 
         self._gather_matrix: Optional[torch.Tensor] = None  # lazy init
+
+        self._q_indices: Optional[torch.Tensor] = self._compute_q_indices(data_indices)
 
     def _build_gather_matrix(self) -> torch.Tensor:
         """Builds a matrix of shape (ens_comm_group_size * nens_per_device,
@@ -285,6 +287,14 @@ class GraphForecaster(pl.LightningModule):
             return self._compute_kcrps(y_pred, y_target)
         return self._compute_energy_score(y_pred, y_target)
 
+    def _compute_q_indices(self, data_indices) -> Optional[torch.Tensor]:
+        q_idx = []
+        for key, idx in data_indices.model.input.name_to_index.items():
+            if key[:2] == "q_":  # humidity at a certain plev
+                q_idx.append(idx)
+        LOGGER.debug("q indices in the input tensor: %s", q_idx if not q_idx else "n/a")
+        return torch.from_numpy(q_idx) if not q_idx else None
+
     def gather_and_compute_loss(
         self,
         y_pred: torch.Tensor,
@@ -321,13 +331,13 @@ class GraphForecaster(pl.LightningModule):
         x[:, self.multi_step - 1, :, self.data_indices.model.input.forcing] = forcing_rolled
         return x
 
-    def _generate_ens_inicond(self, batch: Tuple[torch.Tensor, ...]) -> torch.Tensor:
+    def _generate_ensemble_initial_conditions(self, batch: Tuple[torch.Tensor, ...]) -> torch.Tensor:
         """Generate initial conditions for the ensemble based on the EDA perturbations.
 
         Inputs:
             batch: 1- or 2-tuple of tensors with
-                batch[0]: unperturbed IC (ERA5 analysis), shape = (bs, rollout, latlon, fc_dim + aux_dim)
-                batch[1]: ERA5 EDA (10-member) ensemble, shape = (bs, mstep, latlon, fc_dim, nens_eda)
+                batch[0]: unperturbed IC (ERA5 analysis), shape = (bs, rollout, latlon, input.full)
+                batch[1]: ERA5 EDA (10-member) ensemble, shape = (bs, mstep, latlon, input.full, nens_eda)
         Returns:
             Ensemble IC, shape (bs, nens_per_device, mstep, latlon, nvar)
         """
@@ -363,9 +373,9 @@ class GraphForecaster(pl.LightningModule):
         x_ic = torch.stack(
             [x[:, 0 : self.multi_step, ...]] * self.nens_per_device, dim=1
         )  # shape == (bs, nens_per_device, multistep, latlon, nvar)
-        x_ic[..., : self.fcdim] += x_pert[:, start:end, ...]
-        # TODO: calculate q index range instead of hard-coding it!
-        x_ic[..., :13] = torch.clamp(x_ic[..., :13], min=0.0, max=None)
+        x_ic[..., : self.data_indices.data.input.full] += x_pert[:, start:end, ...]
+        # q (and other positive variables) needs special treatment
+        x_ic[..., self._q_indices] = torch.clamp(x_ic[..., self._q_indices], min=0.0, max=None)
 
         return x_ic
 
@@ -450,7 +460,7 @@ class GraphForecaster(pl.LightningModule):
     def training_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int) -> torch.Tensor:
         # del batch_idx  # not used
 
-        x_ens_ic = self._generate_ens_inicond(batch)
+        x_ens_ic = self._generate_ensemble_initial_conditions(batch)
         train_loss, _, _, _ = self._step(batch[0], batch_idx, x_ens_ic)
         self.log(
             "train_" + self.loss_type,
@@ -485,7 +495,7 @@ class GraphForecaster(pl.LightningModule):
     def validation_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int) -> None:
         # del batch_idx  # not used
         with torch.no_grad():
-            x_ens_ic = self._generate_ens_inicond(batch)
+            x_ens_ic = self._generate_ensemble_initial_conditions(batch)
             val_loss, metrics, y_preds, pkcrps = self._step(batch[0], batch_idx, x_ens_ic, validation_mode=True)
         self.log(
             "val_" + self.loss_type,
@@ -511,9 +521,9 @@ class GraphForecaster(pl.LightningModule):
         return val_loss, y_preds, pkcrps, x_ens_ic
 
     def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
-        batch = self.normalizer(batch)
 
         with torch.no_grad():
+            batch = self.normalizer(batch, in_place=False)
             # add dummy ensemble dimension (of size 1)
             x = batch[:, None, ...]
             y_hat = self(x)

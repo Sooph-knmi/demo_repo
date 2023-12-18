@@ -61,24 +61,6 @@ class PlotCallback(Callback):
         plt.close(fig)  # cleanup
 
 
-class AsyncPlotCallback(PlotCallback):
-    """Factory for creating a callback that plots data to Weights and Biases."""
-
-    def __init__(self, config):
-        super().__init__(config)
-
-        self._executor = ThreadPoolExecutor(max_workers=1)
-        self._error: Optional[BaseException] = None
-
-    def teardown(self, trainer, pl_module, stage) -> None:
-        """This method is called to close the threads."""
-        self._executor.shutdown(wait=True)
-
-        # if an error was raised anytime in any of the `executor.submit` calls
-        if self._error:
-            raise self._error
-
-
 class RolloutEval(Callback):
     """Evaluates the model performance over a (longer) rollout window."""
 
@@ -117,12 +99,12 @@ class RolloutEval(Callback):
         with torch.no_grad():
             for rstep in range(self.rollout):
                 y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
-                forcing_rolled = batch[:, self.multi_step + rstep, ..., self.data_indices.data.input.forcing]
+                forcing_rolled = batch[:, pl_module.multi_step + rstep, ..., pl_module.data_indices.data.input.forcing]
                 # target, shape = (bs, latlon, nvar)
 
                 # y includes the auxiliary variables, so we must leave those out when computing the loss
                 loss_rstep, y_pred_group = pl_module.gather_and_compute_loss(
-                    y_pred, forcing_rolled[..., : pl_module.fcdim], validation_mode=True
+                    y_pred, forcing_rolled[..., : pl_module.self.data_indices.data.output.full], validation_mode=True
                 )
                 loss += loss_rstep
 
@@ -137,11 +119,10 @@ class RolloutEval(Callback):
                     y_pred_denorm = pl_module.model.normalizer.denormalize(y_pred_group.mean(dim=1), in_place=False)
                     metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
 
+                y_denorm = pl_module.model.normalizer.denormalize(y, in_place=False)
+                y_pred_denorm = pl_module.model.normalizer.denormalize(y_pred_group, in_place=False)
                 # eval diagnostic metrics
                 for midx, (pidx, _) in enumerate(self.eval_plot_parameters.items()):
-                    y_denorm = pl_module.model.normalizer.denormalize(y, in_place=False)
-                    y_pred_denorm = pl_module.model.normalizer.denormalize(y_pred_group, in_place=False)
-
                     (
                         rmse[rstep, midx],
                         spread[rstep, midx],
