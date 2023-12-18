@@ -521,7 +521,6 @@ class GraphForecaster(pl.LightningModule):
         return val_loss, y_preds, pkcrps, x_ens_ic
 
     def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
-
         with torch.no_grad():
             batch = self.normalizer(batch, in_place=False)
             # add dummy ensemble dimension (of size 1)
