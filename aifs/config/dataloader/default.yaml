@@ -28,17 +28,21 @@ limit_batches:
 training:
   dataset: ${hardware.paths.data}/${hardware.files.dataset}
   start: null
-  end: 2017
+  end: 2020
   frequency: ${data.frequency}
+  drop:
+    - sd
 
 validation:
   dataset: ${hardware.paths.data}/${hardware.files.dataset}
-  start: 2018
-  end: 2019
+  start: 2021
+  end: 2021
   frequency: ${data.frequency}
+  drop:
+    - sd
 
 test:
   dataset: ${hardware.paths.data}/${hardware.files.dataset}
-  start: 2020
+  start: 2022
   end: null
   frequency: ${data.frequency}

@@ -366,7 +366,8 @@ class GNNMapper(nn.Module):
             self.proc = nn.ModuleList([offload_wrapper(x) for x in self.proc])
 
         if backward_mapper:  # h -> era
-            self.node_era_extractor = nn.Linear(hidden_dim, out_channels_dst)
+            # self.node_era_extractor = nn.Linear(hidden_dim, out_channels_dst)
+            self.node_era_extractor = nn.Sequential(AutocastLayerNorm(hidden_dim), nn.Linear(hidden_dim, out_channels_dst))
         else:  # era -> h
             self.emb_nodes_src = nn.Linear(in_channels_src, hidden_dim)
 
