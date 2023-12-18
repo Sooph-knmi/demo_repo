@@ -192,7 +192,7 @@ class AIFSProfiler(AIFSTrainer):
 
     def update_paths(self) -> None:
         """Update the paths in the configuration."""
-        super().update_paths
+        super().update_paths()
         self.config.hardware.paths.profiler = Path(self.config.hardware.paths.profiler, self.run_id)
 
     def _close_logger(self) -> None:
