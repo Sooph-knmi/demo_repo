@@ -31,9 +31,13 @@ debug:
 profiler: False
 
 checkpoint:
-  every_n_minutes: 15 # Approximate, as this is checked at the end of training steps
-  every_n_epochs: 1
-  every_n_train_steps: 1000 # Does not scale with rollout
+  save_frequency:
+    every_n_minutes: 30 # Approximate, as this is checked at the end of training steps
+    every_n_epochs: 1
+    every_n_train_steps: null # Does not scale with rollout
+  # If set to k, saves the best k model weights in the training.
+  # If set to -1, all checkpoints are kept ensuring runs can be continued/forked at any point in the training process
+  num_models_saved: -1
 
 log:
   wandb:

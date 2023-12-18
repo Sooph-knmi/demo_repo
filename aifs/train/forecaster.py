@@ -310,26 +310,43 @@ class GraphForecaster(pl.LightningModule):
         y_pred_ens = einops.rearrange(y_pred_ens, "bs e latlon v -> bs v latlon e")  # ensemble dim must come last
         y_pred_ens = y_pred_ens @ self._gather_matrix
         y_pred_ens = einops.rearrange(y_pred_ens, "bs v latlon e -> bs e latlon v")  # reshape back to what it was
+
         LOGGER.debug("after pruning y_pred_ens.shape == %s", y_pred_ens.shape)
 
+        LOGGER.debug("Shapes: y_pred_ens.shape = %s, y.shape = %s", list(y_pred_ens.shape), list(y.shape))
+
         # step 3/ compute the loss (one member per model group)
-        loss_inc = checkpoint(self._compute_loss, y_pred_ens, y[..., self.data_indices.data.output.full], use_reentrant=False)
+        loss_inc = checkpoint(self._compute_loss, y_pred_ens, y, use_reentrant=False)
 
         # during validation, we also return the pruned ensemble (from step 2) so we can run diagnostics
         # an explicit cast is needed when running in mixed precision (i.e. with y_pred_ens.dtype == torch.(b)float16)
         return loss_inc, y_pred_ens.to(dtype=y.dtype) if validation_mode else None
 
-    def advance_input(self, x: torch.Tensor, y_pred: torch.Tensor, forcing_rolled: torch.Tensor) -> torch.Tensor:
-        x = x.roll(-1, dims=1)
+    def advance_input(self, x: torch.Tensor, y_pred: torch.Tensor, batch: torch.Tensor, rollout_step: int) -> torch.Tensor:
+        """Update the input in preparation for the next rollout step.
 
-        # Get prognostic variables
-        x[:, self.multi_step - 1, :, self.data_indices.model.input.prognostic] = y_pred[
-            ..., self.data_indices.model.output.prognostic
-        ]
+        Args:
+            x: torch.Tensor
+                The state tensor, shape (bs, ens, multistep, latlon, prognostics + forcings)
+            y_pred: torch.Tensor
+                Predicted state tensor, shape (bs, ens, latlon, prognostics + diagnostics)
+            batch: torch.Tensor
+                Batch tensor, shape (bs, multistep + rollout, latlon, prognostics + forcings)
+            rollout_step: int
+                Index of the current rollout step.
+        Returns:
+            The updated state tensor x, shape (bs, ens, multistep, latlon, prognostics + forcings)
+        """
+        x = x.roll(-1, dims=2)  # roll along the multistep dimension
+
+        # get prognostic variables
+        x[:, :, -1, :, self.data_indices.model.input.prognostic] = y_pred[..., self.data_indices.model.output.prognostic]
 
         # get new "constants" needed for time-varying fields
-        x[:, self.multi_step - 1, :, self.data_indices.model.input.forcing] = forcing_rolled
-
+        # the batch needs an extra dummy dimension to match x.shape
+        x[:, :, -1, :, self.data_indices.model.input.forcing] = batch[
+            :, None, self.multi_step + rollout_step, ..., self.data_indices.data.input.forcing
+        ]
         return x
 
     def _generate_ensemble_initial_conditions(self, batch: Tuple[torch.Tensor, ...]) -> torch.Tensor:
@@ -408,44 +425,34 @@ class GraphForecaster(pl.LightningModule):
 
         y_preds: List[torch.Tensor] = []
         kcrps_preds: List[torch.Tensor] = []
-        for rstep in range(self.rollout):
-            # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+
+        for rollout_step in range(self.rollout):
             # if rstep > 0: torch.cuda.empty_cache() # uncomment if rollout fails with OOM
             y_pred = self(x)
 
-            y = batch[:, self.multi_step + rstep, ..., self.data_indices.data.output.full]
-            # y includes the auxiliary variables, so we must leave those out when computing the loss
-            # loss += checkpoint(self.loss, y_pred, y, use_reentrant=False)
-            loss_rstep, y_pred_group = self.gather_and_compute_loss(y_pred, y, validation_mode=validation_mode)
+            y = batch[:, self.multi_step + rollout_step, ..., self.data_indices.data.output.full]
+            loss_rstep, y_pred_ens_group = self.gather_and_compute_loss(y_pred, y, validation_mode=validation_mode)
             loss += loss_rstep
 
-            forcing_rolled = batch[:, :, self.multi_step + rstep, ..., self.data_indices.data.input.forcing]
-
-            LOGGER.debug(
-                "Shapes: forcing_rolled.shape = %s, batch.shape = %s, x.shape = %s",
-                list(forcing_rolled.shape),
-                list(batch.shape),
-                list(x.shape),
-            )
-
-            x = self.advance_input(x, y_pred, forcing_rolled)
-
             if validation_mode:
-                assert y_pred_group is not None
+                assert y_pred_ens_group is not None
+
+                # calculate metrics for the ensemble mean
+                metrics_next, y_preds_next = self.calculate_val_metrics(
+                    y_pred_ens_group.mean(dim=1), y, rollout_step, enable_plot=self.enable_plot
+                )
+                metrics.update(metrics_next)
+                y_preds.extend(y_preds_next)
+
                 # rank histograms - update metric state
-                _ = self.ranks(y[..., self.data_indices.data.output.full], y_pred_group)
+                _ = self.ranks(y, y_pred_ens_group)
                 # pointwise KCRPS
-                pkcrps = self._compute_kcrps(y_pred_group, y[..., self.data_indices.data.output.full], squash=False)
-                LOGGER.debug("pkcrps.dtype = %s, y_pred_group.dtype = %s, y.dtype = %s", pkcrps.dtype, y_pred_group.dtype, y.dtype)
-                # WMSE ensemble mean metrics
-                y_denorm = self.model.normalizer.denormalize(y, in_place=False)
-                y_pred_denorm = self.model.normalizer.denormalize(y_pred_group.mean(dim=1), in_place=False)
-                for mkey, indices in self.metric_ranges.items():
-                    metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
+                pkcrps = self._compute_kcrps(y_pred_ens_group, y, squash=False)
 
                 if self.enable_plot:
-                    y_preds.append(y_pred_group)
                     kcrps_preds.append(pkcrps)
+
+            x = self.advance_input(x, y_pred, batch, rollout_step)
 
         # scale loss
         loss *= 1.0 / self.rollout
@@ -459,11 +466,35 @@ class GraphForecaster(pl.LightningModule):
         if self._gather_matrix is None:
             self._gather_matrix = self._build_gather_matrix()  # only once
 
-    def training_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int) -> torch.Tensor:
-        # del batch_idx  # not used
+    def calculate_val_metrics(
+        self, y_pred: torch.Tensor, y: torch.Tensor, rollout_step: int, enable_plot: bool = False
+    ) -> Tuple[dict, List[torch.Tensor]]:
+        """Calculate metrics on the validation output.
 
+        Args:
+            y_pred: torch.Tensor
+                Predicted ensemble mean
+            y: torch.Tensor
+                Ground truth (target).
+            rollout_step: int
+                Rollout step
+            enable_plot: bool, defaults to False
+                Generate plots
+        """
+        metrics = {}
+        y_preds = []
+        y_denorm = self.model.normalizer.denormalize(y, in_place=False)
+        y_pred_denorm = self.model.normalizer.denormalize(y_pred, in_place=False)
+        for mkey, indices in self.metric_ranges.items():
+            metrics[f"{mkey}_{rollout_step+1}"] = self.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
+        if enable_plot:
+            y_preds.append(y_pred)
+        return metrics, y_preds
+
+    def training_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int) -> torch.Tensor:
         x_ens_ic = self._generate_ensemble_initial_conditions(batch)
         train_loss, _, _, _ = self._step(batch[0], batch_idx, x_ens_ic)
+
         self.log(
             "train_" + self.loss_type,
             train_loss,

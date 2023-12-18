@@ -104,9 +104,9 @@ def test_advance_input(dummy_forecaster, config, fake_data):
         # Generate a "predicted" tensor
         y_pred = fake_data[:, multi_step + rollout_step, ..., dummy_forecaster.data_indices.data.output.full]
         # Generate a "forcing" tensor
-        forcing_rolled = fake_data[:, multi_step + rollout_step, ..., dummy_forecaster.data_indices.data.input.forcing]
+        fake_data[:, multi_step + rollout_step, ..., dummy_forecaster.data_indices.data.input.forcing]
         # Run the function
-        x = dummy_forecaster.advance_input(x, y_pred, forcing_rolled)
+        x = dummy_forecaster.advance_input(x, y_pred, fake_data, rollout_step)
         # Check the shape
         assert x.shape == (
             fake_data.shape[0],

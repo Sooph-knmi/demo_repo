@@ -1,8 +1,6 @@
-
 defaults:
   - paths: atos
   - files: atos
-
 
 # number of GPUs per node and number of nodes (for DDP)
 num_gpus_per_node:  ${oc.decode:${oc.env:SLURM_GPUS_PER_NODE}}
