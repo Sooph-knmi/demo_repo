@@ -139,7 +139,7 @@ class RolloutEval(Callback):
                 # y includes the auxiliary variables, so we must leave those out when computing the loss
                 loss += pl_module.loss(y_pred, y)
 
-                x = pl_module.advance_input(batch, y_pred)
+                x = pl_module.advance_input(x, y_pred, batch, rollout_step)
 
                 metrics_next, _ = pl_module.calculate_val_metrics(y_pred, y, rollout_step)
                 metrics.update(metrics_next)
@@ -426,7 +426,7 @@ def get_callbacks(config: DictConfig) -> List:
         save_on_train_epoch_end=False,
         enable_version_counter=False,
         # if save_top_k == k, best k models saved; if save_top_k == -1, all models are saved
-        save_top_k=config.diagnostics.checkpoint.num_models_saved
+        save_top_k=config.diagnostics.checkpoint.num_models_saved,
     )
 
     ckpt_frequency_save_dict = {}

@@ -142,15 +142,15 @@ class GraphForecaster(pl.LightningModule):
         LOGGER.debug("set_model_comm_group: %s", model_comm_group)
         self.model_comm_group = model_comm_group
 
-    def advance_input(self, batch: torch.Tensor, y_pred: torch.Tensor) -> torch.Tensor:
-        x = batch[:, 0 : self.multi_step, ...].roll(-1, dims=1)
+    def advance_input(self, x: torch.Tensor, y_pred: torch.Tensor, batch: torch.Tensor, rollout_step: int) -> torch.Tensor:
+        x = x.roll(-1, dims=1)
 
-        x[:, self.multi_step - 1, :, self.data_indices.model.input.prognostic] = y_pred[
-            ..., self.data_indices.model.output.prognostic
-        ]
+        # Get prognostic variables
+        x[:, -1, :, self.data_indices.model.input.prognostic] = y_pred[..., self.data_indices.model.output.prognostic]
+
         # get new "constants" needed for time-varying fields
-        x[:, self.multi_step - 1, :, self.data_indices.model.input.forcing] = batch[
-            :, self.multi_step, ..., self.data_indices.data.input.forcing
+        x[:, -1, :, self.data_indices.model.input.forcing] = batch[
+            :, self.multi_step + rollout_step, ..., self.data_indices.data.input.forcing
         ]
         return x
 
@@ -165,21 +165,22 @@ class GraphForecaster(pl.LightningModule):
         metrics = {}
 
         # start rollout
-        x = batch[:, 0 : self.multi_step, ...]  # (bs, multi_step, latlon, nvar)
+        x = batch[:, 0 : self.multi_step, ..., self.data_indices.data.input.full]  # (bs, multi_step, latlon, nvar)
 
         y_preds = []
-        for rstep in range(self.rollout):
-            # if rstep > 0: torch.cuda.empty_cache() # uncomment if rollout fails with OOM
-            y_pred = self(x[..., self.data_indices.data.input.full])  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
+        for rollout_step in range(self.rollout):
+            # prediction at rollout step rollout_step, shape = (bs, latlon, nvar)
+            # if rollout_step > 0: torch.cuda.empty_cache() # uncomment if rollout fails with OOM
+            y_pred = self(x)
 
-            y = batch[:, self.multi_step + rstep, ..., self.data_indices.data.output.full]
+            y = batch[:, self.multi_step + rollout_step, ..., self.data_indices.data.output.full]
             # y includes the auxiliary variables, so we must leave those out when computing the loss
             loss += checkpoint(self.loss, y_pred, y, use_reentrant=False)
 
-            x = self.advance_input(batch, y_pred)
+            x = self.advance_input(x, y_pred, batch, rollout_step)
 
             if validation_mode:
-                metrics_next, y_preds_next = self.calculate_val_metrics(y_pred, y, rstep, enable_plot=self.enable_plot)
+                metrics_next, y_preds_next = self.calculate_val_metrics(y_pred, y, rollout_step, enable_plot=self.enable_plot)
                 metrics.update(metrics_next)
                 y_preds.extend(y_preds_next)
 
@@ -187,13 +188,13 @@ class GraphForecaster(pl.LightningModule):
         loss *= 1.0 / self.rollout
         return loss, metrics, y_preds
 
-    def calculate_val_metrics(self, y_pred, y, rstep, enable_plot=False):
+    def calculate_val_metrics(self, y_pred, y, rollout_step, enable_plot=False):
         metrics = {}
         y_preds = []
         y_denorm = self.model.normalizer.denormalize(y, in_place=False)
         y_pred_denorm = self.model.normalizer.denormalize(y_pred, in_place=False)
         for mkey, indices in self.metric_ranges.items():
-            metrics[f"{mkey}_{rstep+1}"] = self.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
+            metrics[f"{mkey}_{rollout_step+1}"] = self.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
 
         if enable_plot:
             y_preds.append(y_pred)
