@@ -1,4 +1,4 @@
-data: /home/mlx/ai-ml/datasets/stable/
+data: /home/mlx/ai-ml/datasets/experimental/
 output: ${oc.env:HPCPERM}/aifs/${data.resolution}/
 logs:
   base: ${hardware.paths.output}/logs

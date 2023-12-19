@@ -9,10 +9,9 @@ plot:
   sample_idx: 0
   per_sample: 6
   parameters:
-    - z_500
-    - t_850
-    - u_850
-    - v_850
+    # - t_137
+    # - u_137
+    # - v_137
     - 2t
     - 10u
     - 10v

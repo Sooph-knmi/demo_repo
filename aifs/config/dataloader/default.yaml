@@ -25,24 +25,58 @@ limit_batches:
 # See Readme: https://github.com/ecwmf-lab/ecml-tools/
 # ============
 
+config_0_drop : [sd] 
+
+config_1_drop : [sd, 
+  vo_48, vo_56, vo_60, vo_65, vo_68, vo_73, vo_74, vo_79, vo_81, vo_83, vo_90, vo_96, vo_101, vo_105, vo_114, vo_120, vo_133, vo_137,
+  d_48, d_56, d_60, d_65, d_68, d_73, d_74, d_79, d_81, d_83, d_90, d_96, d_101, d_105, d_114, d_120, d_133, d_137,
+  # vo_56, vo_65, vo_73, vo_81, vo_137, 
+  # d_56, d_65, d_73, d_81, d_137,
+  u_56, u_65, u_73, u_81, u_137, 
+  v_56, v_65, v_73, v_81, v_137, 
+  w_56, w_65, w_73, w_81, w_137, 
+  t_56, t_65, t_73, t_81, t_137, 
+  q_56, q_65, q_73, q_81, q_137 ]
+
+config_2_drop : [sd, 
+  vo_48, vo_56, vo_60, vo_65, vo_68, vo_73, vo_74, vo_79, vo_81, vo_83, vo_90, vo_96, vo_101, vo_105, vo_114, vo_120, vo_133, vo_137,
+  d_48, d_56, d_60, d_65, d_68, d_73, d_74, d_79, d_81, d_83, d_90, d_96, d_101, d_105, d_114, d_120, d_133, d_137,
+  # vo_56, vo_65, vo_73, vo_81, vo_137, 
+  # d_56, d_65, d_73, d_81, d_137,
+  u_60, u_68, u_74, u_83, u_133,
+  v_60, v_68, v_74, v_83, v_133,
+  w_60, w_68, w_74, w_83, w_133,
+  t_60, t_68, t_74, t_83, t_133,
+  q_60, q_68, q_74, q_83, q_133 ]
+
+config_3_drop : [sd, 
+  u_48, u_56, u_60, u_65, u_68, u_73, u_74, u_79, u_81, u_83, u_90, u_96, u_101, u_105, u_114, u_120, u_133, u_137,
+  v_48, v_56, v_60, v_65, v_68, v_73, v_74, v_79, v_81, v_83, v_90, v_96, v_101, v_105, v_114, v_120, v_133, v_137,
+  # u_56, vo_65, vo_73, vo_81, vo_137, 
+  # d_56, d_65, d_73, d_81, d_137,
+  vo_60, vo_68, vo_74, vo_83, vo_133,
+  d_60, d_68, d_74, d_83, d_133,
+  w_60, w_68, w_74, w_83, w_133,
+  t_60, t_68, t_74, t_83, t_133,
+  q_60, q_68, q_74, q_83, q_133 ]
+
 training:
   dataset: ${hardware.paths.data}/${hardware.files.dataset}
   start: null
   end: 2020
   frequency: ${data.frequency}
-  drop:
-    - sd
+  drop: ${dataloader.config_2_drop}
 
 validation:
   dataset: ${hardware.paths.data}/${hardware.files.dataset}
   start: 2021
   end: 2021
   frequency: ${data.frequency}
-  drop:
-    - sd
+  drop: ${dataloader.config_2_drop}
 
 test:
   dataset: ${hardware.paths.data}/${hardware.files.dataset}
   start: 2022
   end: null
   frequency: ${data.frequency}
+  drop: ${dataloader.config_2_drop}

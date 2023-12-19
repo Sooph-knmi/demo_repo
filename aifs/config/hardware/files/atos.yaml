@@ -1,4 +1,5 @@
-dataset: aifs-ea-an-oper-0001-mars-${data.resolution}-1979-2022-1h-v4.zarr
+# dataset: aifs-ea-an-oper-0001-mars-${data.resolution}-1979-2022-1h-v4.zarr
+dataset: aifs-ea-an-oper-0001-mars-${data.resolution}-1979-2022-6h-v4-ml.zarr
 graph: graph_mappings_normed_edge_attrs_ordered_desc_lat_lon_20231122093910_${data.resolution}_h_0_1_2_3_4_5.pt
 checkpoint:
   every_n_epochs: aifs-by_epoch-epoch_{epoch:03d}-val_wmse_{val_wmse:.3e}
