@@ -1,12 +1,10 @@
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
-from typing import Optional
 from zipfile import ZipFile
 
 import matplotlib.pyplot as plt
@@ -108,30 +106,30 @@ class RolloutEval(Callback):
                 )
                 loss += loss_rstep
 
-                x = pl_module.advance_input(x, y_pred, forcing_rolled)
-
                 assert y_pred_group is not None
 
-                # training metrics
-                for mkey, (low, high) in pl_module.metric_ranges.items():
-                    y_denorm = pl_module.model.normalizer.denormalize(y, in_place=False)
-                    # ensemble mean
-                    y_pred_denorm = pl_module.model.normalizer.denormalize(y_pred_group.mean(dim=1), in_place=False)
-                    metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
+                # # training metrics
+                # for mkey, (low, high) in pl_module.metric_ranges.items():
+                #     y_denorm = pl_module.model.normalizer.denormalize(y, in_place=False)
+                #     # ensemble mean
+                #     y_pred_denorm = pl_module.model.normalizer.denormalize(y_pred_group.mean(dim=1), in_place=False)
+                #     metrics[f"{mkey}_{rstep+1}"] = pl_module.metrics(y_pred_denorm[..., low:high], y_denorm[..., low:high])
 
-                y_denorm = pl_module.model.normalizer.denormalize(y, in_place=False)
-                y_pred_denorm = pl_module.model.normalizer.denormalize(y_pred_group, in_place=False)
+                # y_denorm = pl_module.model.normalizer.denormalize(y, in_place=False)
+                # y_pred_denorm = pl_module.model.normalizer.denormalize(y_pred_group, in_place=False)
                 # eval diagnostic metrics
-                for midx, (pidx, _) in enumerate(self.eval_plot_parameters.items()):
-                    (
-                        rmse[rstep, midx],
-                        spread[rstep, midx],
-                        bins_rmse[rstep, midx],
-                        bins_spread[rstep, midx],
-                    ) = pl_module.spread_skill.calculate_spread_skill(y_pred_denorm, y_denorm, pidx)
+            #     for midx, (pidx, _) in enumerate(self.eval_plot_parameters.items()):
+            #         (
+            #             rmse[rstep, midx],
+            #             spread[rstep, midx],
+            #             bins_rmse[rstep, midx],
+            #             bins_spread[rstep, midx],
+            #         ) = pl_module.spread_skill.calculate_spread_skill(y_pred_denorm, y_denorm, pidx)
 
-            # update spread-skill metric state
-            _ = pl_module.spread_skill(rmse, spread, bins_rmse, bins_spread)
+            #     x = pl_module.advance_input(x, y_pred, batch, rollout_step)
+
+            # # update spread-skill metric state
+            # _ = pl_module.spread_skill(rmse, spread, bins_rmse, bins_spread)
 
             # scale loss
             loss *= 1.0 / self.rollout
@@ -643,11 +641,12 @@ def get_callbacks(config: DictConfig) -> List:
         # save after every validation epoch, if we've improved
         save_on_train_epoch_end=False,
         enable_version_counter=False,
-        save_top_k=-1,
+        # if save_top_k == k, best k models saved; if save_top_k == -1, all models are saved
+        save_top_k=config.diagnostics.checkpoint.num_models_saved,
     )
 
     ckpt_frequency_save_dict = {}
-    for key, frequency in config.diagnostics.checkpoint.items():
+    for key, frequency in config.diagnostics.checkpoint.save_frequency.items():
         if key == "every_n_minutes":
             target = "train_time_interval"
             frequency = timedelta(minutes=frequency)
