@@ -367,7 +367,7 @@ class GraphMSG(nn.Module):
             model_comm_group=model_comm_group,
         )
 
-        x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=self.batch_size).to(dtype=x.dtype)
+        x_out = einops.rearrange(x_out, "(b n) f -> b n f", b=self.batch_size).to(dtype=x.dtype).clone()
 
         # residual connection (just for the prognostic variables)
         x_out[..., self._internal_output_idx] += x[:, -1, :, self._internal_input_idx]
