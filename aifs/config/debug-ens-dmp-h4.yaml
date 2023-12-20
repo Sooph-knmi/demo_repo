@@ -50,11 +50,5 @@ diagnostics:
     enabled: True
     rollout: 2
     frequency: 5
-  plot:
-    parameters:
-      23: t_850
-      36: u_850
-      49: v_850
-      72: z_500
   logging:
     interval: 50

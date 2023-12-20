@@ -252,6 +252,7 @@ def plot_predicted_ensemble(
     Returns:
         The figure object handle.
     """
+    import ipdb; ipdb.set_trace()
     nens = y_pred.shape[0]
     n_plots_x, n_plots_y = len(parameters), nens + 4  # we also plot the truth, ensemble mean, mean error and spread
     LOGGER.debug("n_plots_x = %d, n_plots_y = %d", n_plots_x, n_plots_y)
