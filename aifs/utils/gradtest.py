@@ -15,6 +15,7 @@ from torch.autograd import gradcheck
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch_geometric import seed_everything
 
+from aifs.data.datamodule import ECMLDataModule
 from aifs.distributed.helpers import gather_tensor
 from aifs.distributed.helpers import shard_tensor
 from aifs.losses.kcrps import KernelCRPS
@@ -124,8 +125,6 @@ def build_avg_matrix_for_gather(
         - * ( 0.5 * eye(3)  0.5 * eye(3)         0           0        )^T
         - * (      0              0        0.5 * eye(3)  0.5 * eye(3) )
     """
-    print(ens_comm_group_size)
-    print(model_comm_group_size)
     num_model_groups = ens_comm_group_size // model_comm_group_size
     # sub-block used to average all contributions from a model comm group
     model_gather_mat = (1.0 / model_comm_group_size) * torch.cat(
@@ -162,8 +161,6 @@ def grad_test(rank, world_size):
     cfg_ = compose(
         config_name="gradtest",
         overrides=[
-            "data.num_features=18",
-            "data.num_aux_features=2",
             "training.multistep_input=2",
             "model.trainable_parameters.era=2",
             "model.trainable_parameters.hidden=2",
@@ -200,12 +197,13 @@ def grad_test(rank, world_size):
     )
     graph_data = torch.load(Path(cfg_.hardware.paths.graph, cfg_.hardware.files.graph))
 
-    data_indices = None  # TODO: fixme!
+    datamodule = ECMLDataModule(cfg_)
+    data_indices = datamodule.data_indices
 
     # need to use torch.double for some communication operations
     # otherwise the gradients won't match up to the desired tolerances
-    gnn = GraphMSG(cfg_, data_indices=data_indices, graph_data=graph_data).to(dtype=_TEST_DTYPE, device=rank)
-    _ERA_SIZE = gnn._era_size
+    gnn = GraphMSG(config=cfg_, data_indices=data_indices, graph_data=graph_data).to(dtype=_TEST_DTYPE, device=rank)
+    _ERA_SIZE = 40320  # TODO: get rid of this hardcoded value
 
     # DDP model wrapper
     gnn = DDP(gnn, device_ids=[rank])
@@ -216,7 +214,7 @@ def grad_test(rank, world_size):
         cfg_.training.ensemble_size_per_device,
         cfg_.training.multistep_input,
         _ERA_SIZE,
-        cfg_.data.num_features,
+        len(data_indices.data.input.full),
     )
 
     linear_map = torch.nn.Linear(
@@ -229,7 +227,7 @@ def grad_test(rank, world_size):
 
     kcrps = KernelCRPS(
         area_weights=torch.ones(_ERA_SIZE, dtype=_TEST_DTYPE),
-        loss_scaling=torch.ones(cfg_.data.num_features - cfg_.data.num_aux_features, dtype=_TEST_DTYPE),
+        loss_scaling=torch.ones(len(data_indices.model.output.full), dtype=_TEST_DTYPE),
         fair=True,
     ).to(device=rank, dtype=_TEST_DTYPE)
 
@@ -241,7 +239,7 @@ def grad_test(rank, world_size):
     # some fake "true" state (this needs to be defined outside of the test function)
     y_target = torch.randn(  # already reshaped to fit the kcrps loss
         cfg_.dataloader.batch_size.training,
-        cfg_.data.num_features - cfg_.data.num_aux_features,
+        len(data_indices.model.output.full),
         _ERA_SIZE,
         dtype=_TEST_DTYPE,
         device=rank,
@@ -282,7 +280,7 @@ def grad_test(rank, world_size):
         y_pred = shard_tensor(y_pred_ens, dim=1, shapes=[y_pred.shape] * ens_comm_group_size, mgroup=ens_comm_group)
 
         x2 = x.detach().clone()
-        x2[:, :, -1, :, : cfg_.data.num_features - cfg_.data.num_aux_features] = y_pred
+        x2[:, :, -1, :, data_indices.model.input.prognostic] = y_pred[..., data_indices.model.output.prognostic]
         y_pred2 = gnn(x2, model_comm_group=model_comm_group, inject_noise=False)
         y_pred_ens2 = gather_tensor(y_pred2, dim=1, shapes=[y_pred2.shape] * ens_comm_group_size, mgroup=ens_comm_group)
         y_pred_ens2 = einops.rearrange(y_pred_ens2, "bs e latlon v -> bs v latlon e")

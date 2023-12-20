@@ -77,9 +77,9 @@ def create_ensemble_comm_groups(global_rank, world_size, ens_comm_group_size):
     )
 
     ens_comm_groups = [torch.distributed.new_group(x) for x in ens_comm_group_ranks]  # every rank has to create all of these
-
     ens_comm_group_id, ens_comm_group_nr, ens_comm_group_rank = get_my_comm_group(global_rank, world_size, ens_comm_group_size)
     ens_comm_group = ens_comm_groups[ens_comm_group_id]
+
     LOGGER.debug(
         "Rank %d ensemble_comm_group is %s, group number %d, with local group rank %d and comms_group_ranks %s",
         global_rank,
@@ -88,6 +88,7 @@ def create_ensemble_comm_groups(global_rank, world_size, ens_comm_group_size):
         ens_comm_group_rank,
         str(ens_comm_group_ranks[ens_comm_group_id]),
     )
+
     return ens_comm_group, ens_comm_group_id
 
 
@@ -145,9 +146,7 @@ def test_gather_op(comm_group: ProcessGroup, input_shape: Tuple, rank: int) -> b
 
     def _test_gather(x_in) -> None:
         x = linear_map(x_in).reshape(input_shape)
-        LOGGER.debug("x.shape = %s", x.shape)
         y = gather_tensor(x, dim=1, shapes=[x.shape] * comm_group_size, mgroup=comm_group)
-        LOGGER.debug("y.shape = %s", y.shape)
         loss = y.sum()
         return loss
 
@@ -184,11 +183,8 @@ def test_shard_op(comm_group: ProcessGroup, input_shape: Tuple, rank: int) -> bo
 
     def _test_shard(x_in) -> None:
         x_ = linear_map(x_in).reshape(input_shape)
-        LOGGER.debug("x.shape = %s", x_.shape)
         x = x_.repeat(1, comm_group_size, 1, 1)
-        LOGGER.debug("x.repeat().shape = %s", x.shape)
         y = shard_tensor(x, dim=1, shapes=[x_.shape] * comm_group_size, mgroup=comm_group)
-        LOGGER.debug("y.shape = %s", y.shape)
         loss = y.sum()
         return loss
 
@@ -225,9 +221,7 @@ def test_sync_op(comm_group: ProcessGroup, input_shape: Tuple, rank: int) -> boo
 
     def _test_sync(x_in) -> None:
         x = linear_map(x_in).reshape(input_shape)
-        LOGGER.debug("x.shape = %s", x.shape)
         y = sync_tensor(x, dim=1, shapes=[x.shape] * comm_group_size, mgroup=comm_group)
-        LOGGER.debug("y.shape = %s", y.shape)
         loss = y.sum()
         return loss
 
@@ -264,12 +258,9 @@ def test_reduce_shard_op(comm_group: ProcessGroup, input_shape: Tuple, rank: int
 
     def _test_reduce_shard(x_in) -> None:
         x_ = linear_map(x_in).reshape(input_shape)
-        LOGGER.debug("x.shape = %s", x_.shape)
         x = x_.repeat(1, comm_group_size, 1, 1)
-        LOGGER.debug("x.repeat().shape = %s", x.shape)
         # must do the reduction in FP64 (= _TEST_DTYPE) otherwise the gradient test will break
         y = reduce_shard_tensor(x, dim=1, shapes=[x_.shape] * comm_group_size, mgroup=comm_group, use_fp32=False)
-        LOGGER.debug("y.shape = %s", y.shape)
         loss = y.sum()
         return loss
 
@@ -305,10 +296,8 @@ def test_reduce_op(comm_group: ProcessGroup, input_shape: Tuple, rank: int) -> b
 
     def _test_reduce(x_in) -> None:
         x = linear_map(x_in).reshape(input_shape)
-        LOGGER.debug("x.shape = %s", x.shape)
         # must do the reduction in FP64 (= _TEST_DTYPE) otherwise the gradient test will break
         y = reduce_tensor(x, mgroup=comm_group, use_fp32=False)
-        LOGGER.debug("y.shape = %s", y.shape)
         loss = y.sum()
         return loss
 
@@ -323,10 +312,8 @@ def comms_test(rank, world_size):
 
     initialize(config_path="../config", job_name="test_msg")
     cfg_ = compose(
-        config_name="steptest",
+        config_name="commstest",
         overrides=[
-            "data.num_features=8",
-            "data.num_aux_features=2",
             "training.multistep_input=2",
             "training.ensemble_size_per_device=3",
             "model.trainable_parameters.era=2",
@@ -341,11 +328,6 @@ def comms_test(rank, world_size):
     # model_comm_group_size = cfg_.hardware.num_gpus_per_model
     ens_comm_group_size = cfg_.hardware.num_gpus_per_ensemble
 
-    # create communication groups
-    # model_comm_group, _ = create_model_comm_groups(rank, world_size, model_comm_group_size)
-    # model_comm_group_size = dist.get_world_size(group=model_comm_group)
-    # LOGGER.debug("Set up a model_comm_group: %s with size %d", model_comm_group, model_comm_group_size)
-
     ens_comm_group, ens_comm_group_id = create_ensemble_comm_groups(rank, world_size, ens_comm_group_size)
     ens_comm_group_size = dist.get_world_size(group=ens_comm_group)
     LOGGER.debug("Set up an ensemble_comm_group: %s with size %d", ens_comm_group, ens_comm_group_size)
@@ -357,14 +339,14 @@ def comms_test(rank, world_size):
     torch.use_deterministic_algorithms(True)
 
     _ERA_SIZE = 2048
+    _NUM_FEATURES = 8
 
     # test gather
     input_shape = (
         cfg_.dataloader.batch_size.training,
         cfg_.training.ensemble_size_per_device,
-        # cfg_.training.multistep_input,
         _ERA_SIZE,
-        cfg_.data.num_features,
+        _NUM_FEATURES,
     )
 
     # test gather
