@@ -4,8 +4,8 @@
 #SBATCH --qos=ng
 #SBATCH --time=00:15:00
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=4
+#SBATCH --ntasks-per-node=2
+#SBATCH --gpus-per-node=2
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --output=gradtest.out.%j
@@ -24,16 +24,14 @@ export CUBLAS_WORKSPACE_CONFIG=:4096:8
 # set the network interface
 # export NCCL_SOCKET_IFNAME=ib0,lo
 
-# Name and notes optional
-# export WANDB_NAME="gradtest"
-# export WANDB_NOTES="Gradteset"
-
 # generic settings
-CONDA_ENV=aifs_dev
-GITDIR=/home/momc/AIFS/aifs-mono
+VENV=aifs-ens-score
+GITDIR=/home/$USER/AIFS/aifs-ens-score/aifs-mono
 WORKDIR=$GITDIR
 
 cd $WORKDIR
-module load conda
-conda activate $CONDA_ENV
+
+module load python3/may23
+source /perm/$USER/venvs/shared/$VENV/bin/activate
+
 aifs-ens-gradtest

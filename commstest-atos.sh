@@ -1,13 +1,14 @@
-#!/bin/bash -l
+#!/bin/bash
 
+#SBATCH --account=ecaifs
 #SBATCH --qos=ng
+#SBATCH --time=00:15:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=00:10:00
-#SBATCH --output=steptest.out.%j
+#SBATCH --output=commstest.out.%j
 
 # debugging flags (optional)
 # export NCCL_DEBUG=INFO
@@ -17,9 +18,7 @@ export HYDRA_FULL_ERROR=1
 # export TORCH_CPP_LOG_LEVEL=INFO
 # export TORCH_DISTRIBUTED_DEBUG=DETAIL
 # export CUDA_LAUNCH_BLOCKING=1
-
 export CUBLAS_WORKSPACE_CONFIG=:4096:8
-# export CUBLAS_WORKSPACE_CONFIG=:16:8
 
 # on your cluster you might need these:
 # set the network interface
@@ -35,4 +34,4 @@ cd $WORKDIR
 module load python3/may23
 source /perm/$USER/venvs/shared/$VENV/bin/activate
 
-aifs-ens-steptest
+aifs-ens-commstest

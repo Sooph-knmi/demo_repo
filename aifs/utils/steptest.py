@@ -15,6 +15,7 @@ from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch_geometric import seed_everything
 
+from aifs.data.datamodule import ECMLDataModule
 from aifs.distributed.helpers import gather_tensor
 from aifs.losses.kcrps import KernelCRPS
 from aifs.model.gnn import GraphMSG
@@ -165,8 +166,6 @@ def single_step_test(rank, world_size):
     cfg_ = compose(
         config_name="steptest",
         overrides=[
-            "data.num_features=8",
-            "data.num_aux_features=2",
             "training.multistep_input=2",
             "model.trainable_parameters.era=2",
             "model.trainable_parameters.hidden=2",
@@ -202,17 +201,17 @@ def single_step_test(rank, world_size):
     )
     graph_data = torch.load(Path(cfg_.hardware.paths.graph, cfg_.hardware.files.graph))
 
-    gnn = GraphMSG(cfg_, graph_data).to(rank)
-    _ERA_SIZE = gnn._era_size
+    datamodule = ECMLDataModule(cfg_)
+    data_indices = datamodule.data_indices
+
+    # need to use torch.double for some communication operations
+    # otherwise the gradients won't match up to the desired tolerances
+    gnn = GraphMSG(config=cfg_, data_indices=data_indices, graph_data=graph_data).to(device=rank)
+    _ERA_SIZE = 40320
 
     # DDP model wrapper
     gnn = DDP(gnn, device_ids=[rank])
     gnn = gnn.train()
-
-    # TODO: is this the correct gradient scaling for all valid
-    # (num-gpus-per-model, num-gpus-per-ensemble) combinations?
-    # scaling is no longer necessary
-    # register_parameter_grad_scaling_hooks(gnn, float(ens_comm_group_size))
 
     initial_params = get_parameters_as_a_flat_tensor(gnn)
 
@@ -222,20 +221,20 @@ def single_step_test(rank, world_size):
         cfg_.training.ensemble_size_per_device,
         cfg_.training.multistep_input,
         _ERA_SIZE,
-        cfg_.data.num_features,
+        len(data_indices.data.input.full),
     ).to(rank)
 
     # loss in FP32
     kcrps = KernelCRPS(
         area_weights=torch.ones(_ERA_SIZE, dtype=torch.float32),
-        loss_scaling=torch.ones(cfg_.data.num_features - cfg_.data.num_aux_features, dtype=torch.float32),
+        loss_scaling=torch.ones(len(data_indices.model.output.full), dtype=torch.float32),
         fair=True,
     ).to(device=rank, dtype=torch.float32)
     kcrps = kcrps.train()
 
     y_target = torch.randn(  # already reshaped to fit the kcrps loss
         cfg_.dataloader.batch_size.training,
-        cfg_.data.num_features - cfg_.data.num_aux_features,
+        len(data_indices.model.output.full),
         _ERA_SIZE,
         dtype=torch.float32,
         device=rank,
