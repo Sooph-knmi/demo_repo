@@ -438,11 +438,11 @@ class GraphForecaster(pl.LightningModule):
                 assert y_pred_ens_group is not None
 
                 # calculate metrics for the ensemble mean
-                metrics_next, y_preds_next = self.calculate_val_metrics(
+                metrics_next = self.calculate_val_metrics(
                     y_pred_ens_group.mean(dim=1), y, rollout_step, enable_plot=self.enable_plot
                 )
                 metrics.update(metrics_next)
-                y_preds.extend(y_preds_next)
+                y_preds.append(y_pred_ens_group)
 
                 # rank histograms - update metric state
                 _ = self.ranks(y, y_pred_ens_group)
@@ -489,7 +489,7 @@ class GraphForecaster(pl.LightningModule):
             metrics[f"{mkey}_{rollout_step+1}"] = self.metrics(y_pred_denorm[..., indices], y_denorm[..., indices])
         if enable_plot:
             y_preds.append(y_pred)
-        return metrics, y_preds
+        return metrics
 
     def training_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int) -> torch.Tensor:
         x_ens_ic = self._generate_ensemble_initial_conditions(batch)

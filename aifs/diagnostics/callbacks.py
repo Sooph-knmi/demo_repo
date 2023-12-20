@@ -302,7 +302,7 @@ class PlotSample(PlotCallback):
         latlons = np.rad2deg(pl_module.data_latlons.cpu().numpy())
         for rollout_step in range(pl_module.rollout):
             fig = plot_predicted_multilevel_flat_sample(
-                plot_parameters_dict,
+                self.config.diagnostics.plot.parameters,
                 self.config.diagnostics.plot.per_sample,
                 latlons,
                 data[0, ...].squeeze(),
@@ -581,13 +581,12 @@ class PredictedEnsemblePlot(PlotCallback):
         )
 
         for rollout_step in range(pl_module.rollout):
-            # Not sure this is actually rollout??? or if it is the shape is wrong
             fig = plot_predicted_ensemble(
                 self.config.diagnostics.plot.parameters,
                 np.rad2deg(pl_module.era_latlons.numpy()),
                 data[rollout_step + 1, ..., pl_module.data_indices.data.output.full].squeeze(),
                 pl_module.model.normalizer.denormalize(
-                    outputs[-1][rollout_step][:, self.sample_idx, pl_module.data_indices.data.output.full], in_place=False
+                    outputs[1][rollout_step][self.sample_idx, ...], in_place=False
                 )
                 .squeeze()
                 .cpu()
