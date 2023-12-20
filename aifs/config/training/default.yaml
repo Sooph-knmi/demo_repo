@@ -48,19 +48,13 @@ rollout:
   # maximum rollout to use
   max: 1
 
-# Keisler's three training rounds were:
-# Round 1. ~960,000 batches @ ~0.3 seconds per batch (4-step rollout)
-# Round 2. ~90,000 batches @ ~1.0 seconds per batch (8-step rollout)
-# Round 3. ~70,000 batches @ ~1.5 seconds per batch (12-step rollout)
-# Each batch is an N-step rollout, with batch_size=1
-
 save_top_k: -1
 
 max_epochs: 200
 lr:
   rate: 0.625e-4
-  iterations: 600000
-  min: 1.5e-7 #Not scaled by #GPU
+  iterations: 300000
+  min: 3e-7 #Not scaled by #GPU
 
 loss_scaling:
   default: 1
@@ -72,13 +66,12 @@ loss_scaling:
     w: 0.001
     z: 12 #1
   sfc:
-    sp: 100
-    sst: 0.1
+    sp: 10
     10u: 0.1
     10v: 0.1
     2d: 0.5
     tp: 0.025
-    cp: 0.025
+    cp: 0.0025
 
 metrics:
   - z_500
