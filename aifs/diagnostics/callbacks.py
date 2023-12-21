@@ -28,6 +28,7 @@ from aifs.diagnostics.plots import plot_spread_skill_bins
 from aifs.distributed.helpers import gather_tensor
 from aifs.utils.logger import get_code_logger
 
+
 LOGGER = get_code_logger(__name__)
 
 
@@ -85,24 +86,25 @@ class RolloutEval(Callback):
         self,
         pl_module: pl.LightningModule,
         batch: torch.Tensor,
+        ens_ic: torch.Tensor,
     ) -> None:
         loss = torch.zeros(1, dtype=batch.dtype, device=pl_module.device, requires_grad=False)
         # NB! the batch is already normalized in-place - see pl_model.validation_step()
         metrics = {}
 
         # start rollout
-        x = batch[:, 0 : pl_module.multi_step, ..., pl_module.data_indices.data.input.full]  # (bs, multi_step, latlon, nvar)
+        x = ens_ic
         assert batch.shape[1] >= self.rollout + pl_module.multi_step, "Batch length not sufficient for requested rollout length!"
 
         with torch.no_grad():
             for rstep in range(self.rollout):
                 y_pred = pl_module(x)  # prediction at rollout step rstep, shape = (bs, latlon, nvar)
-                forcing_rolled = batch[:, pl_module.multi_step + rstep, ..., pl_module.data_indices.data.input.forcing]
+                forcing_rolled = batch[:, pl_module.multi_step + rstep, ...]
                 # target, shape = (bs, latlon, nvar)
 
                 # y includes the auxiliary variables, so we must leave those out when computing the loss
                 loss_rstep, y_pred_group = pl_module.gather_and_compute_loss(
-                    y_pred, forcing_rolled[..., : pl_module.self.data_indices.data.output.full], validation_mode=True
+                    y_pred, forcing_rolled[..., pl_module.data_indices.data.output.full], validation_mode=True
                 )
                 loss += loss_rstep
 
@@ -168,9 +170,9 @@ class RolloutEval(Callback):
         batch: torch.Tensor,
         batch_idx: int,
     ) -> None:
-        del trainer, outputs  # not used
+        del trainer  # not used
         if batch_idx % self.frequency == 3 and pl_module.global_rank == 0:
-            self._eval(pl_module, batch)
+            self._eval(pl_module, batch[0], outputs[-1])
 
 
 class GraphTrainableFeaturesPlot(PlotCallback):
@@ -247,7 +249,14 @@ class PlotLoss(PlotCallback):
                 exp_log_tag=f"loss_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
             )
 
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+    def on_validation_batch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        outputs: Any,
+        batch: torch.Tensor,
+        batch_idx: int,
+    ) -> None:
         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
             self._plot(trainer, pl_module, outputs, batch, epoch=trainer.current_epoch)
 
@@ -293,7 +302,7 @@ class PlotSample(PlotCallback):
         latlons = np.rad2deg(pl_module.data_latlons.cpu().numpy())
         for rollout_step in range(pl_module.rollout):
             fig = plot_predicted_multilevel_flat_sample(
-                plot_parameters_dict,
+                self.config.diagnostics.plot.parameters,
                 self.config.diagnostics.plot.per_sample,
                 latlons,
                 data[0, ...].squeeze(),
@@ -316,7 +325,14 @@ class PlotSample(PlotCallback):
                 exp_log_tag=f"val_pred_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:01d}",
             )
 
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+    def on_validation_batch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        outputs: Any,
+        batch: torch.Tensor,
+        batch_idx: int,
+    ) -> None:
         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
             self._plot(trainer, pl_module, outputs, batch, batch_idx, epoch=trainer.current_epoch)
 
@@ -375,7 +391,14 @@ class KCRPSMapPlot(PlotCallback):
                 exp_log_tag=f"val_kcrps_rstep{rollout_step:02d}_rank{pl_module.global_rank:02d}",
             )
 
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx) -> None:
+    def on_validation_batch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        outputs: Any,
+        batch: torch.Tensor,
+        batch_idx: int,
+    ) -> None:
         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
             self._plot(trainer, pl_module, outputs, batch, batch_idx)
 
@@ -400,7 +423,7 @@ class KCRPSBarPlot(PlotCallback):
         del batch_idx
         for rollout_step in range(pl_module.rollout):
             y_hat = outputs[1][rollout_step]
-            y_true = batch[0][:, pl_module.multi_step + rollout_step, :, : pl_module.fcdim]
+            y_true = batch[0][:, pl_module.multi_step + rollout_step, :, pl_module.data_indices.model.input.prognostic]
             LOGGER.debug("y_hat = %s, y_true = %s", y_hat.shape, y_true.shape)
 
             kcrps_: torch.Tensor = pl_module._compute_kcrps(y_hat, y_true, squash=False)
@@ -417,7 +440,14 @@ class KCRPSBarPlot(PlotCallback):
                 exp_log_tag=f"loss_sample_rstep{rollout_step:02d}_rank{pl_module.local_rank:02d}",
             )
 
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+    def on_validation_batch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        outputs: Any,
+        batch: torch.Tensor,
+        batch_idx: int,
+    ) -> None:
         if batch_idx % self.plot_frequency == 3 and trainer.global_rank == 0:
             self._plot(trainer, pl_module, outputs, batch, batch_idx)
 
@@ -512,7 +542,14 @@ class PlotEnsembleInitialConditions(PlotCallback):
         )
         return group_ens_ic
 
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+    def on_validation_batch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        outputs: Any,
+        batch: torch.Tensor,
+        batch_idx: int,
+    ) -> None:
         del batch  # not used
         group_ens_ic = self._gather_group_initial_conditions(pl_module, outputs[-1])
         # plotting happens only on device 0
@@ -547,9 +584,9 @@ class PredictedEnsemblePlot(PlotCallback):
             fig = plot_predicted_ensemble(
                 self.config.diagnostics.plot.parameters,
                 np.rad2deg(pl_module.era_latlons.numpy()),
-                data[rollout_step + 1, ..., : pl_module.fcdim].squeeze(),
+                data[rollout_step + 1, ..., pl_module.data_indices.data.output.full].squeeze(),
                 pl_module.model.normalizer.denormalize(
-                    outputs[1][rollout_step][self.sample_idx, ..., : pl_module.fcdim], in_place=False
+                    outputs[1][rollout_step][self.sample_idx, ...], in_place=False
                 )
                 .squeeze()
                 .cpu()
@@ -563,7 +600,14 @@ class PredictedEnsemblePlot(PlotCallback):
                 exp_log_tag=f"val_pred_ens_rstep{rollout_step:02d}_rank{pl_module.global_rank:02d}",
             )
 
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+    def on_validation_batch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        outputs: Any,
+        batch: torch.Tensor,
+        batch_idx: int,
+    ) -> None:
         # plotting happens only on device 0
         # device 0 has already gathered all ensemble members generated by its group
         if batch_idx % self.plot_frequency == 3 and pl_module.global_rank == 0:
