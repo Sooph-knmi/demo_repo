@@ -1,4 +1,4 @@
-data: /home/mlx/ai-ml/datasets/stable/
+data: weatherbench2/datasets/era5
 output: ${oc.env:HPCPERM}/aifs/${data.resolution}/
 logs:
   base: ${hardware.paths.output}/logs
@@ -6,4 +6,4 @@ logs:
   tensorboard: ${hardware.paths.logs.base}/tensorboard
 checkpoints: ${hardware.paths.output}/checkpoint
 plots: ${hardware.paths.output}/plots
-graph: /home/mlx/data/graphs/
+graph: /home/sophiebuurman/data1/graphs

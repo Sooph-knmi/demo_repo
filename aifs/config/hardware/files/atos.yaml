@@ -1,5 +1,5 @@
 dataset: 1959-2022-6h-512x256_equiangular_conservative.zarr
-graph: graph_mappings_normed_edge_attrs_ordered_desc_lat_lon_20231122093910_${data.resolution}_h_0_1_2_3_4_5.pt
+graph: graph.pt
 checkpoint:
   every_n_epochs: aifs-by_epoch-epoch_{epoch:03d}-val_wmse_{val_wmse:.3e}
   every_n_train_steps: aifs-by_step-epoch_{epoch:03d}
