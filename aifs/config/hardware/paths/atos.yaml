@@ -1,5 +1,5 @@
 data: weatherbench2/datasets/era5
-output: ${oc.env:HPCPERM}/aifs/${data.resolution}/
+output: $/aifs/${data.resolution}/
 logs:
   base: ${hardware.paths.output}/logs
   wandb: ${hardware.paths.logs.base}
